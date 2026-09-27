@@ -571,9 +571,34 @@ add-entry form, series sparklines, and create-from-template in the tab.
      window shows it); existing install → stamped past + toggle off (pure opt-in,
      never hijacks a composer in use). Plain send untouched throughout. Tests:
      `tests/mood-send.test.mjs` (T9 — the soft-lock predicates + fresh/existing
-     onboarding via the vm-extract harness). **The valence→threat link (T-D.2)
-     remains deferred to its own signed-off pass** (ward: learning-only for now;
-     distress set low+numb+stressed, + the raw/low acuity split above).
+     onboarding via the vm-extract harness).
+   - **T-D.1c ✓ SHIPPED (0.14.29-alpha):** mood visible to the Familiar,
+     toggle-able. A sent mood is surfaced as a PER-TURN system note (server-side,
+     after the time anchor) when `moodVisibleToFamiliar` (default on) — read that
+     turn only, never stored/re-injected, so T1's no-compounding guard holds.
+     Off → pure telemetry.
+   - **T-D.2 ✓ SHIPPED (0.14.30-alpha) — the mood→threat link (WARD-SIGNED 2026-09):**
+     `src/tracker/mood-threat.js`. A DISTRESS mood-send gently raises the threat
+     tier, bounded so mood ALONE never reaches a crisis tier. Ward-signed shape:
+     distress set **stressed + raw + low + numb, ENERGY-WEIGHTED** (raw 0.6 >
+     stressed 0.45 > low = numb 0.3 — high-energy anguish weighs most); RAISE-ONLY;
+     clamped below HIGH (`MOOD_THREAT_CEILING` = 3.5 < the HIGH tier at 4, so mood
+     can reach upper-`moderate` — enough for silence-triage to look — but never
+     high/severe); capped at **2 counted tags per ROLLING HOUR** (ward decision —
+     a per-day cap gets spent early and misses a later crash in the SAME
+     conversation: fine at 10am, crashing at 2pm; hourly refresh tracks the
+     afternoon crash while still blocking a within-minutes burst), then decays
+     like any threat. Adds a bounded source to the shared scalar via the existing
+     `recordThreat` seam — crisis-signals tiers/weights and threat-tracker
+     decay/floor UNCHANGED. Off-switch `PROTO_FAMILIAR_MOOD_THREAT_DISABLED`;
+     no-ops under `PROTO_FAMILIAR_THREAT_DISABLED`. **Pre-merge simulation
+     (ward-run, hourly cap):** a 10-tap burst in ~18 min → **mild** (1.2; only 2
+     count); a fine morning stays **calm**, then a 2pm crash tapping raw ~every
+     20 min climbs to **moderate** by ~4pm and plateaus at the 3.5 ceiling, never
+     high. In-the-moment responsiveness comes from T-D.1c visibility + the ward's
+     own words (crisis-signals); the threat link is the bounded slow-burn trend. Tests: `mood-threat.test.mjs` (weights, the pure
+     `decideMoodDelta` clamp/cap/raise-only, the applyMoodThreat pipeline incl.
+     the "mood alone never reaches HIGH" invariant; the ceiling clamp red-checked).
 5. **G-A / G-B / G-C:** the `gauge` archetype (§10) — G-A store+derivation, G-B
    cues+UI+capture, **G-C the safety ladder (ward sign-off, §10.6/§10.7)**. These
    extend the milestone after the core archetypes; see §10.11 for the pass detail.
@@ -770,10 +795,13 @@ off). Console↔UI parity holds.
    gauge read now returns `config` (so a UI meter can render thresholds without
    a second read), and the G3 fixtures gained **exact-boundary** assertions
    (each threshold is the exclusive floor of the next band).
-2. **G-B.1 ✓ SHIPPED (0.14.17):** the **gauge cues** (§10.5). Unruh
-   `gauge_cue_candidates` — non-archived gauges in the `low` (gentle) or
-   `overdue` (firmer) band (`fine`/`fading` cue nothing; `extreme` NEVER cues —
-   it opens a check in G-C) — behind `tracker_gauge_cues` + the
+2. **G-B.1 ✓ SHIPPED (0.14.17; extreme-cue gap closed 0.14.29):** the **gauge
+   cues** (§10.5). Unruh `gauge_cue_candidates` — non-archived gauges in the
+   `low` (gentle), `overdue` (firmer), or `extreme` (firmest) band (`fine`/
+   `fading` cue nothing). **0.14.29:** an `extreme` gauge with an ENABLED
+   escalation is left out (the G-C CHECK owns it — no double-surface), but a
+   PLAIN extreme gauge now cues here rather than going silent (it was neither
+   cued nor checked — the reported gap) — behind `tracker_gauge_cues` + the
    `trackerGaugeCues` thalamus wrapper. They ride the SHARED `[Tracker cues]`
    block: `buildTrackerCueBlock` renders a band-aware line for a candidate
    carrying `band` (getting low / overdue), the stale-ledger line otherwise;

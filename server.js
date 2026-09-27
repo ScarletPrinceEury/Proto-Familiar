@@ -54,6 +54,9 @@ import {
   listTrackers, readTracker, archiveTracker, dropTracker, trackerReflectionSeries,
   ensureTrackerFromTemplate, logTrackerEntry,
 } from './thalamus.js';
+// Mood → threat link (T-D.2, ward-signed): a distress mood-send gently raises
+// the threat tier, bounded so mood alone never reaches a crisis tier.
+import { applyMoodThreat } from './src/tracker/mood-threat.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
 import { hydrateNameFieldCache, nameFieldEnabledFor, recordNameFieldResult, stampNamesOnTurns } from './name-field.js';
@@ -386,6 +389,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         await logTrackerEntry({ tracker_id: ens.id, payload: { mood: moodTag.trim() }, source: 'send-button' });
       }
     })().catch(err => console.error('[mood-send] tag capture failed (chat unaffected):', err?.message ?? err));
+    // T-D.2 (ward-signed): a DISTRESS mood (stressed/raw/low/numb) gently raises
+    // threat — energy-weighted, raise-only, capped below HIGH, ≤2/day. A no-op
+    // for a non-distress mood or under the threat off-switch. Fire-and-forget so
+    // it never touches the chat turn; the module never throws into it.
+    applyMoodThreat({ moodTag: moodTag.trim() })
+      .catch(err => console.error('[mood-threat] apply failed (chat unaffected):', err?.message ?? err));
   }
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
