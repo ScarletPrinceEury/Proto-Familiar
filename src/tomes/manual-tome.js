@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 4;
+export const MANUAL_TOME_VERSION = 5;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -67,7 +67,7 @@ export function buildManualTome() {
 
   add(
     ['how do you work', 'what can you do', 'help', 'guide me', 'your functions', 'manual', 'how do I use you'],
-    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, reminders & scheduling, my calendar sync, browsing the web, which model I run on, tomes/lorebook, and my self-directed habits (pondering, warm reach-outs, noticing). Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
+    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, reminders & scheduling, trackers (logging things over time), my calendar sync, browsing the web, which model I run on, tomes/lorebook, and my self-directed habits (pondering, warm reach-outs, noticing). Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
     { comment: 'Overview / help' },
   );
 
@@ -85,7 +85,7 @@ export function buildManualTome() {
 
   add(
     ['voice', 'talk out loud', 'call you', 'voice call', 'speak', 'read aloud', 'hear you', 'say it out loud', 'microphone'],
-    `[Manual: Voice & calls] Voice is currently turned {{voiceActive}}. When on, {{user}} can talk with me out loud and have replies spoken. On the web there's a voice/call control in the chat; on Discord, join a voice channel and type \`!call\` (\`!leave\` to end). Read-aloud and the voice engine/speed live in Settings → Voice. First use downloads the speech model, with visible progress.`,
+    `[Manual: Voice & calls] Voice is currently turned {{voiceActive}}. When on, {{user}} can talk with me out loud and have replies spoken. On the web there's a voice/call control in the chat; on Discord, join a voice channel and type \`!call\` (\`!leave\` to end). Read-aloud and the voice engine/speed live in Settings → Voice. First use downloads the speech model, with visible progress. On a live call I can also use my tools — so "add that to my calendar" or "what's on tomorrow?" actually happens instead of just being talked about; I say what I'm about to do first, and a call keeps tool use short so a quick question still gets a quick answer (toggle "Let my Familiar use their tools during a call", on by default). There's also an optional quiet "rummaging" sound while I look something up on a call — off by default, in the same Voice settings; leave it on the built-in sound or point it at your own.`,
     { comment: 'Voice & calls' },
   );
 
@@ -117,6 +117,12 @@ export function buildManualTome() {
     ['remind', 'reminder', 'schedule', 'routine', 'appointment', 'event', 'wake me', 'tell me later', 'set a timer'],
     `[Manual: Reminders & scheduling] {{user}} can just ask me to remind them of something at a time or as part of a daily phase, and I'll set it. Reminders and events are managed in the temporal/schedule editor in the app; I can add, list, and cancel them by asking. Events can carry a lead-time "coming up" alert. For a recurring thing, cancelling one occurrence is different from ending the whole series — I'll ask which if it's ambiguous.`,
     { comment: 'Reminders & scheduling' },
+  );
+
+  add(
+    ['track', 'tracker', 'trackers', 'log something', 'keep track', 'pantry', 'mood', 'water', 'gauge', 'streak'],
+    `[Manual: Trackers] Tracking is currently turned {{trackersActive}}. When on, {{user}} and I can keep simple logs of things over time — four kinds: a state (like "mood today"), an inventory (like the pantry, with expiry dates), a series (a number or note logged over and over, like sleep hours), and a gauge (something that needs topping up, like water or meds, that quietly "drains" until it's logged again). {{user}} can ask me to start one, log to it, or check where it stands; there's also a Trackers tab in the app with a fill meter and a one-tap "refill" for gauges. I keep an eye out gently: I'll mention a tracker that's gone quiet, flag pantry items about to go off, and — if the same thing keeps getting missed — offer to start tracking it together (never for anything sensitive unless {{user}} brings it up). If an important upkeep gauge goes a long stretch with nothing logged, I'll check in to ask if they're okay rather than assume the worst. {{user}} can also tag a mood onto a message from the little mood palette by the composer. Turn any of this off in Settings.`,
+    { comment: 'Trackers' },
   );
 
   add(

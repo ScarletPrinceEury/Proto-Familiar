@@ -21,6 +21,8 @@ test('resolveTomeMacros: toggles reflect the actual setting (on/off)', () => {
   assert.match(resolveTomeMacros('voice is {{voiceActive}}', { voiceEnabled: true }), /voice is on/);
   assert.match(resolveTomeMacros('discord {{discordActive}}', { discordEnabled: true }), /discord on/);
   assert.match(resolveTomeMacros('pondering {{ponderingActive}}', { ponderingEnabled: false }), /pondering off/);
+  assert.match(resolveTomeMacros('trackers {{trackersActive}}', {}), /trackers on/);            // default ON
+  assert.match(resolveTomeMacros('trackers {{trackersActive}}', { trackersEnabled: false }), /trackers off/);
 });
 
 test('resolveTomeMacros: value macros + name macros', () => {
@@ -73,6 +75,20 @@ test('buildManualTome: the video entry quotes {{videoActive}} and names GLM 5.3 
   assert.match(vid.content, /\{\{videoActive\}\}/);
   assert.match(vid.content, /GLM 5\.3 Flash/);
   assert.match(vid.content, /Can watch video\?/);
+});
+
+test('buildManualTome: the trackers entry is keyed to "tracker" and quotes {{trackersActive}}', () => {
+  const t = buildManualTome();
+  const trk = Object.values(t.entries).find(e => e.keys.includes('tracker'));
+  assert.ok(trk, 'there is a trackers entry');
+  assert.match(trk.content, /\{\{trackersActive\}\}/);
+});
+
+test('buildManualTome: the voice entry covers tools-on-calls', () => {
+  const t = buildManualTome();
+  const voice = Object.values(t.entries).find(e => e.keys.includes('voice call'));
+  assert.ok(voice, 'there is a voice entry');
+  assert.match(voice.content, /tools during a call|use my tools/i);
 });
 
 // ── seed-once behavior ─────────────────────────────────────────────

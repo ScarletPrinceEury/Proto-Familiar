@@ -37,6 +37,7 @@ export const TOME_MACROS = {
   ponderingActive: s => onoff(s?.ponderingEnabled !== false),
   warmthActive:    s => onoff(s?.warmthEnabled    !== false),
   noticingActive:  s => onoff(s?.noticingEnabled  !== false),
+  trackersActive:  s => onoff(s?.trackersEnabled  !== false),
   calendarActive:  s => onoff(s?.gcalEnabled      === true),
   browserActive:   s => onoff(s?.browseEnabled    === true),
   charName:        s => (s?.charName || 'the Familiar'),

@@ -2062,6 +2062,7 @@ function applyNameVars(text) {
     .replace(/\{\{\s*ponderingActive\s*\}\}/gi, () => (state.ponderingEnabled !== false ? 'on' : 'off'))
     .replace(/\{\{\s*warmthActive\s*\}\}/gi,    () => (state.warmthEnabled    !== false ? 'on' : 'off'))
     .replace(/\{\{\s*noticingActive\s*\}\}/gi,  () => (state.noticingEnabled  !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*trackersActive\s*\}\}/gi,  () => (state.trackersEnabled  !== false ? 'on' : 'off'))
     .replace(/\{\{\s*calendarActive\s*\}\}/gi,  () => (state.gcalEnabled      === true  ? 'on' : 'off'))
     .replace(/\{\{\s*browserActive\s*\}\}/gi,   () => (state.browseEnabled    === true  ? 'on' : 'off'))
     .replace(/\{\{\s*charName\s*\}\}/gi,         () => (state.charName || 'the Familiar'))
