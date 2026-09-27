@@ -368,15 +368,16 @@ const VOICE_CALL_MAX_TOOL_ROUNDS = 4;
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
   const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag } = req.body;
-  // Mood-tagged send (§6, T-D, LEARNING-ONLY). A `moodTag` rides beside the
-  // turn as its own field — never inside `messages`, and stripped at the
-  // provider boundary by collapseToolTurns anyway (INVARIANT T1). Here it does
-  // exactly two learning-only things, both fire-and-forget so a tracker hiccup
-  // never touches the chat turn: stand up the Mood ledger if needed, and log
-  // the tag as an entry (`source:'send-button'`). NO threat effect in this pass
-  // (ward decision 2026-09: learning-only for now; the valence→threat link is a
-  // later, separately-signed-off pass). Unruh's `validate_entry` is the gate —
-  // an off-palette tag is dropped there, never stored wrong.
+  // Mood-tagged send (§6, T-D). A `moodTag` rides beside the turn as its own
+  // field — never inside `messages`, and kept out of STORED history by
+  // collapseToolTurns + the client whitelist (INVARIANT T1's compounding guard).
+  // Here it does two fire-and-forget things so a tracker hiccup never touches the
+  // chat turn: stand up the Mood ledger if needed, and log the tag as an entry
+  // (`source:'send-button'`). Unruh's `validate_entry` is the gate — an
+  // off-palette tag is dropped there, never stored wrong. (Whether the tag is
+  // ALSO shown to the Familiar on this turn is a separate, opt-out per-turn note
+  // below — never stored, so T1's no-compounding rule still holds. NO threat
+  // effect either way: the valence→threat link is a later, separately-signed pass.)
   if (typeof moodTag === 'string' && moodTag.trim() && readSettingsSync().trackersEnabled !== false
       && process.env.PROTO_FAMILIAR_TRACKERS_DISABLED !== '1') {
     (async () => {
@@ -654,6 +655,23 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
+    }
+  }
+
+  // Mood-tag visibility (§6, T-D). When my human attached a mood to THIS message
+  // AND they've left "let my Familiar see my mood" on (default), surface it as a
+  // per-turn note — read this turn only, never stored in history or re-injected,
+  // so it can't compound or quietly colour every later reply (the T1 spirit).
+  // Off → the mood stays pure telemetry (Mood tracker + memory, handled above).
+  // Literal "my human" — this is a server-injected block (no macro pass).
+  if (typeof moodTag === 'string' && moodTag.trim()) {
+    let moodVisible = true;
+    try { moodVisible = readSettingsSync().moodVisibleToFamiliar !== false; } catch { /* default on */ }
+    if (moodVisible) {
+      enrichedMessages = [...enrichedMessages, {
+        role: 'system',
+        content: `[My human tagged this message's mood: "${moodTag.trim()}". They attached it to tell me how they're feeling as they wrote this — I take it as a genuine signal and answer with that in mind, in my own voice, without making a fuss of it.]`,
+      }];
     }
   }
 

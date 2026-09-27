@@ -493,14 +493,22 @@ const state = {
   // sleep, pantry, laundry, upkeep gauges). Default ON but inert until a tracker
   // exists; off = no tracker tools surfaced, no cues, no capture.
   trackersEnabled: true,
-  // Mood-tagged send (§6, T-D). A one-tap mood palette beside send. LEARNING-
-  // ONLY: a tag feeds the Mood tracker + memorization corpus, never a live
-  // prompt (INVARIANT T1). `moodSendEnabled` is the opt-in toggle after
+  // Mood-tagged send (§6, T-D). A one-tap mood palette beside send. A tag feeds
+  // the Mood tracker + memorization corpus, and is never STORED in chat history
+  // or re-injected (INVARIANT T1's compounding guard — collapseToolTurns +
+  // toApiMessage keep it out of history). Whether it's shown to the Familiar on
+  // its own turn is `moodVisibleToFamiliar` (a per-turn note, not stored).
+  // `moodSendEnabled` is the opt-in toggle after
   // onboarding; `moodSendOnboardedAt` stamps the 14-day soft-lock window on
   // first boot (fresh install → now + enabled; existing install → past +
   // opt-in, so we never hijack a composer they've been using). null = unstamped.
   moodSendEnabled: false,
   moodSendOnboardedAt: null,
+  // Whether a sent mood is also shown to the Familiar on that turn (a per-turn
+  // note, never stored/compounded) — vs staying pure telemetry (tracker+memory).
+  // Default on: someone who turns mood-send on generally wants their Familiar to
+  // see it; flip off for record-only. (Ward decision 2026-09.)
+  moodVisibleToFamiliar: true,
   // Crisis ML classifier (docs/crisis-classifier-build-spec.md) — a raise-only
   // second opinion on distress + a pro-suicide-register warning. Default ON, but
   // INERT until a trained model artifact exists and the seam is wired (gated on
@@ -636,7 +644,7 @@ const SERVER_SYNCED_KEYS = [
   'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
-  'trackersEnabled', 'moodSendEnabled', 'moodSendOnboardedAt',
+  'trackersEnabled', 'moodSendEnabled', 'moodSendOnboardedAt', 'moodVisibleToFamiliar',
   'crisisClassifierEnabled', 'crisisNormalizationEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs', 'voiceCallToolsEnabled', 'voiceCallSoundEffects', 'voiceCallSoundEffectPath',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
@@ -4519,6 +4527,7 @@ function readSettingsFromUI() {
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('mood-send-toggle')) state.moodSendEnabled = $('mood-send-toggle').checked;
+  if ($('mood-visible-toggle')) state.moodVisibleToFamiliar = $('mood-visible-toggle').checked;
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('ponder-consolidation-toggle')) state.ponderConsolidationEnabled = $('ponder-consolidation-toggle').checked;
   if ($('memory-integrity-toggle')) state.memoryIntegrityEnabled = $('memory-integrity-toggle').checked;
@@ -4739,6 +4748,7 @@ function writeSettingsToUI() {
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('mood-send-toggle')) setIfNotFocused($('mood-send-toggle'), 'checked', state.moodSendEnabled === true);
+  if ($('mood-visible-toggle')) setIfNotFocused($('mood-visible-toggle'), 'checked', state.moodVisibleToFamiliar !== false);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
   if ($('memory-integrity-toggle')) setIfNotFocused($('memory-integrity-toggle'), 'checked', state.memoryIntegrityEnabled !== false);
@@ -6225,6 +6235,7 @@ function init() {
     'organ-status-block',
     'memory-sweep-toggle',
     'phylactery-llm-max-tokens', 'phylactery-llm-timeout',
+    'mood-visible-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',

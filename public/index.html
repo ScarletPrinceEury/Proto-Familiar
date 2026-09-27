@@ -1974,7 +1974,13 @@
             <label for="mood-send-toggle">Mood button beside send</label>
             <input type="checkbox" id="mood-send-toggle">
           </div>
-          <div class="field-hint">A one-tap mood palette next to the message box: tap how you're feeling — by mood <em>and</em> energy (settled-happy isn't buzzing-happy; curled-up-low isn't raw grief) — and your message sends with that note attached. <strong>It's just for you.</strong> The tag goes into your private Mood tracker and never into what your Familiar reads mid-conversation. New here? It shows for a couple of weeks so you can try it; after that, this toggle keeps it or hides it. Plain send always works without it.</div>
+          <div class="field-hint">A one-tap mood palette next to the message box: tap how you're feeling — by mood <em>and</em> energy (settled-happy isn't buzzing-happy; curled-up-low isn't raw grief) — and your message sends with that note attached. The tag always goes into your private Mood tracker (and your Familiar's memory of the day); whether your Familiar also <em>sees</em> it in the moment is the toggle below. New here? It shows for a couple of weeks so you can try it; after that, this toggle keeps it or hides it. Plain send always works without it.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="mood-visible-toggle">Let my Familiar see my mood</label>
+            <input type="checkbox" id="mood-visible-toggle" checked>
+          </div>
+          <div class="field-hint">When on, a mood you attach is shown to your Familiar on that message, so they can respond with it in mind — just for that turn, never stored or carried into later replies. Off: the mood stays private telemetry (your Mood tracker + your Familiar's day-memory), and they don't see it live. On by default.</div>
 
           <div class="field-row" style="margin-top:12px">
             <label for="content-regate-toggle">Review my private notes for content-sharing</label>
