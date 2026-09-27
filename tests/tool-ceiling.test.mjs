@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SAFE_TOOL_CEILING, toolCeiling, shouldSurface, enforceToolCeiling, TOOL_MODULES, CORE,
+  SAFE_TOOL_CEILING, toolCeiling, shouldSurface, enforceToolCeiling, selectModules, TOOL_MODULES, CORE,
 } from '../tool-surfacing.js';
 import { BUILTIN_TOOLS, composeActiveTools, composeDiscordTools } from '../cerebellum.js';
 
@@ -85,6 +85,27 @@ test('enforceToolCeiling: an explicitly-requested module survives the ceiling (r
   assert.equal(browserNames.filter(n => kept.has(n)).length, browserNames.length, 'a requested module is never the one dropped');
   assert.ok(fixed.length <= 64, 'still within the provider-safe ceiling');
   assert.ok(kept.has('request_tools'), 'core recovery hatch still present');
+});
+
+test('initial narrowing: this-turn fresh triggers beat stale sticky under the ceiling', () => {
+  // A browse-y message with a HEAVY stale sticky set (leftover modules from
+  // earlier turns). browser is a FRESH trigger here, not sticky — and it must
+  // not be the module the ceiling drops in favour of a two-turn-old leftover.
+  const s = { browseEnabled: true, trackersEnabled: true, webSearchEnabled: true, visionEnabled: true, weatherEnabled: true, pageWatchEnabled: true };
+  const selArgs = { turnText: 'open https://example.com and read it', dynamicBlock: '', villagerNames: [], trackerLabels: [] };
+  const fresh = selectModules(selArgs);
+  assert.ok(fresh.has('browser'), 'precondition: the message freshly triggers browser');
+  const heavySticky = new Set(['schedule-write', 'schedule-read', 'memory-edit', 'graph', 'trackers', 'web', 'weather', 'village', 'files']);
+  const selection = selectModules({ ...selArgs, sticky: heavySticky });
+  const composed = composeActiveTools(null, s, { modules: selection, visionCapable: false });
+  assert.ok(composed.length > 64, 'precondition: the union overflows the ceiling');
+  const browserNames = namesOf(composed).filter(n => TOOL_MODULES[n] === 'browser');
+
+  const naive = new Set(namesOf(enforceToolCeiling(composed, 64)));
+  assert.equal(browserNames.filter(n => naive.has(n)).length, 0, 'documents the bug: stale sticky crowds out the fresh trigger');
+
+  const fixed = new Set(namesOf(enforceToolCeiling(composed, 64, { priorityModules: fresh })));
+  assert.equal(browserNames.filter(n => fixed.has(n)).length, browserNames.length, 'fresh trigger survives over stale sticky');
 });
 
 // ── The reported bug: the full registry is huge ──────────────────────────────

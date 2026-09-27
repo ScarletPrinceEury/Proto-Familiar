@@ -833,17 +833,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         try { trackerLabels = ((await listTrackers())?.trackers ?? []).map(t => t?.label).filter(Boolean); }
         catch { /* registry unreadable → label-trigger degrades to keywords */ }
       }
-      const selection = selectModules({
-        turnText,
-        dynamicBlock: enriched?.dynamic ?? '',
-        villagerNames,
-        trackerLabels,
-        sticky: stickyModulesFor(sessionInfo?.sessionId),
-      });
+      const selArgs = { turnText, dynamicBlock: enriched?.dynamic ?? '', villagerNames, trackerLabels };
+      const selection = selectModules({ ...selArgs, sticky: stickyModulesFor(sessionInfo?.sessionId) });
+      // THIS turn's fresh triggers (selection without the sticky carry-over) are
+      // prioritised over stale sticky if the union overflows the ceiling — so a
+      // browse-y message keeps the (large, registry-last) browser module instead
+      // of it being trimmed in favour of a module left over from two turns ago.
+      const freshTriggers = selectModules(selArgs);
       surfacing = { selection, used: new Set() };
       activeTools = enforceToolCeiling(
         composeActiveTools(customTools, sset, { modules: selection, visionCapable: visionCapableTurn }),
         ceiling,
+        { priorityModules: freshTriggers },
       );
       console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised (of ${fullTools.length})`);
     } else {

@@ -2851,15 +2851,15 @@ async function handleTurn(gw, msg, decision) {
         .find(m => m?.role === 'assistant' && typeof m.content === 'string')?.content ?? '';
       const turnText = `${content ?? ''}\n${prevAssistant}`;
       const villagerNames = (registry.villagers ?? []).map(v => v?.name).filter(Boolean);
-      surfacedModules = selectModules({
-        turnText,
-        dynamicBlock: enriched.dynamic ?? '',
-        villagerNames,
-        sticky: stickyModulesFor(session.sessionId),
-      });
+      const selArgs = { turnText, dynamicBlock: enriched.dynamic ?? '', villagerNames };
+      surfacedModules = selectModules({ ...selArgs, sticky: stickyModulesFor(session.sessionId) });
+      // This turn's fresh triggers win over stale sticky if the union overflows
+      // the ceiling (web parity) — a browse-y message keeps the browser module.
+      const freshTriggers = selectModules(selArgs);
       discordTools = enforceToolCeiling(
         composeDiscordTools({ isWard: true, isVillager: false, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn, modules: surfacedModules }),
         ceiling,
+        { priorityModules: freshTriggers },
       );
       tickSticky(session.sessionId, surfacedModules, Number(settings?.toolStickyTurns ?? 2));
       console.log(`[discord tools] surfacing: ${surfacedModules.size ? [...surfacedModules].join(', ') : '(core only)'} — ${discordTools.length} of ${fullDiscord.length}`);
