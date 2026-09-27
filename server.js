@@ -1266,6 +1266,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     if (imagesLiveThisTurn > 0 && !visionFellBack) {
       cacheVisionCapability(provider, model, 'yes').catch(() => {});
     }
+    // Persist this turn's modules to the sticky set — the modules used AND any
+    // pulled via request_tools — so a recovered module stays available for the
+    // next couple of turns (parity with the non-stream path's tickSurfacing;
+    // without this, sticky never updated on the streaming surface at all, so a
+    // request_tools grant vanished the moment the turn ended).
+    if (surfacing) tickSurfacing();
     if (!res.writableEnded) {
       // Round budget ran out mid-reach → the client offers a one-click "go on".
       if (forceTextRound) res.write(`data: ${JSON.stringify({ _roundCapHit: true })}\n\n`);
