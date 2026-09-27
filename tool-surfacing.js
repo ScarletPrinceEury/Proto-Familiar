@@ -396,12 +396,26 @@ export function shouldSurface({ settings = {}, fullCount } = {}) {
  * even if many modules surfaced at once. CORE tools (safety + request_tools, the
  * recovery hatch) are always kept; the overflow is dropped from the rest and
  * stays reachable via request_tools. Pure.
+ *
+ * `priorityModules` (the modules the Familiar EXPLICITLY pulled via request_tools
+ * this turn) are kept right after core, ahead of everything else. Without this,
+ * the trim ran in registry order — and the browser module (the largest, and
+ * dead-last in the registry) was wiped whenever the sticky+requested union
+ * overflowed, so a just-requested module silently never arrived. That broke the
+ * whole point of the recovery hatch: a module you ask for must never be the one
+ * the ceiling drops. Overflow now comes off the non-requested `rest` first; only
+ * a request so large that core+requested alone overflow (e.g. "all") slices in.
  */
-export function enforceToolCeiling(tools, ceiling = SAFE_TOOL_CEILING) {
+export function enforceToolCeiling(tools, ceiling = SAFE_TOOL_CEILING, { priorityModules = null } = {}) {
   if (!Array.isArray(tools) || tools.length <= ceiling) return tools;
-  const core = [], rest = [];
+  const prio = priorityModules instanceof Set && priorityModules.size ? priorityModules : null;
+  const core = [], priority = [], rest = [];
   for (const t of tools) {
-    (TOOL_MODULES[t?.function?.name] === CORE ? core : rest).push(t);
+    const m = TOOL_MODULES[t?.function?.name];
+    if (m === CORE) core.push(t);
+    else if (prio && prio.has(m)) priority.push(t);
+    else rest.push(t);
   }
-  return [...core, ...rest].slice(0, Math.max(core.length, ceiling));
+  const kept = [...core, ...priority];
+  return [...kept, ...rest].slice(0, Math.max(kept.length, ceiling));
 }

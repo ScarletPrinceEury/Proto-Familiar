@@ -2935,6 +2935,8 @@ async function handleTurn(gw, msg, decision) {
       return enforceToolCeiling(
         composeDiscordTools({ isWard: true, isVillager: false, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn, modules: union }),
         ceiling,
+        // Keep the just-pulled module ahead of the ceiling (web parity).
+        { priorityModules: toolCtx._requestedModules },
       );
     };
     // On a villager turn, audit every state-mutating tool with the causing
