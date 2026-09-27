@@ -584,16 +584,19 @@ add-entry form, series sparklines, and create-from-template in the tab.
      stressed 0.45 > low = numb 0.3 — high-energy anguish weighs most); RAISE-ONLY;
      clamped below HIGH (`MOOD_THREAT_CEILING` = 3.5 < the HIGH tier at 4, so mood
      can reach upper-`moderate` — enough for silence-triage to look — but never
-     high/severe); capped at 2 counted tags / 24h, then decays like any threat.
-     Adds a bounded source to the shared scalar via the existing `recordThreat`
-     seam — crisis-signals tiers/weights and threat-tracker decay/floor UNCHANGED.
-     Off-switch `PROTO_FAMILIAR_MOOD_THREAT_DISABLED`; no-ops under
-     `PROTO_FAMILIAR_THREAT_DISABLED`. **Pre-merge simulation (ward-run):** 10
-     raw-taps in one conversation → plateaus at **mild** (1.2; only 2 count, rest
-     hit the daily cap); 2/day sustained → **moderate** by ~day 3, plateauing
-     ~3.0, never high. In-the-moment responsiveness comes from T-D.1c visibility
-     + the ward's own words (crisis-signals); the threat link is the bounded
-     slow-burn safety trend. Tests: `mood-threat.test.mjs` (weights, the pure
+     high/severe); capped at **2 counted tags per ROLLING HOUR** (ward decision —
+     a per-day cap gets spent early and misses a later crash in the SAME
+     conversation: fine at 10am, crashing at 2pm; hourly refresh tracks the
+     afternoon crash while still blocking a within-minutes burst), then decays
+     like any threat. Adds a bounded source to the shared scalar via the existing
+     `recordThreat` seam — crisis-signals tiers/weights and threat-tracker
+     decay/floor UNCHANGED. Off-switch `PROTO_FAMILIAR_MOOD_THREAT_DISABLED`;
+     no-ops under `PROTO_FAMILIAR_THREAT_DISABLED`. **Pre-merge simulation
+     (ward-run, hourly cap):** a 10-tap burst in ~18 min → **mild** (1.2; only 2
+     count); a fine morning stays **calm**, then a 2pm crash tapping raw ~every
+     20 min climbs to **moderate** by ~4pm and plateaus at the 3.5 ceiling, never
+     high. In-the-moment responsiveness comes from T-D.1c visibility + the ward's
+     own words (crisis-signals); the threat link is the bounded slow-burn trend. Tests: `mood-threat.test.mjs` (weights, the pure
      `decideMoodDelta` clamp/cap/raise-only, the applyMoodThreat pipeline incl.
      the "mood alone never reaches HIGH" invariant; the ceiling clamp red-checked).
 5. **G-A / G-B / G-C:** the `gauge` archetype (§10) — G-A store+derivation, G-B

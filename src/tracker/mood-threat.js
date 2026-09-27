@@ -18,8 +18,9 @@
  *   - RAISE-ONLY: a positive mood never lowers threat.
  *   - BOUNDED so mood ALONE never reaches high/severe: each apply is clamped so
  *     the mood-driven weight never crosses MOOD_THREAT_CEILING (< HIGH tier).
- *   - CAPPED at MOOD_TAG_MAX_PER_DAY counted tags / 24h, then decays like any
- *     threat (the shared scalar, tau ≈ 3d).
+ *   - CAPPED at MOOD_TAG_MAX_PER_HOUR counted tags per ROLLING HOUR (not per day:
+ *     a day cap gets spent early and misses a later crash in the same
+ *     conversation), then decays like any threat (the shared scalar, tau ≈ 3d).
  *   - No-ops under PROTO_FAMILIAR_THREAT_DISABLED (recordThreat/getThreat do) and
  *     its own PROTO_FAMILIAR_MOOD_THREAT_DISABLED.
  */
@@ -28,7 +29,7 @@ import {
   recordThreat, getThreat, getThreatHistory, THREAT_TIERS, HISTORY_CAP,
 } from '../safety/threat-tracker.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 export const MOOD_SOURCE = 'mood-tag';
 
 // Energy-weighted distress deltas (ward-signed). ~0.4 base: high-energy above,
@@ -44,7 +45,12 @@ export const MOOD_THREAT_WEIGHTS = Object.freeze({
 // below it: a run of distress tags can lift concern to (upper) `moderate` — which
 // is what makes silence-triage take a look — but never a crisis tier.
 export const MOOD_THREAT_CEILING = Math.min(3.5, THREAT_TIERS.high - 0.5);
-export const MOOD_TAG_MAX_PER_DAY = 2;
+// Rate limit is PER ROLLING HOUR, not per day (ward decision 2026-09): a day cap
+// gets "spent" early and then misses a real later crash in the SAME conversation
+// (fine at 10am, crashing at 2pm). Hourly refresh tracks a crash that unfolds
+// over an afternoon — while still blocking a burst of taps within minutes from
+// spiking, and the ceiling above still bounds the total below a crisis tier.
+export const MOOD_TAG_MAX_PER_HOUR = 2;
 
 export function moodThreatDisabled() {
   return process.env.PROTO_FAMILIAR_MOOD_THREAT_DISABLED === '1';
@@ -58,17 +64,17 @@ export function moodThreatDelta(moodTag) {
 
 /**
  * PURE decision: the delta to apply for this mood, given the current effective
- * threat weight and how many mood tags already counted in the last 24h.
+ * threat weight and how many mood tags already counted in the last ROLLING HOUR.
  * Returns 0 when nothing should apply. RAISE-ONLY and clamped so the result can
  * never push the mood-driven weight past `ceiling` (< HIGH).
  */
 export function decideMoodDelta({
   moodTag, effWeight = 0, recentMoodCount = 0,
-  ceiling = MOOD_THREAT_CEILING, maxPerDay = MOOD_TAG_MAX_PER_DAY,
+  ceiling = MOOD_THREAT_CEILING, maxPerHour = MOOD_TAG_MAX_PER_HOUR,
 } = {}) {
   const base = moodThreatDelta(moodTag);
   if (base <= 0) return 0;                       // not a distress mood
-  if (recentMoodCount >= maxPerDay) return 0;    // daily cap spent
+  if (recentMoodCount >= maxPerHour) return 0;   // this hour's cap spent
   const eff = Number.isFinite(effWeight) ? effWeight : 0;
   if (eff >= ceiling) return 0;                  // already at/above the mood ceiling — raise-only, never exceed
   return Math.min(base, ceiling - eff);          // clamp so newRaw ≤ ceiling
@@ -91,12 +97,12 @@ export async function applyMoodThreat({
 
   const hist = await historyFn(tomesDir ? { tomesDir, limit: HISTORY_CAP } : { limit: HISTORY_CAP });
   const recentMoodCount = (Array.isArray(hist) ? hist : []).filter(
-    e => e?.source === MOOD_SOURCE && Number.isFinite(Date.parse(e?.ts)) && (now - Date.parse(e.ts)) < DAY_MS,
+    e => e?.source === MOOD_SOURCE && Number.isFinite(Date.parse(e?.ts)) && (now - Date.parse(e.ts)) < HOUR_MS,
   ).length;
 
   const delta = decideMoodDelta({ moodTag, effWeight: cur?.weight ?? 0, recentMoodCount });
   if (delta <= 0) {
-    return { ok: true, applied: false, reason: recentMoodCount >= MOOD_TAG_MAX_PER_DAY ? 'daily-cap' : 'at-ceiling' };
+    return { ok: true, applied: false, reason: recentMoodCount >= MOOD_TAG_MAX_PER_HOUR ? 'hourly-cap' : 'at-ceiling' };
   }
   const r = await recordFn({
     delta, source: MOOD_SOURCE, now,

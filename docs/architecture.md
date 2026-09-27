@@ -699,7 +699,7 @@ Currently owns:
   **Mood→threat (T-D.2, 0.14.30, ward-signed):** a DISTRESS mood also raises the
   threat tier, bounded — `src/tracker/mood-threat.js` `applyMoodThreat` (energy-
   weighted raw 0.6 / stressed 0.45 / low = numb 0.3; RAISE-ONLY; clamped below
-  HIGH at `MOOD_THREAT_CEILING` 3.5; ≤2/day; decays) via the existing
+  HIGH at `MOOD_THREAT_CEILING` 3.5; ≤2 per ROLLING HOUR; decays) via the existing
   `recordThreat` seam (crisis-signals/threat-tracker logic untouched). Off-switch
   `PROTO_FAMILIAR_MOOD_THREAT_DISABLED`; no-ops under `PROTO_FAMILIAR_THREAT_DISABLED`.
   **INVARIANT T1 (compounding guard):** `moodTag` is never STORED in chat history

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   moodThreatDelta, decideMoodDelta, applyMoodThreat,
-  MOOD_THREAT_WEIGHTS, MOOD_THREAT_CEILING, MOOD_TAG_MAX_PER_DAY, MOOD_SOURCE,
+  MOOD_THREAT_WEIGHTS, MOOD_THREAT_CEILING, MOOD_TAG_MAX_PER_HOUR, MOOD_SOURCE,
 } from '../src/tracker/mood-threat.js';
 import { THREAT_TIERS } from '../src/safety/threat-tracker.js';
 
@@ -34,8 +34,8 @@ test('decideMoodDelta: normal distress tag applies its full weight', () => {
   assert.equal(decideMoodDelta({ moodTag: 'raw', effWeight: 0, recentMoodCount: 0 }), MOOD_THREAT_WEIGHTS.raw);
 });
 
-test('decideMoodDelta: daily cap spent → 0', () => {
-  assert.equal(decideMoodDelta({ moodTag: 'raw', effWeight: 0, recentMoodCount: MOOD_TAG_MAX_PER_DAY }), 0);
+test('decideMoodDelta: hourly cap spent → 0', () => {
+  assert.equal(decideMoodDelta({ moodTag: 'raw', effWeight: 0, recentMoodCount: MOOD_TAG_MAX_PER_HOUR }), 0);
 });
 
 test('decideMoodDelta: raise-only — at/above ceiling adds nothing', () => {
@@ -81,25 +81,30 @@ test('applyMoodThreat: a non-distress mood is a no-op (no recordThreat)', async 
   assert.equal(h.calls.length, 0);
 });
 
-test('applyMoodThreat: the daily cap holds (2 mood tags in 24h → the 3rd no-ops)', async () => {
+test('applyMoodThreat: the HOURLY cap holds (2 mood tags within the hour → the 3rd no-ops)', async () => {
   const now = 1_000_000_000_000;
   const history = [
-    { source: MOOD_SOURCE, ts: new Date(now - 1000).toISOString() },
-    { source: MOOD_SOURCE, ts: new Date(now - 2000).toISOString() },
+    { source: MOOD_SOURCE, ts: new Date(now - 5 * 60_000).toISOString() },
+    { source: MOOD_SOURCE, ts: new Date(now - 10 * 60_000).toISOString() },
   ];
   const h = harness({ weight: 1, history });
   const r = await applyMoodThreat({ moodTag: 'raw', ...h.deps, now });
   assert.equal(r.applied, false);
-  assert.equal(r.reason, 'daily-cap');
+  assert.equal(r.reason, 'hourly-cap');
   assert.equal(h.calls.length, 0);
 });
 
-test('applyMoodThreat: mood tags older than 24h do NOT count toward the cap', async () => {
+test('applyMoodThreat: a crash LATER in the same conversation gets fresh capacity (>1h → cap refreshed)', async () => {
+  // The ward's scenario: fine earlier, taps that spent the hour's budget; two
+  // hours later (same conversation) the crash's tag counts again.
   const now = 1_000_000_000_000;
-  const history = [{ source: MOOD_SOURCE, ts: new Date(now - 25 * 60 * 60 * 1000).toISOString() }];
+  const history = [
+    { source: MOOD_SOURCE, ts: new Date(now - 2 * 60 * 60_000).toISOString() },
+    { source: MOOD_SOURCE, ts: new Date(now - 2 * 60 * 60_000 - 60_000).toISOString() },
+  ];
   const h = harness({ weight: 0, history });
-  const r = await applyMoodThreat({ moodTag: 'low', ...h.deps, now });
-  assert.equal(r.applied, true, 'a >24h-old tag is out of the window');
+  const r = await applyMoodThreat({ moodTag: 'raw', ...h.deps, now });
+  assert.equal(r.applied, true, 'the earlier tags are out of the rolling hour — the crash registers');
 });
 
 test('applyMoodThreat: clamps to the ceiling — mood ALONE never reaches HIGH', async () => {
