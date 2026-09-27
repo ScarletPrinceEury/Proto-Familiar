@@ -64,6 +64,29 @@ test('enforceToolCeiling: caps the list but always keeps CORE (safety + request_
   }
 });
 
+test('enforceToolCeiling: an explicitly-requested module survives the ceiling (recovery contract)', () => {
+  // The reported intermittent bug: with a loaded module union over the ceiling,
+  // the browser module (largest, dead-last in the registry) was trimmed to zero
+  // even right after request_tools pulled it — so the grant never arrived.
+  const full = composeActiveTools(null,
+    { webSearchEnabled: true, trackersEnabled: true, visionEnabled: true, weatherEnabled: true, browseEnabled: true, pageWatchEnabled: true },
+    { modules: null, visionCapable: true });   // full registry (>64)
+  assert.ok(full.length > 64, 'precondition: union overflows the ceiling');
+  const browserNames = namesOf(full).filter(n => TOOL_MODULES[n] === 'browser');
+  assert.ok(browserNames.length >= 8, 'precondition: browser is a large module');
+
+  // Without priority (the old behaviour): browser is trimmed away entirely.
+  const naive = new Set(namesOf(enforceToolCeiling(full, 64)));
+  assert.equal(browserNames.filter(n => naive.has(n)).length, 0, 'documents the bug: order-only trim wipes browser');
+
+  // With browser requested: every browser tool is kept, and the list still fits.
+  const fixed = enforceToolCeiling(full, 64, { priorityModules: new Set(['browser']) });
+  const kept = new Set(namesOf(fixed));
+  assert.equal(browserNames.filter(n => kept.has(n)).length, browserNames.length, 'a requested module is never the one dropped');
+  assert.ok(fixed.length <= 64, 'still within the provider-safe ceiling');
+  assert.ok(kept.has('request_tools'), 'core recovery hatch still present');
+});
+
 // ── The reported bug: the full registry is huge ──────────────────────────────
 
 test('the full ward registry exceeds the default ceiling (why z.ai broke)', () => {

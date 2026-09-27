@@ -888,6 +888,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       return enforceToolCeiling(
         composeActiveTools(customTools, sset2, { modules: union, visionCapable: visionCapableTurn }),
         toolCeiling(sset2),
+        // Keep what was just pulled ahead of the ceiling — else a large, late
+        // module (browser) gets trimmed the moment the union overflows, and the
+        // grant never arrives despite the "ok".
+        { priorityModules: toolCtx._requestedModules },
       );
     };
     const tickSurfacing = (toolNamesUsed = []) => {
