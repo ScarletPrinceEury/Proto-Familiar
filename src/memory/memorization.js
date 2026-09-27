@@ -135,6 +135,22 @@ const ACK_TTL_MS      = 24 * 60 * 60 * 1000; // prune acknowledged terminal jobs
 // the next log — coming back to this one later, exactly the cycling behaviour we
 // want. 2 min is generous for a big slice yet bounded.
 const EXTRACTION_TIMEOUT_MS = 120_000;
+const EXTRACTION_MAX_TOKENS = 8000;
+
+/**
+ * The per-extraction LLM limits, ward-tunable via the shared "Memory summary"
+ * settings (which also govern Phylactery consolidation) so a slow or
+ * always-thinking model isn't stuck at the fixed 120s / 8000. Unset or an
+ * out-of-range value falls back to the built-in defaults — never a broken
+ * (too-small) limit. Timeout is stored in seconds, used in ms. Pure.
+ */
+export function resolveExtractionLimits(settings = {}) {
+  const timeoutMs = (Number.isFinite(settings?.phylacteryLlmTimeoutS) && settings.phylacteryLlmTimeoutS >= 10)
+    ? settings.phylacteryLlmTimeoutS * 1000 : EXTRACTION_TIMEOUT_MS;
+  const maxTokens = (Number.isFinite(settings?.phylacteryLlmMaxTokens) && settings.phylacteryLlmMaxTokens >= 500)
+    ? settings.phylacteryLlmMaxTokens : EXTRACTION_MAX_TOKENS;
+  return { timeoutMs, maxTokens };
+}
 // The coverage sweep re-enqueues any slice not marked memorized every ~10 min.
 // A slice that just exhausted its retries would otherwise be re-added forever
 // (~40 jobs/hr of quota burn). Hold a failed dupKey for this long before a fresh
@@ -668,7 +684,7 @@ type — a short snake_case label read from→to (lives_in, works_at, married_to
 
 // ── LLM call ─────────────────────────────────────────────────────
 
-async function callProvider({ provider, apiKey, model, baseUrl, messages }) {
+async function callProvider({ provider, apiKey, model, baseUrl, messages, timeoutMs = EXTRACTION_TIMEOUT_MS, maxTokens = EXTRACTION_MAX_TOKENS }) {
   const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
@@ -689,15 +705,18 @@ async function callProvider({ provider, apiKey, model, baseUrl, messages }) {
         // 2000 used to truncate the JSON mid-object and every retry hit
         // the same deterministic wall. Truncation is now also DETECTED
         // (finish_reason) instead of surfacing as a confusing parse error.
-        max_tokens:  8000,
+        // Ward-tunable via the "Memory summary length cap" setting (default 8000).
+        max_tokens:  maxTokens,
       }),
       // Bounded so a hung provider can't freeze the single-slot worker — it
-      // fails, backs off, and the worker rotates to the next job.
-      signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
+      // fails, backs off, and the worker rotates to the next job. Ward-tunable
+      // via the "Memory summary timeout" setting (default 120s) — a slow or
+      // always-thinking model can be given more room instead of timing out.
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
-      throw new Error(`Extraction timed out after ${Math.round(EXTRACTION_TIMEOUT_MS / 1000)}s`);
+      throw new Error(`Extraction timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
     throw err;
   }
@@ -1090,12 +1109,16 @@ export async function processJob(job, deps = {}) {
   // the extraction task. Only the notes carry macros; the transcript is literal.
   const sharedRoom = promptFn !== buildPrompt;
   const withNames = nameFieldEnabledFor(job, settings);
+  // The ward's "Memory summary" limits (Settings) govern THIS extraction call
+  // too, not only Phylactery consolidation — so a slow or always-thinking model
+  // that was timing out at the old fixed 120s / 8000 can be given more room.
+  const { timeoutMs: extractTimeoutMs, maxTokens: extractMaxTokens } = resolveExtractionLimits(settings);
   // One extraction (with the optimistic `name`-field + 400 fallback) over a
   // given message subset. Factored out so an oversized slice can run it per chunk.
   const extractOne = (msgs) => withNameFieldFallback({
     withNames,
     buildMessages: (names) => buildExtractionMessages({ instructions, messages: msgs, sharedRoom, wardLabel: wardName, withNames: names }),
-    callProviderFn: (m) => callProviderDep({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages: m }),
+    callProviderFn: (m) => callProviderDep({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages: m, timeoutMs: extractTimeoutMs, maxTokens: extractMaxTokens }),
     onLearn: (result) => recordNameFieldResult(job, result),
   });
 

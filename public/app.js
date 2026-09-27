@@ -6224,6 +6224,7 @@ function init() {
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'organ-status-block',
     'memory-sweep-toggle',
+    'phylactery-llm-max-tokens', 'phylactery-llm-timeout',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',
