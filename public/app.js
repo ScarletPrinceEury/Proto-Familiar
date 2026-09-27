@@ -3985,7 +3985,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * them back on a failed attempt before retrying. Throws on HTTP /
  * network / abort / loop errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt) {
+async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
   const toolUseEls  = domArtifacts; // shared array - caller can roll back on error
   let   shell       = null;
@@ -4142,7 +4142,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt);
+        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         // Roll back any tool-use blocks added during this failed attempt.
@@ -4209,7 +4209,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt) {
+async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null) {
   const pendingMsgs = [];
 
   abortController = new AbortController();
@@ -4301,7 +4301,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt);
+        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         for (const el of domArtifacts) el.remove?.();
