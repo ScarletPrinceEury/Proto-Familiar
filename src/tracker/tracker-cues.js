@@ -104,11 +104,14 @@ export function buildTrackerCueBlock(items) {
   if (!Array.isArray(items) || !items.length) return '';
   const lines = items.map(it => {
     const since = sinceText(it.hours_since);
-    // A gauge candidate carries a `band` (low/overdue, §10.5) → a decaying-upkeep
-    // nudge, gentle then firmer. Everything else is a "gone quiet" stale ledger.
-    if (it.band === 'low' || it.band === 'overdue') {
+    // A gauge candidate carries a `band` (low/overdue/extreme, §10.5) → a
+    // decaying-upkeep nudge, gentle → firmer → firmest. (An escalation-enabled
+    // gauge's extreme is handled by the CHECK instead and never reaches here.)
+    // Everything else is a "gone quiet" stale ledger.
+    if (it.band === 'low' || it.band === 'overdue' || it.band === 'extreme') {
       const sinceTxt = since ? ` (last ~${since} ago)` : '';
-      const state = it.band === 'overdue' ? 'overdue' : 'getting low';
+      const state = it.band === 'extreme' ? 'critically overdue — worth a nudge'
+                  : it.band === 'overdue' ? 'overdue' : 'getting low';
       return `  — ${it.label ?? it.id}: ${state}${sinceTxt}  [id: ${it.id}]`;
     }
     const sinceText2 = since ? ` — last logged ${since} ago` : '';

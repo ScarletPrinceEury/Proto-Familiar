@@ -106,6 +106,9 @@ test('buildTrackerCueBlock: gauge candidates render band-aware lines (§10.5)', 
   ]);
   assert.match(block, /Water: getting low \(last ~8h ago\)  \[id: water-h2\]/);
   assert.match(block, /Meals: overdue \(last ~26h ago\)  \[id: meals-k1\]/);
+  // A plain (no-escalation) gauge at extreme now surfaces here — firmest wording.
+  const ext = buildTrackerCueBlock([{ id: 'meds-q9', label: 'Meds', band: 'extreme', hours_since: 50 }]);
+  assert.match(ext, /Meds: critically overdue — worth a nudge \(last ~2d ago\)  \[id: meds-q9\]/);
   assert.match(block, /mood — last logged 40h ago  \[id: mood-x7\]/);        // stale format intact
   assert.match(block, /refill gauges if appropriate/);
   assert.doesNotMatch(block, /bias toward|erode trust|only when/i);

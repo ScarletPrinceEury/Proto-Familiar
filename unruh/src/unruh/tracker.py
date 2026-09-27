@@ -560,10 +560,14 @@ def stale_trackers(conn: sqlite3.Connection, *, now: datetime | None = None) -> 
 
 def gauge_cue_candidates(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict[str, Any]:
     """§10.5 gauge cues: non-archived gauges whose derived band is `low` (a gentle
-    nudge) or `overdue` (firmer). `fine`/`fading` cue nothing (headroom); `extreme`
-    does NOT cue — it opens a CHECK (§10.6, G-C), never a cue. Pure derivation via
-    gauge_level; carries each gauge's `ask_cap_per_day` so the Node cue renderer
-    paces re-offers exactly like the stale-cue path. Returns
+    nudge), `overdue` (firmer), or `extreme` (firmest) — EXCEPT that a gauge with
+    an ENABLED escalation opens a CHECK (§10.6, G-C) at extreme instead, so it's
+    left out of the passive cue there to avoid double-surfacing. `fine`/`fading`
+    cue nothing (headroom). This means a plain gauge (no escalation) that hits
+    extreme still surfaces here rather than going silent — the reported gap: it
+    was neither cued (extreme excluded) nor checked (no escalation). Pure
+    derivation via gauge_level; carries each gauge's `ask_cap_per_day` so the Node
+    cue renderer paces re-offers exactly like the stale-cue path. Returns
     {gauges: [{id, label, band, hours_since, ask_cap_per_day}]}."""
     out = []
     for r in conn.execute("SELECT * FROM trackers WHERE archetype='gauge' AND archived_at IS NULL").fetchall():
@@ -576,8 +580,13 @@ def gauge_cue_candidates(conn: sqlite3.Connection, *, now: datetime | None = Non
             g = gauge_level(last["ts"] if last else None, cfg, now=now)
         except ValueError:
             continue  # a gauge with a malformed config never nags
-        if g["band"] not in ("low", "overdue"):
+        if g["band"] not in ("low", "overdue", "extreme"):
             continue
+        # An escalation-enabled gauge's extreme is owned by the CHECK, not a cue.
+        if g["band"] == "extreme":
+            esc = (cfg.get("gauge", {}) or {}).get("escalation", {})
+            if isinstance(esc, dict) and esc.get("enabled"):
+                continue
         cap = cfg.get("ask_cap_per_day", 1)
         cap = cap if isinstance(cap, (int, float)) else 1
         out.append({"id": r["id"], "label": r["label"], "band": g["band"],

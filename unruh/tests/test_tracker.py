@@ -216,23 +216,28 @@ def test_gauge_escalation_candidates_only_enabled(conn):
     assert out[0]["band"] == "extreme" and out[0]["escalation"]["enabled"] is True
 
 
-def test_gauge_cue_candidates_only_low_and_overdue(conn):
-    def gauge(label, hours_ago):
-        gid = tracker.create_tracker(conn, label=label, archetype="gauge", config=GCFG)["id"]
+def test_gauge_cue_candidates_low_overdue_and_plain_extreme(conn):
+    def gauge(label, hours_ago, config=GCFG):
+        gid = tracker.create_tracker(conn, label=label, archetype="gauge", config=config)["id"]
         tracker.log_entry(conn, tracker_id=gid, payload={}, ts=(NOW - timedelta(hours=hours_ago)).isoformat())
         return gid
     gauge("Fresh",   1)    # fine     → no cue
     gauge("Fading",  4)    # fading   → no cue (headroom)
     gauge("Water",   8)    # low      → gentle cue
     gauge("Meals",   20)   # overdue  → firmer cue
-    gauge("Starved", 50)   # extreme  → opens a CHECK, never a cue
+    gauge("Starved", 50)   # extreme, NO escalation → now cues (was silent — the reported gap)
+    # An escalation-ENABLED gauge at extreme is owned by the CHECK, not a cue.
+    escCfg = {"gauge": {**GCFG["gauge"], "escalation": {"enabled": True, "checkin_deadline_hours": 6}}}
+    gauge("Meds", 50, config=escCfg)
     arch = gauge("ArchLow", 8)
     tracker.archive_tracker(conn, id=arch, archived=True)   # archived → excluded
 
     out = tracker.gauge_cue_candidates(conn, now=NOW)["gauges"]
     by_label = {g["label"]: g for g in out}
-    assert set(by_label) == {"Water", "Meals"}, "only low + overdue cue; fine/fading/extreme/archived excluded"
+    assert set(by_label) == {"Water", "Meals", "Starved"}, \
+        "low + overdue + PLAIN extreme cue; fine/fading/escalation-extreme/archived excluded"
     assert by_label["Water"]["band"] == "low" and by_label["Meals"]["band"] == "overdue"
+    assert by_label["Starved"]["band"] == "extreme"
     assert by_label["Water"]["ask_cap_per_day"] == 1 and "hours_since" in by_label["Water"]
 
 
