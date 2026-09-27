@@ -4258,7 +4258,11 @@ export const TOOL_EXECUTORS = {
     for (const m of known) ctx._requestedModules.add(m);
     // Every pull is a surfacing miss — the tuning signal for triggers.
     console.log(`[tools] surfacing miss — requested: ${known.join(', ')}${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}`);
-    return `ok — I've got the ${known.join(', ')} tools handy now, from my next step on${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
+    // Wording matters: the recompose puts these tools in front of me on my VERY
+    // NEXT action in THIS turn, so I go ahead and use them now — not "later" or
+    // "next time". (An earlier "from my next step on" read as a future turn and
+    // made me end the turn expecting them, so they never got used.)
+    return `Got them — the ${known.join(', ')} tools are available to me right now, this turn. I go ahead and use them in my next action${unknown.length ? ` (there's no module called ${unknown.join(', ')})` : ''}.`;
   },
 
   schedule_find: async ({ query, include_resolved, limit } = {}, ctx = {}) => {

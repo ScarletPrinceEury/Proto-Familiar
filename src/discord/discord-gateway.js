@@ -42,7 +42,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom }
 import { buildVillagePresenceBlock, villagePresenceOn } from '../village/village-presence.js';
 import { buildVillagerContextBlock } from '../warmth/villager-context.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
-import { selectModules, stickyModulesFor, tickSticky, shouldSurface, toolCeiling, enforceToolCeiling } from '../../tool-surfacing.js';
+import { selectModules, stickyModulesFor, tickSticky, shouldSurface, toolCeiling, enforceToolCeiling, TOOL_MODULES } from '../../tool-surfacing.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
@@ -2977,6 +2977,21 @@ async function handleTurn(gw, msg, decision) {
       console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
       closingErr = err;
       rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(e => { closingErr = e; return ''; });
+    }
+    // Persist this turn's modules to sticky AFTER the loop — the modules used
+    // AND any pulled via request_tools — so a recovered module stays available
+    // for the next couple of turns. The pre-loop tick above only saw the initial
+    // selection, before request_tools could widen it mid-turn; without this a
+    // grant vanished the moment the ward's turn ended (web parity).
+    if (surfacedModules) {
+      const rounds = Array.isArray(turnRounds) ? turnRounds : [];
+      const used = rounds.flatMap(r => (r.toolCalls ?? []).map(tc => TOOL_MODULES[tc.function?.name]))
+        .filter(m => m && m !== 'core');
+      tickSticky(
+        session.sessionId,
+        new Set([...surfacedModules, ...(toolCtx._requestedModules ?? []), ...used]),
+        Number(settings?.toolStickyTurns ?? 2),
+      );
     }
     // A tool chain can end with no closing text. For a villager/ambient turn
     // that's a fine "abstain" — stay quiet. But for MY HUMAN's own direct turn,

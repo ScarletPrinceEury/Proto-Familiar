@@ -2062,6 +2062,7 @@ function applyNameVars(text) {
     .replace(/\{\{\s*ponderingActive\s*\}\}/gi, () => (state.ponderingEnabled !== false ? 'on' : 'off'))
     .replace(/\{\{\s*warmthActive\s*\}\}/gi,    () => (state.warmthEnabled    !== false ? 'on' : 'off'))
     .replace(/\{\{\s*noticingActive\s*\}\}/gi,  () => (state.noticingEnabled  !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*trackersActive\s*\}\}/gi,  () => (state.trackersEnabled  !== false ? 'on' : 'off'))
     .replace(/\{\{\s*calendarActive\s*\}\}/gi,  () => (state.gcalEnabled      === true  ? 'on' : 'off'))
     .replace(/\{\{\s*browserActive\s*\}\}/gi,   () => (state.browseEnabled    === true  ? 'on' : 'off'))
     .replace(/\{\{\s*charName\s*\}\}/gi,         () => (state.charName || 'the Familiar'))
@@ -6223,6 +6224,7 @@ function init() {
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'organ-status-block',
     'memory-sweep-toggle',
+    'phylactery-llm-max-tokens', 'phylactery-llm-timeout',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',

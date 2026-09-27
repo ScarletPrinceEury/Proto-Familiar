@@ -2029,12 +2029,12 @@
             <label for="phylactery-llm-max-tokens">Memory summary length cap</label>
             <input type="number" id="phylactery-llm-max-tokens" min="500" step="500" placeholder="8000" style="width:8em">
           </div>
-          <div class="field-hint">How much room your Familiar's memory summaries (weekly → monthly → yearly roll-ups) get to write. Leave blank for the default (8000), which suits the thinking models that spend part of this budget reasoning. Only raise it if summaries come out cut short. Takes effect after the app restarts.</div>
+          <div class="field-hint">How much room your Familiar's memory work gets to write — both pulling the facts out of a conversation and the weekly → monthly → yearly roll-ups. Leave blank for the default (8000), which suits thinking models that spend part of this budget reasoning. Raise it if memories come out cut short. Applies to the next memory pass (roll-ups after the app restarts).</div>
           <div class="field-row">
             <label for="phylactery-llm-timeout">Memory summary timeout (seconds)</label>
             <input type="number" id="phylactery-llm-timeout" min="10" step="10" placeholder="240" style="width:8em">
           </div>
-          <div class="field-hint">How long to wait for one memory summary before giving up and trying again next pass. Leave blank for the default (240s). A slow model folding a busy week needs the room; too low and consolidation quietly stalls. Blank or a too-small value falls back to the safe default. Takes effect after the app restarts.</div>
+          <div class="field-hint">How long to wait for one memory job — pulling facts out of a conversation, or folding a roll-up — before giving up and trying again next pass. Leave blank for the safe defaults (extraction 120s, roll-ups 240s). A slow or always-thinking model needs the room: <strong>if your Familiar's memory extraction keeps timing out, raise this.</strong> Applies to the next extraction (roll-ups after the app restarts).</div>
 
           <div class="field-row" style="margin-top:12px">
             <label for="stewardship-toggle">Stewardship</label>

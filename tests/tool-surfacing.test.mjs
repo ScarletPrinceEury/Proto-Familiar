@@ -441,11 +441,11 @@ for (const name of toolModuleNames) {
     'string',
     'Should return a string',
   );
-  assert.strictEqual(
-    result.startsWith('ok'),
-    true,
-    'Success should start with "ok"',
-  );
+  // The result must tell the model the tools are usable NOW, this turn — not
+  // deferred to a later step/turn (the old "from my next step on" wording made
+  // the model end the turn expecting them, so they never got used).
+  assert.match(result, /right now|this turn/i, 'Success names immediate, same-turn availability');
+  assert.doesNotMatch(result, /next step on|next time|later/i, 'no deferring wording');
 }
 
 {
@@ -472,7 +472,7 @@ for (const name of toolModuleNames) {
 
   assert.strictEqual(ctx._requestedModules.has('graph'), true);
   assert.strictEqual(ctx._requestedModules.has('village'), true);
-  assert.strictEqual(result.startsWith('ok'), true);
+  assert.match(result, /right now|this turn/i);
 }
 
 {
@@ -488,7 +488,7 @@ for (const name of toolModuleNames) {
       `"all" should add ${m}`,
     );
   }
-  assert.strictEqual(result.startsWith('ok'), true);
+  assert.match(result, /right now|this turn/i);
 }
 
 // ── runToolCallLoop with getTools ──────────────────────────────────
