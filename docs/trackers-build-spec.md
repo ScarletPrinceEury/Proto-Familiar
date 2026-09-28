@@ -336,8 +336,34 @@ tracker out of the Familiar's active list/cues/projections/passive-capture, and
 un-archives on demand — distinct from the hard `drop_tracker`. Both are
 ward-only (`tracker_archive`/`tracker_drop` MCP + thalamus wrappers reached only
 from HTTP, never composed into the Familiar's toolset — the Familiar never
-destroys or retires a ledger). Still deferred (a later UI pass): the per-schema
-add-entry form, series sparklines, and create-from-template in the tab.
+destroys or retires a ledger).
+
+**Tracker-tab UI pass ✓ SHIPPED (0.14.32-alpha):** the three deferred pieces
+land, closing out §7.
+- **Per-schema add-entry form** — the detail pane of a non-gauge tracker renders
+  one input per schema field, matched to its type (enum → `<select>`, number/
+  scale → bounded `<input type=number>`, boolean → checkbox, date →
+  `datetime-local` passed through **local-naive**, quantity → number + free unit,
+  text[]/text → text). Submitting POSTs `{payload}` to the existing
+  `POST /api/trackers/:id/entries`; Unruh's `validate_entry` is still the gate, so
+  a bad value comes back as its structured refusal (`missing`/`errors`) shown
+  inline — never stored wrong. The summary + sparkline re-render in place from the
+  endpoint's fresh read. The gauge's one-tap refill is unchanged (its "entry" is
+  the tap; no schema fields).
+- **Series sparkline** — an inline SVG over `read.entries`, plotting the first
+  number/scale field (its value), else the first enum (its index in `values`, so a
+  mood run reads as a shape), else entries-per-day. Pure derivation from the read
+  (exact numbers already come from code server-side); `< 2` points renders a calm
+  "not enough entries yet" note. `read_tracker` now carries the full `schema`
+  (every archetype) so the form and sparkline read from one call.
+- **Create-from-template** — a "New from template" picker over
+  `GET /api/tracker-templates` (backed by `tracker_list_templates` →
+  `trk.list_templates`, which enumerates the shipped `templates/trackers/*.json`
+  and annotates each `exists` from the `template` column). An already-created
+  template reads "already added" instead of a button, so the picker never stands
+  up a silent second Mood. `POST /api/trackers/from-template {template_id}` creates
+  it (via the existing `createTrackerFromTemplate`) — the one write the ward
+  reaches here; the Familiar keeps its own `tracker_create_from_template` tool.
 
 ## 8. Invariants (each pinned by a test)
 

@@ -1095,6 +1095,17 @@ export async function createTrackerFromTemplate({ template_id } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// The shipped-template catalog behind the ward's create-from-template picker
+// (each annotated `exists` if a live tracker was already made from it).
+export async function listTrackerTemplates() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', templates: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_list_templates', arguments: {} });
+    return parseToolText(r, { ok: false, templates: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), templates: [] }; }
+}
+
 /**
  * §6 mood-send auto-create: find-or-create a tracker for a shipped template
  * (idempotent on the `template` column). Code-only — reached from the mood-send

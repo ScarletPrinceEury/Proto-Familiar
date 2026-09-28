@@ -52,7 +52,7 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
   addVillagerTell,
   listTrackers, readTracker, archiveTracker, dropTracker, trackerReflectionSeries,
-  ensureTrackerFromTemplate, logTrackerEntry,
+  ensureTrackerFromTemplate, createTrackerFromTemplate, listTrackerTemplates, logTrackerEntry,
 } from './thalamus.js';
 // Mood → threat link (T-D.2, ward-signed): a distress mood-send gently raises
 // the threat tier, bounded so mood alone never reaches a crisis tier.
@@ -4361,6 +4361,23 @@ app.get('/api/trackers/:id', async (req, res) => {
   const days = req.query.days !== undefined ? Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 14)) : 14;
   try { res.json(await readTracker({ tracker_id: req.params.id, days })); }
   catch (err) { gatewayDown(res, err.message); }
+});
+
+// The shipped-template catalog for the Trackers-tab "New from template" picker,
+// and the create it backs. Both ward-only (localhost-gated like every endpoint);
+// create-from-template is the one write the ward reaches here — the Familiar has
+// its own tool for it. `exists` lets the picker say "already added" up front.
+app.get('/api/tracker-templates', async (_req, res) => {
+  try { res.json(await listTrackerTemplates()); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.post('/api/trackers/from-template', async (req, res) => {
+  const templateId = typeof req.body?.template_id === 'string' ? req.body.template_id.trim() : '';
+  if (!templateId) return badRequest(res, 'template_id is required');
+  const result = await createTrackerFromTemplate({ template_id: templateId });
+  if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+  res.json({ ok: true, id: result.id });
 });
 
 app.post('/api/trackers/:id/archive', async (req, res) => {

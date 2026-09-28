@@ -1612,6 +1612,71 @@ button { cursor: pointer; font-family: var(--font); }
 .gauge-band-overdue .gauge-fill { background: #c2683a; }  /* orange */
 .gauge-band-extreme .gauge-fill { background: #b04a4a; }  /* calm red */
 
+/* ── Trackers tab: template picker, sparkline, add-entry form ─────────────── */
+.ke-trk-templates {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raise);
+  padding: 12px 14px;
+  margin: 8px 0 12px;
+}
+.ke-trk-tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.ke-trk-tpl-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ke-trk-tpl-head { font-weight: 600; }
+.ke-trk-tpl-sub { color: var(--text-muted); font-size: 0.85em; }
+.ke-trk-tpl-have { align-self: flex-start; opacity: 0.8; }
+.ke-trk-tpl-add { align-self: flex-start; }
+
+.ke-trk-spark { margin: 4px 0 10px; }
+.ke-spark {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  height: 40px;
+}
+.ke-spark-line { stroke: var(--accent); stroke-width: 1.5; }
+.ke-spark-dot { fill: var(--accent); }
+.ke-spark-cap, .ke-trk-spark-empty { color: var(--text-muted); font-size: 0.82em; margin-top: 2px; }
+
+.ke-trk-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raise);
+  padding: 12px 14px;
+  margin: 4px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ke-trk-entry-head { font-weight: 600; }
+.ke-trk-field { display: flex; flex-direction: column; gap: 3px; }
+.ke-trk-field-lbl { font-size: 0.88em; color: var(--text-dim); }
+.ke-trk-field input[type="text"],
+.ke-trk-field input[type="number"],
+.ke-trk-field input[type="datetime-local"],
+.ke-trk-field select { max-width: 320px; }
+.ke-trk-qty { display: flex; gap: 6px; align-items: center; max-width: 320px; }
+.ke-trk-qty input[type="number"] { flex: 2 1 0; }
+.ke-trk-qty-unit { flex: 1 1 0; min-width: 0; }
+.ke-req { color: var(--text-muted); }
+.ke-trk-entry-actions { display: flex; align-items: center; gap: 10px; }
+.ke-trk-entry-msg { font-size: 0.85em; }
+.ke-trk-entry-msg.ke-err { color: #b04a4a; }
+.ke-trk-entry-msg.ke-ok { color: #4a9d6a; }
+
 .attach-strip {
   display: flex;
   flex-wrap: wrap;

@@ -6842,6 +6842,7 @@ function init() {
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
   $('ke-trk-refresh')?.addEventListener('click', keLoadTrackers);
   $('ke-trk-show-archived')?.addEventListener('change', keLoadTrackers);
+  $('ke-trk-new')?.addEventListener('click', keToggleTrackerTemplates);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
   $('ke-backup-export').addEventListener('click', keExportBackup);
@@ -11270,6 +11271,67 @@ async function keLoadTrackers() {
   } catch (err) { list.innerHTML = keError(err, 'Failed to load trackers.'); }
 }
 
+// ── Create from template ──────────────────────────────────────────────────────
+function keToggleTrackerTemplates() {
+  const box = $('ke-trk-templates');
+  if (!box) return;
+  if (box.hidden) { box.hidden = false; keLoadTrackerTemplates(); }
+  else { box.hidden = true; box.innerHTML = ''; }
+}
+
+async function keLoadTrackerTemplates() {
+  const box = $('ke-trk-templates');
+  if (!box) return;
+  box.innerHTML = '<p class="logs-loading">Loading templates…</p>';
+  try {
+    const res = await fetch('/api/tracker-templates');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const tpls = Array.isArray(data.templates) ? data.templates : [];
+    if (!tpls.length) { box.innerHTML = '<p class="logs-empty">No templates available.</p>'; return; }
+    // A calm grid of ready-made shapes. "Already added" ones stay visible but
+    // can't be re-created (no silent second Mood) — the ward can still make a
+    // bespoke one from scratch via the Familiar if they want a duplicate.
+    box.innerHTML = `<p class="field-hint">Start a ledger from a ready-made shape. You can rename or delete it afterwards.</p>
+      <div class="ke-trk-tpl-grid">${tpls.map(keTemplateCard).join('')}</div>`;
+    box.querySelectorAll('.ke-trk-tpl-add').forEach(btn => {
+      btn.addEventListener('click', () => keCreateFromTemplate(btn.dataset.tpl, btn));
+    });
+  } catch (err) { box.innerHTML = keError(err, 'Failed to load templates.'); }
+}
+
+const TRK_ARCHETYPE_BLURB = {
+  gauge: 'upkeep that fades when neglected', series: 'dated entries over time',
+  state: 'one current value', inventory: 'a list of items',
+};
+
+function keTemplateCard(tpl) {
+  const fields = Array.isArray(tpl.schema) ? tpl.schema.map(f => f.name).filter(Boolean) : [];
+  const blurb = TRK_ARCHETYPE_BLURB[tpl.archetype] ?? tpl.archetype;
+  return `<div class="ke-trk-tpl-card">
+    <div class="ke-trk-tpl-head">${esc(tpl.label)}${tpl.sensitive ? ' 🔒' : ''}</div>
+    <div class="ke-trk-tpl-sub">${esc(blurb)}${fields.length ? ' · ' + esc(fields.join(', ')) : ''}</div>
+    ${tpl.exists
+      ? '<span class="vl-count ke-trk-tpl-have">already added</span>'
+      : `<button class="btn-secondary ke-trk-tpl-add" data-tpl="${esc(tpl.id)}">Add ${esc(tpl.label)}</button>`}
+  </div>`;
+}
+
+async function keCreateFromTemplate(templateId, btn) {
+  if (!templateId) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/trackers/from-template',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: templateId }) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) { alert(`Couldn’t add it: ${data.error ?? r.status}`); if (btn) btn.disabled = false; return; }
+    // Refresh the list, re-render the picker (the new one now reads "already
+    // added"), and open the tracker we just made so its add-entry form is ready.
+    await keLoadTrackers();
+    keLoadTrackerTemplates();
+  } catch (err) { alert(`Couldn’t add it: ${err?.message ?? err}`); if (btn) btn.disabled = false; }
+}
+
 async function keOpenTracker(t) {
   const det = $('ke-trk-detail');
   det.innerHTML = '<p class="logs-loading">Loading…</p>';
@@ -11278,14 +11340,26 @@ async function keOpenTracker(t) {
     const res = await fetch(`/api/trackers/${encodeURIComponent(t.id)}`);
     if (res.ok) read = await res.json();
   } catch { /* still show the controls even if the read fails */ }
+  const schema = Array.isArray(read.schema) ? read.schema : [];
+  const canAddEntry = !t.archived && t.archetype !== 'gauge' && schema.length > 0;
   det.innerHTML = `
     <div class="ke-detail-header"><h3>${esc(t.label)} <span class="vl-count">${esc(t.archetype)}</span>${t.sensitive ? ' 🔒' : ''}</h3></div>
     <div class="ke-trk-summary">${keTrackerSummary(read)}</div>
+    ${t.archetype === 'series' ? `<div class="ke-trk-spark">${keTrackerSparkline(read)}</div>` : ''}
+    ${canAddEntry ? keTrackerEntryForm(schema) : ''}
     <div class="ke-actions">
       ${t.archetype === 'gauge' && !t.archived ? '<button class="btn-primary ke-trk-refill">I just did this — refill</button>' : ''}
       <button class="btn-secondary ke-trk-archive">${t.archived ? 'Un-archive' : 'Archive'}</button>
       <button class="btn-ghost ke-danger ke-trk-delete">Delete tracker</button>
     </div>`;
+  // Re-render the summary + sparkline from a fresh read (shared by refill + add-entry).
+  const refreshFromRead = (r) => {
+    if (!r) return;
+    det.querySelector('.ke-trk-summary').innerHTML = keTrackerSummary(r);
+    const spark = det.querySelector('.ke-trk-spark');
+    if (spark) spark.innerHTML = keTrackerSparkline(r);
+  };
+  if (canAddEntry) keWireTrackerEntryForm(det, t, schema, refreshFromRead);
   det.querySelector('.ke-trk-refill')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget; btn.disabled = true;
     try {
@@ -11294,7 +11368,7 @@ async function keOpenTracker(t) {
       const data = await r.json().catch(() => ({}));
       if (!r.ok || data.ok === false) { alert(`Refill failed: ${data.error ?? r.status}`); btn.disabled = false; return; }
       // Update the meter in place from the fresh read.
-      if (data.read) det.querySelector('.ke-trk-summary').innerHTML = keTrackerSummary(data.read);
+      if (data.read) refreshFromRead(data.read);
       btn.disabled = false;
     } catch (err) { alert(`Refill failed: ${err?.message ?? err}`); btn.disabled = false; }
   });
@@ -11332,6 +11406,166 @@ function keTrackerSummary(read) {
   }
   const entries = Array.isArray(read.entries) ? read.entries : [];
   return `<p>${entries.length} recent ${entries.length === 1 ? 'entry' : 'entries'}.</p>`;
+}
+
+// ── Series sparkline ──────────────────────────────────────────────────────────
+// Pick the field worth plotting: the first number/scale field (its value), else
+// the first enum (mapped to its position in `values`, so a mood run reads as a
+// shape), else a per-day count of entries. Pure derivation from the read — the
+// exact numbers already came from code server-side; we only draw them.
+function keSparklineSeries(read) {
+  const schema = Array.isArray(read?.schema) ? read.schema : [];
+  const entries = (Array.isArray(read?.entries) ? read.entries : [])
+    .filter(e => e && e.ts).slice(-40);   // oldest→newest already; cap the width
+  if (entries.length < 2) return null;
+
+  const numField = schema.find(f => f.type === 'number' || f.type === 'scale');
+  if (numField) {
+    const pts = entries.map(e => Number(e[numField.name])).filter(Number.isFinite);
+    if (pts.length >= 2) return { pts, label: numField.name, kind: 'value' };
+  }
+  const enumField = schema.find(f => f.type === 'enum' && Array.isArray(f.values) && f.values.length > 1);
+  if (enumField) {
+    const vals = enumField.values;
+    const pts = entries.map(e => vals.indexOf(e[enumField.name])).filter(i => i >= 0);
+    if (pts.length >= 2) return { pts, label: enumField.name, kind: 'enum', vals };
+  }
+  // Fallback: entries-per-local-day (a rhythm of how often it's logged).
+  const byDay = new Map();
+  for (const e of entries) { const d = String(e.ts).slice(0, 10); byDay.set(d, (byDay.get(d) ?? 0) + 1); }
+  const pts = [...byDay.values()];
+  return pts.length >= 2 ? { pts, label: 'entries/day', kind: 'count' } : null;
+}
+
+function keTrackerSparkline(read) {
+  const s = keSparklineSeries(read);
+  if (!s) return '<p class="logs-empty ke-trk-spark-empty">Not enough entries to chart yet.</p>';
+  const W = 240, H = 40, PAD = 3;
+  const min = Math.min(...s.pts), max = Math.max(...s.pts);
+  const span = max - min || 1;
+  const n = s.pts.length;
+  const x = (i) => PAD + (n === 1 ? 0 : (i * (W - 2 * PAD)) / (n - 1));
+  const y = (v) => H - PAD - ((v - min) / span) * (H - 2 * PAD);
+  const line = s.pts.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const last = s.pts[n - 1];
+  const lastTxt = s.kind === 'enum' ? (s.vals[last] ?? '—') : String(last);
+  const range = s.kind === 'enum'
+    ? `${esc(s.vals[Math.round(min)] ?? '')}→${esc(s.vals[Math.round(max)] ?? '')}`
+    : `${min}–${max}`;
+  const aria = `${s.label}: ${n} points, latest ${lastTxt}, range ${range}`;
+  return `<svg class="ke-spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(aria)}" preserveAspectRatio="none">`
+    + `<path d="${line}" fill="none" class="ke-spark-line" vector-effect="non-scaling-stroke" />`
+    + `<circle cx="${x(n - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="2.5" class="ke-spark-dot" /></svg>`
+    + `<div class="ke-spark-cap">${esc(s.label)} · latest <strong>${esc(lastTxt)}</strong></div>`;
+}
+
+// ── Per-schema add-entry form ─────────────────────────────────────────────────
+// One input per schema field, matched to its type. The payload built here is
+// exactly what Unruh's validate_entry expects; a bad value comes back as its
+// structured refusal (missing/errors), shown inline — never stored wrong.
+function keTrackerEntryForm(schema) {
+  const rows = schema.map(keFieldRow).join('');
+  return `<form class="ke-trk-entry" novalidate>
+    <div class="ke-trk-entry-head">Log an entry</div>
+    ${rows}
+    <div class="ke-trk-entry-actions">
+      <button type="submit" class="btn-primary">Add entry</button>
+      <span class="ke-trk-entry-msg" aria-live="polite"></span>
+    </div>
+  </form>`;
+}
+
+function keFieldRow(spec) {
+  const name = String(spec.name ?? '');
+  const req = spec.required ? ' <span class="ke-req" title="required">*</span>' : '';
+  const id = `ke-trk-f-${name.replace(/[^a-z0-9]+/gi, '-')}`;
+  let input;
+  switch (spec.type) {
+    case 'enum': {
+      const opts = ['<option value="">—</option>']
+        .concat((spec.values ?? []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`));
+      input = `<select id="${id}" data-field="${esc(name)}" data-type="enum">${opts.join('')}</select>`;
+      break;
+    }
+    case 'boolean':
+      input = `<input type="checkbox" id="${id}" data-field="${esc(name)}" data-type="boolean">`;
+      break;
+    case 'number': case 'scale': {
+      const mn = Number.isFinite(spec.min) ? ` min="${spec.min}"` : '';
+      const mx = Number.isFinite(spec.max) ? ` max="${spec.max}"` : '';
+      const step = spec.type === 'scale' ? ' step="1"' : ' step="any"';
+      input = `<input type="number" id="${id}" data-field="${esc(name)}" data-type="${spec.type}"${mn}${mx}${step}>`;
+      break;
+    }
+    case 'quantity':
+      input = `<span class="ke-trk-qty"><input type="number" id="${id}" data-field="${esc(name)}" data-type="quantity" step="any" placeholder="amount">`
+        + `<input type="text" data-unit-for="${esc(name)}" placeholder="unit" class="ke-trk-qty-unit"></span>`;
+      break;
+    case 'date':
+      // Local-naive: a datetime-local value is already YYYY-MM-DDTHH:MM with no
+      // offset — pass it straight through (never toISOString; the UI rule).
+      input = `<input type="datetime-local" id="${id}" data-field="${esc(name)}" data-type="date">`;
+      break;
+    case 'text[]':
+      input = `<input type="text" id="${id}" data-field="${esc(name)}" data-type="text[]" placeholder="comma, separated">`;
+      break;
+    default:
+      input = `<input type="text" id="${id}" data-field="${esc(name)}" data-type="text">`;
+  }
+  const cap = spec.type === 'scale' && Number.isFinite(spec.min) && Number.isFinite(spec.max)
+    ? ` <span class="field-hint">(${spec.min}–${spec.max})</span>` : '';
+  return `<label class="ke-trk-field" for="${id}"><span class="ke-trk-field-lbl">${esc(name)}${req}${cap}</span>${input}</label>`;
+}
+
+// Read the form into a validate_entry-shaped payload. Empty inputs are omitted
+// (an unset optional field just isn't sent; a missing required one comes back as
+// the server's structured "missing" refusal). Types are coerced in code.
+function keBuildEntryPayload(form) {
+  const payload = {};
+  form.querySelectorAll('[data-field]').forEach(el => {
+    const name = el.dataset.field, type = el.dataset.type;
+    if (type === 'boolean') { if (el.checked) payload[name] = true; return; }
+    const raw = (el.value ?? '').trim();
+    if (!raw) return;
+    if (type === 'number' || type === 'scale') { const n = Number(raw); if (Number.isFinite(n)) payload[name] = n; }
+    else if (type === 'quantity') {
+      const n = Number(raw); if (!Number.isFinite(n)) return;
+      const unit = form.querySelector(`[data-unit-for="${CSS.escape(name)}"]`)?.value.trim();
+      payload[name] = unit ? { value: n, unit } : { value: n };
+    }
+    else if (type === 'text[]') { const arr = raw.split(',').map(s => s.trim()).filter(Boolean); if (arr.length) payload[name] = arr; }
+    else payload[name] = raw;   // enum / date (local-naive) / text
+  });
+  return payload;
+}
+
+function keWireTrackerEntryForm(det, t, schema, refreshFromRead) {
+  const form = det.querySelector('.ke-trk-entry');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = form.querySelector('.ke-trk-entry-msg');
+    const submit = form.querySelector('button[type="submit"]');
+    const payload = keBuildEntryPayload(form);
+    if (!Object.keys(payload).length) { msg.textContent = 'Fill in at least one field.'; msg.className = 'ke-trk-entry-msg ke-err'; return; }
+    submit.disabled = true; msg.textContent = 'Saving…'; msg.className = 'ke-trk-entry-msg';
+    try {
+      const r = await fetch(`/api/trackers/${encodeURIComponent(t.id)}/entries`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payload }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) {
+        // Surface Unruh's structured refusal verbatim (missing/errors) so the ward
+        // sees exactly why, not a generic failure.
+        const why = [data.error, ...(data.missing ? [`missing: ${data.missing.join(', ')}`] : [])].filter(Boolean).join(' — ');
+        msg.textContent = why || `Failed (${r.status}).`; msg.className = 'ke-trk-entry-msg ke-err';
+        submit.disabled = false; return;
+      }
+      form.reset();
+      msg.textContent = 'Logged ✓'; msg.className = 'ke-trk-entry-msg ke-ok';
+      refreshFromRead(data.read);
+      submit.disabled = false;
+    } catch (err) { msg.textContent = err?.message ?? String(err); msg.className = 'ke-trk-entry-msg ke-err'; submit.disabled = false; }
+  });
 }
 
 // ── Remember-consent map ─────────────────────────────────────────────────────
