@@ -37,6 +37,20 @@ hits in the swept set.
 
 ---
 
+## Progress (fixes landed since the audit)
+
+- **Unruh — DONE (0.14.33 + 0.14.34):** Theme 1's Unruh half (the ward-clock
+  time-model campaign — `db.now_local`/`to_naive_local`/`local_to_utc` + every
+  derived signal + the `.ics` export), the dead `date`-field validation, the
+  `handoff` UUID→slug (Theme 3), the dead `list_gcal_nodes` (A2/dead-code), the
+  `db_snapshot` VACUUM quote-escaping, and the `resolve_occurrence` date-format
+  guard. Deliberately NOT changed: `predict_windows`' `now` param (kept for the
+  uniform derived-signal signature; prediction is correct without it) and the
+  measure-zero `gauge_level` grace-boundary `<`/`<=` (gauge band logic is a
+  ward-sign-off path). Unruh is now closed out.
+- **Still open:** the Node/WebUI halves of Themes 1–3, the RULE A/B/C server-side
+  gaps, the privacy/logic items, and the ward-sign-off prompt items below.
+
 ## Headline
 
 The codebase is in **strong** shape. The safety/proactivity layer is genuinely

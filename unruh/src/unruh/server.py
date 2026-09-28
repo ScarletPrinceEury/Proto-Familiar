@@ -1364,7 +1364,12 @@ def db_snapshot(destPath: str) -> dict[str, Any]:
         if os.path.exists(destPath):
             os.remove(destPath)  # VACUUM INTO requires the target not to exist
         with get_conn() as conn:
-            conn.execute(f"VACUUM INTO '{destPath}'")
+            # VACUUM INTO can't bind its target as a parameter, so the path is
+            # interpolated — escape it as a proper SQL string literal (double any
+            # single quote) so a path containing an apostrophe can't break or
+            # inject the statement. Caller-owned path, but fail-safe regardless.
+            safe_dest = destPath.replace("'", "''")
+            conn.execute(f"VACUUM INTO '{safe_dest}'")
         return {"ok": True, "filePath": destPath, "sizeBytes": os.path.getsize(destPath)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
