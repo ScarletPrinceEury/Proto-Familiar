@@ -30,6 +30,7 @@ import { readGrants } from './browser-grants.js';
 import { cdpArmActive, cdpArmState, consumeCdpExpiryNote, armAllowsHost, CDP_ENDPOINT } from './browser-cdp-arm.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
+import { outboxSlugId } from '../../slug-ids.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_DIR = path.join(REPO_ROOT, 'browser', 'profile');
 const PW_BROWSERS_DIR = path.join(REPO_ROOT, 'browser', 'pw-browsers');
@@ -714,7 +715,7 @@ export async function act({ ref, target, role = null, action, value, onDialog = 
     const listed = confirmDomains.some(d => host === d || host.endsWith('.' + d));
     if (listed && isSubmitShaped(action, entry.node, value)) {
       if (confirmMode === 'ask') {
-        const id = `cf-${Math.random().toString(36).slice(2, 8)}`;
+        const id = outboxSlugId('confirm');   // readable slug (spoken back to the ward), not a lookalike-prone random
         state.pendingConfirms.set(id, { ref, action, value, host, createdAt: Date.now() });
         clearIdle();                       // keep the browser alive while awaiting the ward's yes
         return { held: true, confirmId: id, host, action, ref };

@@ -2,9 +2,8 @@
 // acknowledge_deferred_intent/snooze_deferred_intent/drop_deferred_intent).
 // graduation_acknowledge / disclosure_acknowledge were the odd ones out
 // (noun_verb) — renamed to acknowledge_graduation / acknowledge_disclosure.
-// The old names stay as executor-only aliases for one release so a model
-// mid-conversation that still recalls the old name lands correctly, but they
-// must not be advertised (absent from BUILTIN_TOOLS).
+// The old names lived on briefly as executor-only aliases ("remove after 0.12");
+// they were fully retired in the 2026-09 audit sweep (now well past 0.12).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BUILTIN_TOOLS, TOOL_EXECUTORS } from '../cerebellum.js';
@@ -29,19 +28,12 @@ test('the old noun_verb names are NOT advertised', () => {
   }
 });
 
-test('old names still execute, aliasing the new function, for a mid-conversation model that recalls them', async () => {
+test('the new names execute; the old aliases are fully retired (gone from TOOL_EXECUTORS)', () => {
+  // The canonical verb_noun names run.
   assert.equal(typeof TOOL_EXECUTORS.acknowledge_graduation, 'function');
-  assert.equal(typeof TOOL_EXECUTORS.graduation_acknowledge, 'function');
   assert.equal(typeof TOOL_EXECUTORS.acknowledge_disclosure, 'function');
-  assert.equal(typeof TOOL_EXECUTORS.disclosure_acknowledge, 'function');
-
-  // Same failure-mode behaviour (no ids) proves the alias really delegates,
-  // not just happens to return a similar-looking string.
-  const gradNew = await TOOL_EXECUTORS.acknowledge_graduation({});
-  const gradOld = await TOOL_EXECUTORS.graduation_acknowledge({});
-  assert.equal(gradNew, gradOld);
-
-  const discNew = await TOOL_EXECUTORS.acknowledge_disclosure({});
-  const discOld = await TOOL_EXECUTORS.disclosure_acknowledge({});
-  assert.equal(discNew, discOld);
+  // The retired noun_verb aliases no longer exist as executors either (not just
+  // unadvertised) — the "remove after 0.12" contract, honoured.
+  assert.equal(TOOL_EXECUTORS.graduation_acknowledge, undefined);
+  assert.equal(TOOL_EXECUTORS.disclosure_acknowledge, undefined);
 });

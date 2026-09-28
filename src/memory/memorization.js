@@ -23,7 +23,7 @@ import { resolveProviderUrl, authHeader, providerRequiresKey } from '../../provi
 import { extractContent } from '../../llm-call.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
-import { slugifyLabel } from '../../slug-ids.js';
+import { slugifyLabel, meaningSlugId } from '../../slug-ids.js';
 // The `name`-field machinery now lives in the shared module so every user-role
 // surface uses one implementation (not a memorization-local copy). Re-exported
 // below for back-compat with callers/tests that import it from here.
@@ -1273,7 +1273,11 @@ export async function processJob(job, deps = {}) {
     //     fact about a specific person is a durable person-attached fact. All
     //     use `significant` so they skip daily consolidation/decay.
     const storage = factStorage(fact, { factDate, hasNamedSubjects });
-    const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    // A readable, content-derived slug (the slug-id rule) — this id rides out in
+    // recall/consent/graduation surfaces the Familiar reads, so it must be
+    // meaning-bearing + greppable, not a `fact-<timestamp>-<rand>`. meaningSlugId
+    // is lookalike-free and collision-suffixed; Phylactery's insert retries too.
+    const slug = meaningSlugId(content, { fallbackKind: 'mem' });
     // Validate the model's schedule_refs in CODE against the legend it was
     // shown — a cited id survives only if it's a real node id. The model
     // repeats ids, it never mints them; a hallucinated ref dies here.
