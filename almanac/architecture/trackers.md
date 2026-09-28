@@ -165,6 +165,28 @@ Two of the three features named as deferred when T-B.1 shipped have since landed
 
 The live chat path is complete without it; it remains an additive feature.
 
+## Ward UI for data entry (0.14.32)
+
+The Tracker tab in the Knowledge editor now presents three linked ward-facing UI components for direct tracker entry and management, completing the tracker build spec's §7 UI work.
+
+**Per-schema add-entry form** renders one input field per schema field, with type-matched widgets: enum fields become `<select>` controls, number/scale fields are bounded number inputs, booleans render as checkboxes, dates use `datetime-local` (passed through LOCAL-NAIVE without `toISOString()`), quantity fields accept a number plus free-text unit, and text/text[] fields render as text inputs. The form submits `{payload}` to the pre-existing `POST /api/trackers/:id/entries` endpoint. Unruh's `validate_entry` gate remains the sole write authorizer — the UI shows its structured refusal signals (`missing`, `errors`) inline and never persists an invalid entry.
+
+**Series sparkline** is an inline SVG graph over `read.entries`: it plots the first number/scale field if present, else an enum field's index into its `values` array (so a mood tracker reads as a visual shape), else a per-day entry count. The sparkline is pure derivation — numbers are already fetched by the form's initial `read_tracker` call, and there is no second round-trip.
+
+**Create-from-template** is a picker over `GET /api/tracker-templates` (backed by the new `tracker_list_templates` MCP tool, enumerating `unruh/.../templates/trackers/*.json`), with a guard that marks already-created templates as "already added" to prevent silent duplicates. The picker submits to `POST /api/trackers/from-template {template_id}`, creating via the existing `createTrackerFromTemplate` wrapper.
+
+**Design decisions** that affected the implementation:
+
+- `read_tracker` now returns the full `schema` on every archetype (gauge returns `[]` instead of omitting it), so both the add-entry form and sparkline read from the one existing call with no additional round-trip, and the form always matches the validate_entry gate.
+- `tracker_list_templates` is ward-UI-only: it is not composed into the Familiar's toolset. The Familiar's own `tracker_create_from_template` tool already names templates in its description, so the catalog endpoint serves only the UI picker. Its docstring is marked "Ward-facing" (like `tracker_archive`), not first-person, because the Familiar cannot reach it.
+- Date inputs stay LOCAL-NAIVE end-to-end: `datetime-local` yields `YYYY-MM-DDTHH:MM` (no offset, no seconds); it is passed straight through without `toISOString()`, and Unruh's `to_local_naive` normalizer coerces it to `YYYY-MM-DDTHH:MM:SS`. This upholds the repo's exact-values / local-naive rule at the UI boundary.
+- Accessibility: the sparkline carries `role="img"` with `aria-label` showing range and latest value; form fields are labelled.
+
+**Endpoints** added for the UI:
+
+- `GET /api/tracker-templates` — ward-only, localhost-gated, returns the catalog of shipped templates.
+- `POST /api/trackers/from-template {template_id}` — the endpoint the picker uses to create a tracker from a template (the Familiar uses its own tool for this).
+
 ## Related
 
 - [Phylactery](phylactery) — the store that holds trackers alongside identity and memory.
