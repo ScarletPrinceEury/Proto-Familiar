@@ -72,9 +72,17 @@ hits in the swept set.
   stale "remove after 0.12" acknowledge aliases (test updated to pin their
   retirement); reworded the entity-core comment to Phylactery; trimmed server.js's
   unused imports (`MAX_TOOL_ROUNDS`, `normalizeAttributionEntry`, five media names).
-- **Still open:** the privacy/logic items, the WebUI app.js cleanup (WCAG,
-  duplication, state-shadowing), the Node duplication extractions + degradation
-  hardening, and the ward-sign-off prompt items below.
+- **WebUI app.js — safe subset DONE (0.14.38):** the WCAG icon-button aria-labels
+  (lore-delete, weather-place, the voice-preview play/stop toggle, + index.html's
+  chime/month-nav buttons), the duplicate `baseUrl` object keys in the two
+  connection literals, the dead `_asrInstalling` writes, and a clarifying comment
+  on the (non-dead) `generationMode` lore filter. Deferred to a focused second
+  WebUI diff (app.js is untestable, so bisectable diffs matter): the `state`-shadow
+  renames, the form-label `for=` associations across the editor panes, and the
+  behavior-preserving extractions (buildMemorizePayload, teEscapeHtml→esc, …).
+- **Still open:** the WebUI second diff (above), the Node duplication extractions +
+  degradation hardening, the privacy/logic items, and the ward-sign-off prompt
+  items below.
 
 ## Headline
 

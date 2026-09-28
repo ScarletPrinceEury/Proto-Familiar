@@ -239,7 +239,9 @@ const state = {
   tomeCaseSensitive:     false,  // global case-sensitive keyword matching
   tomeMatchWholeWords:   false,  // global whole-word keyword matching
   turnCount:             0,      // conversation turn counter (used by entry.delay)
-  generationMode:        'normal', // current generation mode (used by entry.triggers[])
+  generationMode:        'normal', // FIXED at 'normal' — PF has one generation mode. Not a stub: the
+                                   // scanLoreEntries triggers[] check uses it to keep an imported
+                                   // (SillyTavern) entry that opted OUT of normal mode suppressed.
   tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
   tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
@@ -1393,9 +1395,8 @@ function migrateLegacyConnection() {
       name:     'Primary',
       provider: state.provider,
       apiKey:   state.apiKey,
-      baseUrl:   state.baseUrl,
-      model:    state.model,
       baseUrl:  state.baseUrl,
+      model:    state.model,
     };
     state.connections = [conn];
     state.primaryConnectionId = conn.id;
@@ -1502,9 +1503,8 @@ function saveNewConnection(name) {
     name:     trimmed,
     provider: state.provider,
     apiKey:   state.apiKey,
-    baseUrl:   state.baseUrl,
-    model:    state.model,
     baseUrl:  state.baseUrl,
+    model:    state.model,
   };
   state.connections.push(conn);
   if (!state.primaryConnectionId) state.primaryConnectionId = conn.id;
@@ -8637,7 +8637,7 @@ async function refreshTomeEntriesList() {
           <div class="lorebook-entry-actions">
             <button class="btn-ghost lore-edit-btn" data-uid="${esc(entry.uid)}" title="Edit entry">Edit</button>
             <button class="btn-ghost lore-toggle-btn" data-uid="${esc(entry.uid)}" title="${entry.enabled ? 'Disable entry' : 'Enable entry'}">${entry.enabled ? 'Enabled' : 'Disabled'}</button>
-            <button class="btn-ghost lore-delete-btn" data-uid="${esc(entry.uid)}" title="Delete entry">\u2715</button>
+            <button class="btn-ghost lore-delete-btn" data-uid="${esc(entry.uid)}" title="Delete entry" aria-label="Delete entry">\u2715</button>
           </div>
         </div>
         <div class="lorebook-entry-keys">${keyTagsHtml}</div>
@@ -9192,13 +9192,11 @@ async function ensureOfflineAsrDownloaded(key) {
     const res = await (await fetch('/api/voice/asr-model/install', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
     })).json();
-    _asrInstalling = null;
     if (!res?.ok) {
       const st = $('voice-offline-asr-model-state');
       if (st) st.textContent = `Couldn't download ${OFFLINE_ASR_SHORT_NAME[key] || key}: ${res?.message || res?.reason || 'unknown error'}. Still using SenseVoice.`;
     }
   } catch (e) {
-    _asrInstalling = null;
     const st = $('voice-offline-asr-model-state');
     if (st) st.textContent = `Download failed: ${String(e?.message ?? e)}. Still using SenseVoice.`;
   } finally {
@@ -9834,6 +9832,7 @@ function stopVoicePreview() {
   if (VP.playing) {
     try { VP.playing.audio.pause(); } catch { /* already stopped */ }
     VP.playing.button.textContent = '▶';
+    VP.playing.button.setAttribute('aria-label', 'Play voice preview');   // keep the label matching the button's action (WCAG 4.1.2)
     VP.playing = null;
   }
 }
@@ -9853,10 +9852,12 @@ async function toggleVoicePreview(row, button, label) {
   audio.addEventListener('ended', () => stopVoicePreview());
   audio.addEventListener('error', () => {
     button.textContent = '▶';
+    button.setAttribute('aria-label', 'Play voice preview');
     label.querySelector('.field-hint').textContent = `${row.source} · couldn't play this one`;
   });
   VP.playing = { key: row.key, audio, button };
   button.textContent = '■';
+  button.setAttribute('aria-label', 'Stop voice preview');
   audio.play().catch(() => stopVoicePreview());
 
   if (!row.measured) {
@@ -12160,6 +12161,7 @@ async function renderWeatherPlaces() {
       del.className = 'btn-secondary';
       del.textContent = '✕';
       del.title = 'Remove place';
+      del.setAttribute('aria-label', 'Remove place');   // icon-only: a title alone is fragile (WCAG 4.1.2)
       del.onclick = () => weatherDeletePlace(l.id, l.label);
       row.appendChild(del);
       list.appendChild(row);
