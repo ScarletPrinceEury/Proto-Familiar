@@ -891,7 +891,7 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const lastUserAt = new Date(nowMs - silenceMs).toISOString();
   // Triage is a ward-private deliberation → full weather line, in the
   // ward's chosen unit (display only — never a gate/decision input).
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs, unit: s?.weatherUnit }) });
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, timeZone: s?.wardTimeZone || null, weatherLine: readWeatherNowLine({ now: nowMs, unit: s?.weatherUnit }) });
 
   const signalsBlock = signals?.length
     ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
@@ -3199,7 +3199,11 @@ export const TOOL_EXECUTORS = {
       // the entry is addressed later (update_memory / delete_memory take
       // YYYY-MM-DD_slug for significant).
       if (slug) {
-        const today = new Date().toISOString().slice(0, 10);
+        // Ward-local date (not UTC toISOString) so the returned address matches
+        // the day Phylactery actually filed under — near midnight on a cross-zone
+        // server a UTC key would name the wrong day and a later update/delete by
+        // that key would miss.
+        const today = wardLocalNowISO(readSettingsSync()?.wardTimeZone || null).slice(0, 10);
         return quietOk(`Memory saved (significant/${today}_${slug}).`);
       }
       return 'Memory saved.';

@@ -1802,7 +1802,7 @@ import { nextTrackerCue } from './src/tracker/tracker-cues.js';
 import { nextOfferCue } from './src/tracker/offer-tracker.js';
 import { buildEatFirstBlock, buildMensesWindowBlock, discussingFood } from './src/tracker/tracker-projections.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
-import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
+import { relativeDay, buildTimeAnchorBlock } from './relative-time.js';
 import { expandWindow } from './src/schedule/recurrence.js';
 import { summarizeNeedsForDay, isNeedWindow } from './src/schedule/needs-tracking.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
@@ -2715,29 +2715,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // The relative phrasing recomputes per turn — that's the whole
     // point: a memory from yesterday morning reads as "yesterday"
     // today and "two days ago" tomorrow, without anyone re-writing it.
-    let timeAnchorBlock = '';
-    try {
-      const nowMs   = Date.now();
-      const nowDate = new Date(nowMs);
-      // UTC offset — e.g. "+02:00" or "-05:00". getTimezoneOffset() returns
-      // the NEGATIVE of the UTC offset in minutes (e.g. UTC+2 → -120).
-      const offsetMin  = -nowDate.getTimezoneOffset();
-      const offsetSign = offsetMin >= 0 ? '+' : '-';
-      const absMin     = Math.abs(offsetMin);
-      const offsetStr  = `UTC${offsetSign}${String(Math.floor(absMin / 60)).padStart(2, '0')}:${String(absMin % 60).padStart(2, '0')}`;
-      const lines = [
-        `Now: ${clockTime(nowMs)} (${offsetStr}) on ${dayAndDate(nowMs)}.`,
-      ];
-      if (lastUserMessageAt) {
-        const lastMs = new Date(lastUserMessageAt).getTime();
-        if (Number.isFinite(lastMs)) {
-          lines.push(`My human last sent a message ${relativeTime(lastMs, nowMs)}.`);
-        }
-      }
-      timeAnchorBlock = `[Now]\n${lines.join('\n')}`;
-    } catch (err) {
-      console.error('[thalamus] time anchor assembly failed:', err?.message ?? err);
-    }
+    // The [Now] anchor, ward-zoned via the shared buildTimeAnchorBlock. This was
+    // a hand-rolled reimplementation that read the SERVER's clock + offset (no
+    // timeZone) — the 0.7.86 bug class: on a server whose zone differs from the
+    // ward's, the Familiar's "Now" was the server's wall-clock. The live
+    // /api/chat turn appends its OWN ward-zoned anchor last, but every other
+    // enrich consumer (Discord history assembly, background reads) relied on this
+    // one, so it must be ward-local too. Weather is omitted here — the caller
+    // that wants it (server.js) adds its own line.
+    const timeAnchorBlock = buildTimeAnchorBlock({
+      now: Date.now(),
+      lastUserMessageAt: lastUserMessageAt ?? null,
+      timeZone: wardTimeZoneSetting(),
+    });
 
     // ── Recently, elsewhere (Hippocampus — cross-channel short-term buffer) ─────
     // A few lines of what's happened across my OTHER conversations lately, so the
@@ -3025,7 +3015,7 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = wardLocalNowISO(wardTimeZoneSetting()).slice(0, 10);  // ward-local day, not UTC (near-midnight cross-zone filing)
     const args = { content, granularity, date: date ?? today, instanceId };
     if (slug) args.slug = slug;
     if (register && register !== 'episodic') args.register = register;
@@ -3069,7 +3059,7 @@ export async function createMemoryFull({ content, granularity = 'significant', d
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = wardLocalNowISO(wardTimeZoneSetting()).slice(0, 10);  // ward-local day, not UTC (near-midnight cross-zone filing)
     const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
     if (slug) args.slug = slug;
     if (category) args.category = category;
