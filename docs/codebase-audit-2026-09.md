@@ -226,14 +226,13 @@ meaning-bearing helper (`slug-ids.js` / `db.slug_id`), which already exists:
 
 ## Safety-review items (ward sign-off — I did NOT change these)
 
-- **`cerebellum.js:1043,1047` — the triage deliberation prompt still stages
-  equal-weighting.** It reads *"I know both paths have real costs, and I weigh them
-  equally"* + *"Not from a default posture in either direction."* CLAUDE.md
-  proactivity **Rule 2 was explicitly rewritten to forbid this** ("hold both at
-  equal weight reads to it as *find reasons to wait*"). Cost-of-silence IS named
-  (good), but the symmetric framing is the corrected-away pattern, on the single
-  most safety-critical prompt. **[high] — your call; this is the class of edit that
-  caused the 1.5-hour silence.**
+- **`cerebellum.js:1043,1047` triage equal-weighting — FIXED (0.14.46, ward-approved).**
+  Dropped *"I weigh them equally"* and *"Not from a default posture in either
+  direction."* The two costs are now named plainly but as NOT the same size ("a
+  small thing" vs "the failure that can't be undone" — asymmetric toward action,
+  Rule 5), and the deciding line anchors to the invited-default ("they invited me
+  in", Rule 6) instead of a neutral posture. Wording is a prompt change — validated
+  by node --check + wiring; the real test is the ward watching live behaviour.
 - **`care-check.js:36` (MILD) "unless it fits"** and **`:46` (MODERATE) "If it
   would feel intrusive… I stay steady"** — the flagged micro-hedge / un-named
   cost-of-silence, but at the lowest tiers on an *active* turn (human present, not
