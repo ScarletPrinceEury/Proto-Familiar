@@ -2161,6 +2161,36 @@ function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, atta
   return { role, content: stamped, ...atts };
 }
 
+// A tool-scaffolding message — a `role:'tool'` result, or the assistant carrier
+// that holds the tool_calls for a round. Both are turn-internal plumbing: they
+// exist to produce ONE visible reply, so summarization, export, and the manual
+// memorize viewer all skip them and keep only the human-visible turns. This is
+// the single home for that predicate — it was copy-pasted at five sites, each
+// re-deciding "is this plumbing?" (two of them slightly wrong: they skipped an
+// assistant turn with an EMPTY tool_calls array, which is really just a normal
+// reply; that shape doesn't occur in our message flow today, so unifying on the
+// `.length` form is a latent-bug fix, not a behavior change).
+function isToolPlumbing(msg) {
+  if (!msg) return false;
+  if (msg.role === 'tool') return true;
+  return msg.role === 'assistant'
+    && Array.isArray(msg.tool_calls)
+    && msg.tool_calls.length > 0;
+}
+
+// Gather the human-visible messages in [startIndex, endIndex] (inclusive) from
+// a messages array, dropping tool plumbing (isToolPlumbing) and any missing
+// slots. The three topic-summary range-gather loops all built this identically.
+function collectSummarizableRange(messages, startIndex, endIndex) {
+  const out = [];
+  for (let i = startIndex; i <= endIndex; i++) {
+    const m = messages[i];
+    if (!m || isToolPlumbing(m)) continue;
+    out.push(m);
+  }
+  return out;
+}
+
 /**
  * Builds the messages array sent to the API.
  * Does NOT mutate state.messages — that happens only after a
@@ -4449,9 +4479,7 @@ function exportChat() {
   md += `---\n\n`;
 
   for (const msg of state.messages) {
-    // Skip tool-call plumbing messages (role=tool and assistant tool_call turns)
-    if (msg.role === 'tool') continue;
-    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) continue;
+    if (isToolPlumbing(msg)) continue; // role=tool + assistant tool_call carriers
 
     const label = msg.role === 'user' ? '**User**' : '**Assistant**';
     const tsStr = msg.timestamp ? ` _(${new Date(msg.timestamp).toLocaleString()})_` : '';
@@ -7375,13 +7403,7 @@ function endTopicAtIndex(topic, endIdx) {
   updateTopicStrip();
   refreshTopicGutter();
 
-  const rangeMessages = [];
-  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
-    const m = state.messages[i];
-    if (!m || m.role === 'tool') continue;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
-    rangeMessages.push(m);
-  }
+  const rangeMessages = collectSummarizableRange(state.messages, topic.startIndex, topic.endIndex);
 
   // Always open the summary modal so the user sees the topic actually ended.
   // Auto-generate only when we have something to summarize AND an API key;
@@ -7802,9 +7824,7 @@ function renderManualMemorizeMessages() {
 
   let rendered = 0;
   mm.messages.forEach((msg, idx) => {
-    // Skip tool plumbing — same filter as the worker uses.
-    if (msg.role === 'tool') return;
-    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return;
+    if (isToolPlumbing(msg)) return; // same filter the memorize worker uses
     rendered++;
 
     const row = document.createElement('div');
@@ -7927,13 +7947,7 @@ function manualMemorizeEndTopic(msgIndex) {
   }
 
   // Gather range messages, filtered like the worker does.
-  const rangeMessages = [];
-  for (let i = topic.startIndex; i <= msgIndex; i++) {
-    const m = mm.messages[i];
-    if (!m || m.role === 'tool') continue;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
-    rangeMessages.push(m);
-  }
+  const rangeMessages = collectSummarizableRange(mm.messages, topic.startIndex, msgIndex);
   if (rangeMessages.length < 2) {
     alert('A topic needs at least two non-tool messages to summarize. Pick a later message to end at.');
     return; // keep the topic open so the user can try again
@@ -8076,13 +8090,7 @@ async function regenerateSummary(topic) {
   if (_pendingSummaryContext?.rangeMessages) {
     rangeMessages = _pendingSummaryContext.rangeMessages;
   } else {
-    rangeMessages = [];
-    for (let i = topic.startIndex; i <= topic.endIndex; i++) {
-      const m = state.messages[i];
-      if (!m || m.role === 'tool') continue;
-      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
-      rangeMessages.push(m);
-    }
+    rangeMessages = collectSummarizableRange(state.messages, topic.startIndex, topic.endIndex);
   }
   await generateTopicSummary(topic, rangeMessages);
 }
@@ -10608,9 +10616,9 @@ async function keOpenGraphNode(id) {
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(id, e, sg)).join('');
     det.innerHTML = `
       <div class="ke-detail-header"><h3>${esc(self.label ?? id)}</h3></div>
-      <div class="field"><label>Label</label><input id="ke-graph-label" type="text" value="${esc(self.label ?? '')}"></div>
-      <div class="field"><label>Type</label><input id="ke-graph-nodetype" type="text" value="${esc(self.type ?? '')}" list="ke-node-types-dl"></div>
-      <div class="field"><label>Description</label><textarea id="ke-graph-desc" rows="4" class="ke-textarea">${esc(self.description ?? '')}</textarea></div>
+      <div class="field"><label for="ke-graph-label">Label</label><input id="ke-graph-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label for="ke-graph-nodetype">Type</label><input id="ke-graph-nodetype" type="text" value="${esc(self.type ?? '')}" list="ke-node-types-dl"></div>
+      <div class="field"><label for="ke-graph-desc">Description</label><textarea id="ke-graph-desc" rows="4" class="ke-textarea">${esc(self.description ?? '')}</textarea></div>
       <div class="ke-actions">
         <button id="ke-graph-save" class="btn-send">Save</button>
         <button id="ke-graph-delete" class="btn-ghost ke-danger">Delete node</button>
@@ -11055,10 +11063,10 @@ async function keGraphOpenPopover(node, clientX, clientY) {
         <h3>${esc(self.label ?? node.id)}</h3>
         <button class="ke-graph-popover-close" type="button" aria-label="Close" id="ke-pop-close">✕</button>
       </div>
-      <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
-      <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
-      <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
-      <div class="field"><label>Audience <span class="field-hint">(where this may surface)</span></label><select id="ke-pop-audience">${audOptions}</select></div>
+      <div class="field"><label for="ke-pop-label">Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label for="ke-pop-type">Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
+      <div class="field"><label for="ke-pop-desc">Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="field"><label for="ke-pop-audience">Audience <span class="field-hint">(where this may surface)</span></label><select id="ke-pop-audience">${audOptions}</select></div>
       <div class="ke-actions">
         <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
         <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
@@ -14471,58 +14479,58 @@ function vlRenderPersonDetail(villager) {
   detail.innerHTML = `
     <div class="vl-detail-head">${isNew ? 'Add person' : esc(villager.name)}</div>
     <div>
-      <div class="vl-field-label">Name</div>
+      <label class="vl-field-label" for="vl-p-name">Name</label>
       <input type="text" id="vl-p-name" value="${isNew ? '' : esc(villager.name)}" placeholder="e.g. Chen" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Pronouns <span class="field-hint">(optional)</span></div>
+      <label class="vl-field-label" for="vl-p-pronouns">Pronouns <span class="field-hint">(optional)</span></label>
       <input type="text" id="vl-p-pronouns" value="${isNew ? '' : esc(villager.pronouns ?? '')}" placeholder="e.g. she/her, they/them" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Categories <span class="field-hint">(can overlap)</span></div>
-      <div class="vl-cat-toggles" id="vl-p-cat-toggles">${catToggles || '<span class="vl-chip-dim">No categories defined yet.</span>'}</div>
+      <div class="vl-field-label" id="vl-p-cat-lbl">Categories <span class="field-hint">(can overlap)</span></div>
+      <div class="vl-cat-toggles" id="vl-p-cat-toggles" role="group" aria-labelledby="vl-p-cat-lbl">${catToggles || '<span class="vl-chip-dim">No categories defined yet.</span>'}</div>
     </div>
     <div>
-      <div class="vl-field-label">Relation to the ward</div>
+      <label class="vl-field-label" for="vl-p-rel-ward">Relation to the ward</label>
       <input type="text" id="vl-p-rel-ward" value="${isNew ? '' : esc(villager.relationToWard ?? '')}" placeholder="e.g. college roommate, therapist" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Stance toward me <span class="field-hint">(how they relate to the Familiar)</span></div>
+      <label class="vl-field-label" for="vl-p-rel-fam">Stance toward me <span class="field-hint">(how they relate to the Familiar)</span></label>
       <select id="vl-p-rel-fam" style="width:100%">${relFamOptions}</select>
     </div>
     <div>
-      <div class="vl-field-label">Platform aliases <span class="field-hint">(matched by stable ID, not handle)</span></div>
-      <div id="vl-p-aliases" style="display:flex;flex-direction:column;gap:5px">${aliasRows}</div>
+      <div class="vl-field-label" id="vl-p-aliases-lbl">Platform aliases <span class="field-hint">(matched by stable ID, not handle)</span></div>
+      <div id="vl-p-aliases" role="group" aria-labelledby="vl-p-aliases-lbl" style="display:flex;flex-direction:column;gap:5px">${aliasRows}</div>
       <div class="vl-add-row"><button class="btn-ghost" id="vl-p-alias-add" type="button" style="font-size:0.8rem">+ Alias</button></div>
     </div>
     <div>
-      <div class="vl-field-label">Connection note</div>
+      <label class="vl-field-label" for="vl-p-conn">Connection note</label>
       <input type="text" id="vl-p-conn" value="${isNew ? '' : esc(villager.connection ?? '')}" placeholder="How do you know them?" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Communication style <span class="field-hint">(optional)</span></div>
+      <label class="vl-field-label" for="vl-p-comm">Communication style <span class="field-hint">(optional)</span></label>
       <input type="text" id="vl-p-comm" value="${isNew ? '' : esc(villager.commStyleNotes ?? '')}" placeholder="e.g. direct, uses sarcasm, prefers short messages" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Notes <span class="field-hint">(optional — shareable; the Familiar may use these even when others are present)</span></div>
+      <label class="vl-field-label" for="vl-p-notes">Notes <span class="field-hint">(optional — shareable; the Familiar may use these even when others are present)</span></label>
       <textarea id="vl-p-notes" placeholder="Anything else worth knowing…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.notes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Private notes <span class="field-hint">(ward-only — for sensitive things like orientation, health, or a legal name. The Familiar sees these only when it's just you two; held back automatically when anyone else is present. Not for trivia.)</span></div>
+      <label class="vl-field-label" for="vl-p-private-notes">Private notes <span class="field-hint">(ward-only — for sensitive things like orientation, health, or a legal name. The Familiar sees these only when it's just you two; held back automatically when anyone else is present. Not for trivia.)</span></label>
       <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Remember tab)</span></div>
-      <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
+      <div class="vl-field-label" id="vl-p-remember-lbl">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Remember tab)</span></div>
+      <div id="vl-p-remember" class="vl-rem-grid" role="group" aria-labelledby="vl-p-remember-lbl">${remRows}</div>
     </div>
-    <div>
-      <div class="vl-field-label">Standing consent <span class="field-hint">(when both you and this person have agreed, the Familiar stops asking for per-fact consent about them — a "never store" category above still holds)</span></div>
+    <div role="group" aria-labelledby="vl-p-consent-lbl">
+      <div class="vl-field-label" id="vl-p-consent-lbl">Standing consent <span class="field-hint">(when both you and this person have agreed, the Familiar stops asking for per-fact consent about them — a "never store" category above still holds)</span></div>
       <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-ward" ${villager?.standingConsent?.wardAgreed ? 'checked' : ''}> I agree the Familiar may keep memories about this person</label>
       <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-villager" ${villager?.standingConsent?.villagerAgreed ? 'checked' : ''}> This person has agreed too</label>
     </div>
     <div>
-      <div class="vl-field-label">Disclosure <span class="field-hint">(per category, which circle facts about this person may surface in — default keeps them to the room the memory was made in; pick a category to widen, or Ward-private to keep them to just us)</span></div>
-      <div id="vl-p-disclosure" class="vl-rem-grid">${discRows}</div>
+      <div class="vl-field-label" id="vl-p-disclosure-lbl">Disclosure <span class="field-hint">(per category, which circle facts about this person may surface in — default keeps them to the room the memory was made in; pick a category to widen, or Ward-private to keep them to just us)</span></div>
+      <div id="vl-p-disclosure" class="vl-rem-grid" role="group" aria-labelledby="vl-p-disclosure-lbl">${discRows}</div>
     </div>
     ${graphNodeHtml}
     <div class="vl-actions">
@@ -14796,12 +14804,12 @@ function vlRenderCatDetail(cat) {
     <div class="vl-detail-head">${isNew ? 'New category' : esc(cat.name)}</div>
     ${isLocked ? `<p class="vl-note">🔒 The floor — everyone unrecognized resolves here. Grants are permanently locked to empty.</p>` : ''}
     <div>
-      <div class="vl-field-label">Name${isBuiltin ? ' <span class="vl-lock">(fixed)</span>' : ''}</div>
+      <label class="vl-field-label" for="vl-c-name">Name${isBuiltin ? ' <span class="vl-lock">(fixed)</span>' : ''}</label>
       <input type="text" id="vl-c-name" value="${isNew ? '' : esc(cat.name)}" placeholder="e.g. Close Friends" style="width:100%"${isBuiltin ? ' disabled' : ''}>
     </div>
     <div>
-      <div class="vl-field-label">What people in this category may know or see</div>
-      <div id="vl-c-grants-known">${knownRows}</div>
+      <div class="vl-field-label" id="vl-c-grants-known-lbl">What people in this category may know or see</div>
+      <div id="vl-c-grants-known" role="group" aria-labelledby="vl-c-grants-known-lbl">${knownRows}</div>
       ${(!isNew && !isLocked) ? `
       <details class="vl-grants-advanced vl-topics-section">
         <summary>Content topics — which kinds of memory this circle may see</summary>
@@ -15200,27 +15208,27 @@ function vlRenderLocDetail(loc) {
   detail.innerHTML = `
     <div class="vl-detail-head">${isNew ? 'Add location' : esc(loc.label)}</div>
     <div>
-      <div class="vl-field-label">Key <span class="field-hint">(unique, e.g. discord:guild:123:channel:456)</span></div>
+      <label class="vl-field-label" for="vl-l-key">Key <span class="field-hint">(unique, e.g. discord:guild:123:channel:456)</span></label>
       <input type="text" id="vl-l-key" value="${isNew ? '' : esc(loc.key)}" placeholder="discord:guild:…" style="width:100%"${!isNew ? ' readonly' : ''}>
     </div>
     <div>
-      <div class="vl-field-label">Label</div>
+      <label class="vl-field-label" for="vl-l-label">Label</label>
       <input type="text" id="vl-l-label" value="${isNew ? '' : esc(loc.label)}" placeholder="e.g. #general in Chen's server" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Trust ceiling <span class="field-hint">(anyone here is treated as at most this)</span></div>
+      <label class="vl-field-label" for="vl-l-cat">Trust ceiling <span class="field-hint">(anyone here is treated as at most this)</span></label>
       <select id="vl-l-cat" style="width:100%">${catOpts}</select>
     </div>
     <div>
-      <div class="vl-field-label">Connection <span class="field-hint">(optional — use a specific API key for this location)</span></div>
+      <label class="vl-field-label" for="vl-l-conn">Connection <span class="field-hint">(optional — use a specific API key for this location)</span></label>
       <select id="vl-l-conn" style="width:100%">${connOpts}</select>
     </div>
     <div>
-      <div class="vl-field-label">Rate limit (messages/hour, optional)</div>
+      <label class="vl-field-label" for="vl-l-rate">Rate limit (messages/hour, optional)</label>
       <input type="number" id="vl-l-rate" value="${loc?.rateLimit?.perHour ?? ''}" placeholder="unlimited" min="0" step="1" style="width:100%">
     </div>
     <div>
-      <div class="vl-field-label">Presence <span class="field-hint">(how the Familiar behaves in this room)</span></div>
+      <label class="vl-field-label" for="vl-l-mode">Presence <span class="field-hint">(how the Familiar behaves in this room)</span></label>
       <select id="vl-l-mode" style="width:100%">
         <option value="strict">Strict — only replies when @-mentioned</option>
         <option value="lurk">Lurk — reads the room, replies when addressed</option>
@@ -15228,7 +15236,7 @@ function vlRenderLocDetail(loc) {
       </select>
     </div>
     <div>
-      <div class="vl-field-label">Voice call <span class="field-hint">(whether the Familiar joins this as a voice channel)</span></div>
+      <label class="vl-field-label" for="vl-l-callmode">Voice call <span class="field-hint">(whether the Familiar joins this as a voice channel)</span></label>
       <select id="vl-l-callmode" style="width:100%">
         <option value="summon">Summon — joins only when asked (!call, or “come to voice”)</option>
         <option value="auto">Auto — also joins when you enter this voice channel</option>
@@ -15237,12 +15245,12 @@ function vlRenderLocDetail(loc) {
       <p class="field-hint">For a voice-channel location. Default <b>summon</b>: the Familiar joins when you ask, never on its own. <b>Auto</b> adds hands-free joining the moment you enter. <b>Off</b> fully disables voice here, even <code>!call</code>.</p>
     </div>
     <div id="vl-l-active-opts" style="display:none;padding-left:8px;border-left:2px solid var(--border,#333)">
-      <div class="vl-field-label">Active cadence</div>
+      <label class="vl-field-label" for="vl-l-active-strategy">Active cadence</label>
       <select id="vl-l-active-strategy" style="width:100%">
         <option value="llm">Familiar's judgment — decides each time whether to speak</option>
         <option value="tiers">Activity tiers — paces itself to how busy the room is</option>
       </select>
-      <div class="vl-field-label" style="margin-top:6px">Min seconds between unprompted replies</div>
+      <label class="vl-field-label" for="vl-l-active-cooldown" style="margin-top:6px">Min seconds between unprompted replies</label>
       <input type="number" id="vl-l-active-cooldown" value="${loc?.activeCooldownSec ?? ''}" placeholder="60" min="0" step="5" style="width:100%">
       <p class="field-hint">A hard floor on unprompted turns, so active presence stays affordable. The hourly rate limit above still applies on top.</p>
     </div>

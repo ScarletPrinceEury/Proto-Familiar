@@ -86,9 +86,19 @@ hits in the swept set.
   → `tsState`) — scoped, selector strings preserved; `teEscapeHtml` now delegates
   to `esc` (dup escape logic gone); the two byte-identical `/api/memorize` payloads
   → one `buildMemorizePayload`.
-- **Still open (WebUI tail):** the form-label `for=` associations across the editor
-  panes (additive accessibility, many sites) and `collectSummarizableRange` (a loop
-  restructure) — kept for a final small pass.
+- **WebUI app.js — tail DONE (0.14.40):** `collectSummarizableRange` +
+  `isToolPlumbing` extracted — the "skip tool plumbing" predicate was copy-pasted
+  at five sites (export, three topic-range gathers, the manual-memorize viewer);
+  two of the copies were subtly wrong (skipped an assistant turn with an *empty*
+  `tool_calls` array), so unifying on the `.length` form is a latent-bug fix.
+  Form-label associations across the Knowledge-editor + Village panes: the 7
+  knowledge-editor sibling `<label>`s (graph-node + node-popover) gained `for=`;
+  the 18 single-control Village field labels (person / category / location
+  editors) became `<label ... for="id">` (the `keFieldRow` pattern); the 6 Village
+  group headings (Categories, aliases, memory-consent, disclosure, standing-consent,
+  category grants) — which head a *container* of controls, not one control — got
+  `role="group"` + `aria-labelledby` instead (a `for=` can't target a container).
+  Zero unassociated field labels remain in those panes.
 - **Still open:** the Node duplication extractions + degradation hardening, the
   privacy/logic items, and the ward-sign-off prompt items below.
 
@@ -253,7 +263,8 @@ deliberate ward pass.
 - `app.js:5182/5222` — `memorizeSessionToTome`/`memorizeViaBeacon` build identical
   payloads → `buildMemorizePayload`. **[med]**
 - `app.js:7373/7925/8074` — "skip tool plumbing" filter copy-pasted 3× →
-  `collectSummarizableRange`. **[med]**
+  `collectSummarizableRange`. **[med]** — **DONE (0.14.40):** extracted
+  `isToolPlumbing` + `collectSummarizableRange` (five call sites unified).
 - `app.js:12270` — `teEscapeHtml` duplicates `esc()` → make `esc` null-safe. **[med]**
 - `thalamus.js` — 8× `JSON.parse(readFileSync(SETTINGS_FILE))` (6 in `enrich()`
   alone) → `readSettingsLocal()`. **[med]**
@@ -291,7 +302,9 @@ deliberate ward pass.
   toggle. **[low]**
 - Form labels not associated (`<label>`/`<div>` sibling, no `for=`) across the
   Knowledge-editor + Village editor panes → follow the `keFieldRow` pattern already
-  in the file. **[med]**
+  in the file. **[med]** — **DONE (0.14.40):** 7 knowledge-editor labels + 18
+  single-control Village labels associated via `for=`; 6 Village group headings via
+  `role="group"`/`aria-labelledby`.
 
 ---
 
