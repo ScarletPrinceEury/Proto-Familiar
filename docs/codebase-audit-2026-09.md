@@ -56,8 +56,17 @@ hits in the swept set.
   description); Gemini `extractGeminiText` drops `thought:true` parts; the
   sub-4000 caps in vision/content-regate/voice-greeting raised to 4000 +
   `reasoning_effort`.
-- **Still open:** the Node/WebUI halves of Themes 1 & 3, the privacy/logic items,
-  and the ward-sign-off prompt items below.
+- **Theme 1 (time model) — DONE (0.14.36):** the Node half joined the Unruh half.
+  enrich()'s `[Now]` block was a hand-rolled, SERVER-zoned reimplementation of
+  `buildTimeAnchorBlock` — now routed through the shared ward-zoned helper;
+  `createMemory`/`createMemoryFull` date defaults, the `save_memory` confirmation
+  key, the `/api/entity/memories/supersede` date, and the triage + warm-reachout
+  `[Now]` anchors (both omitted `timeZone` → server-zoned) all now use the ward's
+  clock. (Triage's `[Now]` is a sign-off-path touch — clock source only, logic
+  unchanged — flagged for review.)
+- **Still open:** Theme 3's Node half (slug-ids), the privacy/logic items, the
+  WebUI app.js cleanup (WCAG, duplication, state-shadowing), the Node duplication
+  extractions + degradation hardening, and the ward-sign-off prompt items below.
 
 ## Headline
 

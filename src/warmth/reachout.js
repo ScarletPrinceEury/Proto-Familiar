@@ -196,7 +196,7 @@ export async function decideReachoutViaLLM({
   const lastUserAt = Number.isFinite(wardSilenceMs) ? new Date(nowMs - wardSilenceMs).toISOString() : null;
   // Warm reach-out is a ward-private deliberation → full weather line, in
   // the ward's chosen unit.
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs, unit: s?.weatherUnit }) });
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, timeZone: s?.wardTimeZone || null, weatherLine: readWeatherNowLine({ now: nowMs, unit: s?.weatherUnit }) });
   const wardSilencePhrase = lastUserAt ? (relativeTime(lastUserAt, nowMs) || 'a little while') : null;
 
   // Pass 2: the rhythm line (or '' when no honest baseline exists / the

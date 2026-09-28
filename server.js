@@ -4306,7 +4306,10 @@ app.post('/api/entity/memories/supersede', async (req, res) => {
   const { content, granularity = 'daily', supersedes, title } = req.body;
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (!VALID_MEMORY_GRANULARITIES.has(granularity))   return badRequest(res, 'invalid granularity');
-  const today = new Date().toISOString().slice(0, 10);
+  // Ward-local day, not UTC — so the superseding memory files under (and its
+  // returned address names) the same day Phylactery dates it, near midnight on a
+  // cross-zone server too.
+  const today = wardLocalNowISO(readSettingsSync()?.wardTimeZone).slice(0, 10);
   const body  = supersedes
     ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
     : content.trim();
