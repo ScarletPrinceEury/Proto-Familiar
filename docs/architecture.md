@@ -783,7 +783,10 @@ Currently owns:
 - **Triage event log** — `appendTriageEventLog` / `readTriageEvents`
   on `logs/triage-events.jsonl`.
 - **`readSettingsSync` / `primaryConnectionFrom`** — the single
-  settings-reader implementation, imported by server.js.
+  settings-reader implementation. `readSettingsSync` + `SETTINGS_FILE` live in
+  the `settings-store.js` leaf module (so thalamus, which cerebellum imports,
+  can share it without a cycle); cerebellum re-exports `readSettingsSync` so
+  server.js's and the loops' imports are unchanged.
 
 These are the highest-stakes code paths in the system. Behavioral
 changes here (not relocations) require explicitly asking the human
@@ -2132,7 +2135,9 @@ touches the dbs. The dbs swap via new `db_restore_plain` MCP tools on Phylactery
 AND Unruh (sanity-check the snapshot carries the service's signature table —
 `memories` / `nodes` — then unlink live db+wal+shm and copy in), with
 `restorePhylacteryDb`/`restoreUnruhDb` in thalamus reconnecting each child
-(`reconnectUnruh` added to mirror `reconnectPhylactery`). `POST /api/backup/import`
+(both go through the shared `mcp-reconnector.js` factory — one in-flight mutex
+per peer, so two rapid reconnects, e.g. a db restore racing a settings PUT,
+can't both respawn and orphan a child). `POST /api/backup/import`
 (raw octet-stream + `X-Backup-Passphrase` header) orchestrates the safety spine:
 **validate → make a pre-restore safety backup of the CURRENT state to `.pf-backups/`
 (same passphrase; abort if it fails) → lay down files → swap dbs**, per-db results

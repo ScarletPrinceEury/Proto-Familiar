@@ -106,9 +106,16 @@ hits in the swept set.
   `buildHistoryForPrompt` (discord-gateway, 2 sites). The `renderSliceBody`
   finding was reviewed and deliberately NOT merged (behaviorally distinct + on the
   ward-signed triage path — see the duplication list).
-- **Still open:** the reconnect-factory PR (thalamus reconnect helpers +
-  `reconnectUnruh`'s missing mutex + snapshot/restore `unruhResult`), degradation
-  hardening, the privacy/logic items, and the ward-sign-off prompt items below.
+- **Node duplication extractions — pt.2 DONE (0.14.42):** the reconnect factory
+  (`mcp-reconnector.js`) — one reconnect/backoff machine per MCP peer, replacing
+  the two near-identical `schedule*`/`reconnect*` copies. **Fixes a real latent
+  bug: `reconnectUnruh` was missing the in-flight mutex `reconnectPhylactery`
+  had**, so two rapid reconnects could orphan an Unruh child. Phylactery behavior
+  preserved byte-for-byte; unit-tested (mutex red-checked). Plus the small
+  `snapshotUnruhDb`/`restoreUnruhDb` → `unruhResult()` dedup.
+- **Still open:** degradation hardening (the throw-instead-of-degrade thalamus
+  wrappers, discord ingest try-catch), the privacy/logic items, and the
+  ward-sign-off prompt items below.
 
 ## Headline
 
@@ -281,10 +288,19 @@ deliberate ward pass.
   consumers are untouched; thalamus routed its 8 sites through it (cerebellum
   couldn't be the home: it imports thalamus, so that would cycle). Tested.
 - `thalamus.js:3276/3298` — snapshot/restore reimplement `unruhResult()`. **[low]**
-  — deferred to the reconnect-factory PR (same file region).
+  — **DONE (0.14.42):** `snapshotUnruhDb`/`restoreUnruhDb` now call
+  `unruhResult(r, { ok:false, error:'no result' })` instead of inlining the
+  `mcpToolError`→`parseToolText` sequence.
 - `thalamus.js` `schedulePhylacteryReconnect`/`scheduleUnruhReconnect` (self-
   acknowledged) + `reconnectUnruh` lacks the in-flight mutex `reconnectPhylactery`
-  has. **[med]** — its own PR (carries a latent-bug fix, MCP-peer-adjacent).
+  has. **[med]** — **DONE (0.14.42):** extracted `mcp-reconnector.js`
+  (`makeReconnector`) — one reconnect/backoff machine per peer, injected
+  `connect`/`isShuttingDown`, owning the attempt counter + in-flight mutex.
+  Phylactery behavior preserved byte-for-byte; **Unruh gains the mutex it was
+  missing** (two rapid `reconnect()` calls could orphan a child). Unit-tested
+  with injected timer + logger (mutex red-checked); the guard-vs-fallback quirk
+  (a `reconnect()`-internal `schedule()` no-ops because its own in-flight promise
+  is still set) is preserved deliberately, flagged for a separate ward call.
 - `cerebellum.js:922` vs `432` — `renderSliceBody` duplicates
   `formatRecentMessagesForContext`. **[med]** — **WON'T-MERGE:** on close reading
   they are behaviorally DISTINCT (triage uses the ward's name as the default
