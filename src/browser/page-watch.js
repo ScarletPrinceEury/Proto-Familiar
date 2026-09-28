@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { slugifyLabel } from '../../slug-ids.js';
+import { meaningSlugId } from '../../slug-ids.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -109,13 +109,15 @@ export function addWatch({ url, label, note, createdBy = 'familiar', intervalMs 
 }
 
 function mintId(label, watches) {
-  const base = slugifyLabel(String(label).replace(/^https?:\/\//, '').slice(0, 40)) || 'watch';
+  // Shared meaningSlugId → the lookalike-free SLUG_ALPHABET (no 0/O/1/l/I), the
+  // slug-id rule; the old base64url mint could produce ambiguous ids. Grow the
+  // suffix on a collision against the existing watch ids.
+  const clean = String(label).replace(/^https?:\/\//, '').slice(0, 40);
   const taken = new Set(watches.map(w => w.id));
-  let id = `${base}-${rand(2)}`;
-  while (taken.has(id)) id = `${base}-${rand(3)}`;
+  let id = meaningSlugId(clean, { fallbackKind: 'watch', suffixLen: 2 });
+  for (let n = 3; taken.has(id); n++) id = meaningSlugId(clean, { fallbackKind: 'watch', suffixLen: n });
   return id;
 }
-function rand(n) { return crypto.randomBytes(8).toString('base64url').replace(/[^a-z0-9]/gi, '').slice(0, n).toLowerCase() || 'x'; }
 
 export function listWatches({ tomesDir = DEFAULT_TOMES_DIR, includeInactive = true } = {}) {
   const watches = readWatches(tomesDir);

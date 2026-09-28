@@ -64,9 +64,17 @@ hits in the swept set.
   `[Now]` anchors (both omitted `timeZone` → server-zoned) all now use the ward's
   clock. (Triage's `[Now]` is a sign-off-path touch — clock source only, logic
   unchanged — flagged for review.)
-- **Still open:** Theme 3's Node half (slug-ids), the privacy/logic items, the
-  WebUI app.js cleanup (WCAG, duplication, state-shadowing), the Node duplication
-  extractions + degradation hardening, and the ward-sign-off prompt items below.
+- **Theme 3 (slug-ids) — DONE (0.14.37):** memorization's `fact-<timestamp>` slug
+  → content-derived `meaningSlugId`; the browser confirm-id → `outboxSlugId`;
+  page-watch's base64url `mintId` → lookalike-free `meaningSlugId`. (handoff.py
+  shipped in #493.)
+- **Dead code — DONE (0.14.37):** removed cerebellum's unused `UUID_RE` + the
+  stale "remove after 0.12" acknowledge aliases (test updated to pin their
+  retirement); reworded the entity-core comment to Phylactery; trimmed server.js's
+  unused imports (`MAX_TOOL_ROUNDS`, `normalizeAttributionEntry`, five media names).
+- **Still open:** the privacy/logic items, the WebUI app.js cleanup (WCAG,
+  duplication, state-shadowing), the Node duplication extractions + degradation
+  hardening, and the ward-sign-off prompt items below.
 
 ## Headline
 

@@ -107,7 +107,7 @@ import {
 } from './src/gcal/gcal-google.js';
 import {
   resolveAttribution, isIgnored, wardCalendarId,
-  writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
+  writeCalendarCache, readCalendarCache,
 } from './src/gcal/gcal-attribution.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './src/safety/outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './src/safety/silence-triage-loop.js';
@@ -138,7 +138,7 @@ import {
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
-  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS, toolRoundsPerTurn,
+  composeActiveTools, executeToolCall, toolRoundsPerTurn,
   trackersEnabled,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
@@ -181,7 +181,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, 
 import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
 import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { normalizeTag } from './src/memory/content-tags.js';
-import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
+import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
 import { filterOutgoingReply } from './src/safety/outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners, setQuarantineRunners } from './src/discord/discord-gateway.js';

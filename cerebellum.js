@@ -1180,17 +1180,16 @@ export function toolRoundsPerTurn(settings = readSettingsSync()) {
 export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
 export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
 export const VALID_FILENAME_RE           = /^[\w-]+\.md$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Pondering entry uids are slug-shaped since the 0.8.x id overhaul
 // ("ponder-x7k2m3"); legacy UUIDs coexist. Path-safe: alnum+dash, bounded.
 const INTENT_UID_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 // Derive a filesystem-safe slug from a human title or memory bullet.
-// Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
-// a slug, every significant save lands at `YYYY-MM-DD.md` and collides with
-// the previous one — which triggers Phylactery's merge-and-dedup path and
-// destroys content (same root cause as the daily-memory wipe in aba6b8a,
-// but worse here because the file format itself disagrees on the key).
+// Phylactery addresses significant memories by `YYYY-MM-DD_slug`. Without a
+// slug, every significant save lands at `YYYY-MM-DD` and collides with the
+// previous one — which triggers Phylactery's merge-and-dedup path and destroys
+// content (same root cause as the daily-memory wipe in aba6b8a, but worse here
+// because the key itself disagrees).
 export function deriveMemorySlug(input, maxLen = 60) {
   const firstLine = String(input ?? '')
     .replace(/^[\s\-*•]+/, '')      // strip leading bullet markers
@@ -3319,8 +3318,6 @@ export const TOOL_EXECUTORS = {
     const n = result?.acknowledged ?? ids.length;
     return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
   },
-  // alias, remove after 0.12 — a mid-conversation model may still recall the old name
-  graduation_acknowledge: (args) => TOOL_EXECUTORS.acknowledge_graduation(args),
 
   // ── Disclosure notices (ward-disclosure spec, Phase B) ─────────────
   // I've told my human which of their formerly-private facts I opened to my
@@ -3334,8 +3331,6 @@ export const TOOL_EXECUTORS = {
     for (const id of arr) { await clearDisclosureNotice(id).catch(() => {}); }
     return quietOk(`Marked ${arr.length} disclosure notice(s) as surfaced.`);
   },
-  // alias, remove after 0.12 — a mid-conversation model may still recall the old name
-  disclosure_acknowledge: (args) => TOOL_EXECUTORS.acknowledge_disclosure(args),
 
   keep_memory_private: async ({ id } = {}) => {
     if (!id || typeof id !== 'string') return 'I need the id of the memory to keep private.';
