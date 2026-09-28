@@ -113,9 +113,20 @@ hits in the swept set.
   had**, so two rapid reconnects could orphan an Unruh child. Phylactery behavior
   preserved byte-for-byte; unit-tested (mutex red-checked). Plus the small
   `snapshotUnruhDb`/`restoreUnruhDb` → `unruhResult()` dedup.
-- **Still open:** degradation hardening (the throw-instead-of-degrade thalamus
-  wrappers, discord ingest try-catch), the privacy/logic items, and the
-  ward-sign-off prompt items below.
+- **Degradation hardening DONE (0.14.44):** empirically re-checked every
+  thalamus `callTool` wrapper — **they already degrade correctly** (null-client
+  guard + try/catch → structured/absent result); the earlier "throw-instead-of-
+  degrade wrappers" count was an overestimate. The two REAL gaps are fixed:
+  (a) `ingestDiscordMedia` claimed "Never throws" but `saveAsset`'s disk I/O
+  could propagate into a Discord turn — the per-item fetch+store and the external
+  gif-embed parse are now fail-soft (`failed++`, logged), honouring the vision §3
+  "no image path may 500 a turn" rule; (b) `acknowledge_disclosure` swallowed each
+  `clearDisclosureNotice` failure yet reported all N surfaced — now it counts real
+  outcomes and says when some couldn't be cleared (RULE B). **Flagged, not touched:
+  `resolveLocationGate`** — it's the ward-sign-off content-gating privacy gate, and
+  a throw there currently aborts the turn (already fail-CLOSED); "hardening" it to a
+  default could leak, so any change to its error posture needs the ward.
+- **Still open:** the privacy/logic items and the ward-sign-off prompt items below.
 
 ## Headline
 

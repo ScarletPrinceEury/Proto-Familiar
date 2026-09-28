@@ -3323,8 +3323,16 @@ export const TOOL_EXECUTORS = {
     const arr = Array.isArray(ids) ? ids : (ids ? [ids] : []);
     if (!arr.length) return 'ids must be a non-empty array of disclosure notice ids.';
     const { clearDisclosureNotice } = await import('./src/memory/content-regate.js');
-    for (const id of arr) { await clearDisclosureNotice(id).catch(() => {}); }
-    return quietOk(`Marked ${arr.length} disclosure notice(s) as surfaced.`);
+    // Count real outcomes — a swallowed disk failure used to report all N as
+    // surfaced when some weren't cleared (RULE B: never claim work that didn't
+    // run). Still never throws into the chat path.
+    let cleared = 0, failed = 0;
+    for (const id of arr) {
+      const ok = await clearDisclosureNotice(id).then(() => true).catch(() => false);
+      ok ? cleared++ : failed++;
+    }
+    if (failed) return quietOk(`Marked ${cleared} disclosure notice(s) as surfaced; ${failed} couldn't be cleared (I'll keep showing those).`);
+    return quietOk(`Marked ${cleared} disclosure notice(s) as surfaced.`);
   },
 
   keep_memory_private: async ({ id } = {}) => {
