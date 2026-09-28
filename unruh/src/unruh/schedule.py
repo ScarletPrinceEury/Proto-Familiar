@@ -336,6 +336,14 @@ def resolve_occurrence(
         raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
     if not occurrence_date or not isinstance(occurrence_date, str):
         raise ValueError("occurrence_date is required (YYYY-MM-DD)")
+    # Normalise to a bare YYYY-MM-DD — the key the recurrence expander matches on.
+    # A full datetime is truncated to its date; a non-date is rejected rather than
+    # written as a key that would never match (which would silently no-op the
+    # resolution instead of hiding the occurrence).
+    try:
+        occurrence_date = datetime.fromisoformat(occurrence_date[:10]).date().isoformat()
+    except (TypeError, ValueError):
+        raise ValueError(f"occurrence_date must be YYYY-MM-DD, got {occurrence_date!r}")
     row = conn.execute(
         "SELECT payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
         (id,),

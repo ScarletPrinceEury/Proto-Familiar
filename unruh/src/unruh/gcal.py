@@ -149,13 +149,6 @@ def dedupe_gcal_nodes(
     return out, duplicates
 
 
-def list_gcal_nodes(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
-    """Every schedule node the sync manages, keyed by gcal_uid — one row per
-    uid (the keeper row when historical duplicates exist)."""
-    out, _ = dedupe_gcal_nodes(conn)
-    return out
-
-
 def _content_differs(existing: sqlite3.Row, ev: dict[str, Any]) -> bool:
     """Whether the mapped fields of `ev` differ from the stored node — used
     when a feed omits LAST-MODIFIED so we can't trust the timestamp alone."""

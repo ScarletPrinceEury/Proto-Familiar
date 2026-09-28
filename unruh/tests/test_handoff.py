@@ -151,3 +151,29 @@ class TestLifecycle:
         # Session B ends → new handoff, independent of the consumed one.
         b = handoffs.set_handoff(conn, intent="finished the essay", session_id="B")
         assert handoffs.get_handoff(conn)["id"] == b["id"]
+
+
+# ── slug-id (2026-09 audit): the handoff id is model-facing (temporal_context
+# surfaces it; the Familiar reads it back into session_mark_handoff_consumed),
+# so it must be a readable slug, not a uuid4 hex. ──────────────────────────────
+
+import re
+
+
+def test_handoff_id_is_a_readable_slug_not_a_uuid(conn):
+    r = handoffs.set_handoff(conn, intent="helping debug the auth flow")
+    assert r["ok"] and not r["skipped"]
+    hid = r["id"]
+    # NOT a 32-hex uuid4 / not a dashed UUID
+    assert not re.fullmatch(r"[0-9a-f]{32}", hid)
+    assert not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", hid)
+    # meaning-bearing: derived from the intent, with a short suffix
+    assert hid.startswith("helping-debug")
+    assert re.search(r"-[a-z0-9]{2,}$", hid)
+
+
+def test_handoff_id_falls_back_to_kind_slug_when_only_threads(conn):
+    r = handoffs.set_handoff(conn, threads=["unresolved thing"])
+    assert r["ok"] and not r["skipped"]
+    # derived from the first thread, or the kind fallback — never a raw uuid
+    assert not re.fullmatch(r"[0-9a-f]{32}", r["id"])

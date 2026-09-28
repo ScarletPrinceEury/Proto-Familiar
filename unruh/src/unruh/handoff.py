@@ -28,7 +28,7 @@ import json
 import sqlite3
 from typing import Any
 
-from .db import new_id, now_iso
+from .db import insert_with_slug_retry, now_iso
 
 # Defensive caps at the storage boundary. The intent + threads come from
 # an LLM summary (untrusted external output); a runaway model could
@@ -71,12 +71,18 @@ def set_handoff(
         "UPDATE handoff SET consumed = 1, consumed_at = ? WHERE consumed = 0",
         (ts,),
     )
-    hid = new_id()
-    conn.execute(
+    # A readable slug id (the mandatory slug-id rule) derived from the intent —
+    # this id is model-facing: temporal_context surfaces it and the Familiar
+    # reads it back into session_mark_handoff_consumed. Falls back to the first
+    # open thread, then to a `handoff-xxxx` slug when there's no text to mint from.
+    hid = insert_with_slug_retry(
+        conn,
         """INSERT INTO handoff
                (id, session_id, intent, threads_json, consumed, created_at, consumed_at)
            VALUES (?, ?, ?, ?, 0, ?, NULL)""",
-        (hid, session_id, intent_clean, json.dumps(thread_list), ts),
+        lambda hid: (hid, session_id, intent_clean, json.dumps(thread_list), ts),
+        label=intent_clean or (thread_list[0] if thread_list else None),
+        kind="handoff",
     )
     return {"ok": True, "id": hid, "skipped": False}
 

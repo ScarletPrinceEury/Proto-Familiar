@@ -337,6 +337,30 @@ class TestResolve:
         row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
         assert row["resolution"] is None
 
+    def test_occurrence_date_must_be_a_real_date(self, conn):
+        # 2026-09 audit: occurrence_date used to accept any non-empty string, so
+        # a garbage value wrote a key the recurrence expander never matches — a
+        # silent no-op. Now rejected.
+        t = sched.add_node(
+            conn, type="task", label="weekly cleaning",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        with pytest.raises(ValueError):
+            sched.resolve_occurrence(conn, id=t, occurrence_date="next sunday", resolution="done")
+
+    def test_occurrence_date_datetime_is_normalised_to_ymd(self, conn):
+        import json
+        t = sched.add_node(
+            conn, type="task", label="weekly cleaning",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        # A full datetime is truncated to its date (the key the expander matches).
+        assert sched.resolve_occurrence(
+            conn, id=t, occurrence_date="2026-07-19T14:00:00", resolution="done",
+        ) is True
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
+        assert p["resolutions"] == {"2026-07-19": "done"}
+
 
 # ── Update / delete (M9b) ─────────────────────────────────────────────
 
