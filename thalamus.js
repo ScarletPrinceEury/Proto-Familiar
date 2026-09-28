@@ -20,6 +20,7 @@ import path from 'path';
 import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
+import { readSettingsSync } from './settings-store.js';
 import { recentReachOuts, formatReachOutBlock } from './src/warmth/reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
@@ -47,10 +48,8 @@ const ORGAN_PROBE_TIMEOUT_MS = 2500;
 // The ward's injection policy for the organ-status block: 'off' | 'degraded'
 // (default — inject only when an organ is down) | 'always'.
 function organStatusBlockSetting() {
-  try {
-    const v = String(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).organStatusBlock ?? '').trim().toLowerCase();
-    return (v === 'off' || v === 'always') ? v : 'degraded';
-  } catch { return 'degraded'; }
+  const v = String(readSettingsSync().organStatusBlock ?? '').trim().toLowerCase();
+  return (v === 'off' || v === 'always') ? v : 'degraded';
 }
 
 // A local file/dir organ is "up" if it reads (or is simply absent — an empty
@@ -140,11 +139,6 @@ function resolveUvBinary() {
   for (const c of candidates) { if (c && existsSync(c)) return c; }
   return isWin ? 'uv.exe' : 'uv'; // last-resort PATH lookup
 }
-
-// Path to the central settings file. server.js owns the read/write
-// surface (PUT /api/settings) but we read it here at spawn time to pick
-// up the API-key designation for Phylactery. Read is sync and small.
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
 // ── Tome / state-file coordination ─────────────────────────────────
 //
@@ -287,21 +281,12 @@ import { resolveProviderUrl, connectionReady } from './providers.js';
 // zone — the server process may run in a different one. null when not yet known
 // (first boot before any browser connects) → callers fall back to server-local.
 function wardTimeZoneSetting() {
-  try {
-    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
-    return (typeof s.wardTimeZone === 'string' && s.wardTimeZone.trim()) ? s.wardTimeZone.trim() : null;
-  } catch {
-    return null;
-  }
+  const tz = readSettingsSync().wardTimeZone;
+  return (typeof tz === 'string' && tz.trim()) ? tz.trim() : null;
 }
 
 function loadPhylacteryEnv() {
-  let settings;
-  try {
-    settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
-  } catch {
-    return {}; // no settings.json yet (fresh install) or unreadable
-  }
+  const settings = readSettingsSync(); // {} on a fresh install / unreadable file
   // phylacteryConnectionId is the canonical field name (Pillar I); fall back
   // to the legacy entityCoreConnectionId so old settings.json files still work.
   const id = settings.phylacteryConnectionId ?? settings.entityCoreConnectionId;
@@ -2447,8 +2432,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           edges: temporalPayload?.schedule?.edges,
           gcalFlagged: temporalPayload?.gcal_projection,
         });
-        let weatherOn = false;
-        try { weatherOn = weatherEnabled(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch { /* default off */ }
+        const weatherOn = weatherEnabled(readSettingsSync());
         gcalCueBlock = await nextProjectionCue({ candidates, advance: true, weatherOn });
         if (gcalCueBlock) console.log('[thalamus] gcal projection cue: surfacing new calendar item(s)');
       } catch (err) {
@@ -2465,8 +2449,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let trackerCueBlock = '';
     const trackersOn = (() => {
       if (process.env.PROTO_FAMILIAR_TRACKERS_DISABLED === '1') return false;
-      try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).trackersEnabled !== false; }
-      catch { return true; }
+      return readSettingsSync().trackersEnabled !== false;
     })();
     if (liveTurn && !staticOnly && !gated && trackersOn) {
       try {
@@ -2574,8 +2557,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     //    standing-value bridge. Ward turns only (a villager's words never move
     //    the tier, so never an episode); never throws; own off-switch inside.
     if (liveTurn && !staticOnly && !gated) {
-      let spineSettings = {};
-      try { spineSettings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { /* fresh install */ }
+      const spineSettings = readSettingsSync();
       syncSpineState({
         threat,
         nowMs: Date.now(),
@@ -2606,8 +2588,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     //    inside the module. Never throws into the chat path.
     let stewardshipBlock = '';
     try {
-      let stewardshipSettings = {};
-      try { stewardshipSettings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { /* fresh install */ }
+      const stewardshipSettings = readSettingsSync();
       stewardshipBlock = await buildStewardshipBlock({
         liveTurn, staticOnly, threat,
         settings: stewardshipSettings,
@@ -2880,10 +2861,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // author the literal "my human" and skip macro resolution (0.7.83 audit) —
     // this is the narrow, ward-asked exception, resolved locally on just these
     // two blocks (thalamus stays macro-import-free; every other block is literal).
-    const wardNameForCues = (() => {
-      try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).userName || 'my human'; }
-      catch { return 'my human'; }
-    })();
+    const wardNameForCues = readSettingsSync().userName || 'my human';
     const resolveWardName = (b) => (b ? b.replaceAll('{{user}}', wardNameForCues) : b);
     if (trackerCueBlock)        dynamicSections.push(resolveWardName(trackerCueBlock));
     if (eatFirstBlock)          dynamicSections.push(eatFirstBlock);

@@ -228,6 +228,21 @@ function isValidSessionId(id) {
   return isValidUUID(id) || (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(id));
 }
 
+// The `_thalamus` envelope the chat endpoint hands back to the browser (so the
+// UI can render exactly what was injected as context this turn). Built the same
+// way on the streaming and non-streaming paths — one shape, one place. Returns
+// null when there was nothing injected, so the caller can `if (envelope)`.
+function buildThalamusEnvelope(enrichedResult, depth, injectedAt, timeAnchor) {
+  if (!(enrichedResult.static || enrichedResult.dynamic || timeAnchor)) return null;
+  return {
+    static:  enrichedResult.static  || '',
+    dynamic: enrichedResult.dynamic || '',
+    depth,
+    injectedAt,
+    timeAnchor,
+  };
+}
+
 const app = express();
 app.set('trust proxy', 'loopback');
 
@@ -951,13 +966,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const onClientClose = () => ac.abort();
     req.on('close', onClientClose);
 
-    const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
-      static:     enrichedResult.static  || '',
-      dynamic:    enrichedResult.dynamic || '',
-      depth,
-      injectedAt,
-      timeAnchor,
-    } : null;
+    const thalamusEnvelope = buildThalamusEnvelope(enrichedResult, depth, injectedAt, timeAnchor);
 
     // Pillar D: upstream caller for filter retries — bare text round-trip,
     // no tool calls (tools are not needed for rewrite nudges).
@@ -1375,13 +1384,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // can render the prompt inspector verbatim instead of re-deriving.
   // Carries both blocks separately + the injection coordinates so the
   // inspector can show static-vs-dynamic regions distinctly.
-  const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic || timeAnchor) ? {
-    static:     enrichedResult.static  || '',
-    dynamic:    enrichedResult.dynamic || '',
-    depth,
-    injectedAt,
-    timeAnchor,
-  } : null;
+  const thalamusEnvelope = buildThalamusEnvelope(enrichedResult, depth, injectedAt, timeAnchor);
 
   // Non-streaming path
   if (!stream) {

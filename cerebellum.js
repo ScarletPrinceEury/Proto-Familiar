@@ -35,7 +35,8 @@
 import path from 'path';
 import { slugCore, slugifyLabel } from './slug-ids.js';
 import { fileURLToPath } from 'url';
-import { promises as fsp, readFileSync, mkdirSync } from 'fs';
+import { promises as fsp, mkdirSync } from 'fs';
+import { SETTINGS_FILE, readSettingsSync } from './settings-store.js';
 
 import { resolveProviderUrl, connectionReady } from './providers.js';
 import { callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -104,18 +105,12 @@ import { speakerNameField } from './name-field.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Settings access ──────────────────────────────────────────────
-// settings.json is the centralised user-preference store (see the
-// /api/settings routes in server.js). Cerebellum reads it for the
-// primary LLM connection (triage deliberation) and the trusted-contact
-// list (escalation delivery). server.js imports these from here so
-// there is exactly one reader implementation.
-
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
-
-export function readSettingsSync() {
-  try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
-  catch { return {}; }
-}
+// The reader + path live in the leaf module ./settings-store.js so that
+// thalamus.js (which cerebellum imports, so it can't import back without a
+// cycle) can share the SAME implementation instead of inlining its own.
+// Re-exported here because server.js and the loops import readSettingsSync
+// from cerebellum — this keeps that one canonical import site unchanged.
+export { readSettingsSync };
 
 /**
  * Merge a partial patch into settings.json — read-modify-write under the
