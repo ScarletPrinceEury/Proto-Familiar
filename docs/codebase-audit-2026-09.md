@@ -80,9 +80,17 @@ hits in the swept set.
   WebUI diff (app.js is untestable, so bisectable diffs matter): the `state`-shadow
   renames, the form-label `for=` associations across the editor panes, and the
   behavior-preserving extractions (buildMemorizePayload, teEscapeHtml→esc, …).
-- **Still open:** the WebUI second diff (above), the Node duplication extractions +
-  degradation hardening, the privacy/logic items, and the ward-sign-off prompt
-  items below.
+- **WebUI app.js — second diff DONE (0.14.39):** the nine `state`-shadow sites
+  renamed (the seven voice-backend/fix-kyutai DOM refs → `stateEl`,
+  `ensureSpeechModel`'s fetch result → `modelsState`, the tailscale param/handler
+  → `tsState`) — scoped, selector strings preserved; `teEscapeHtml` now delegates
+  to `esc` (dup escape logic gone); the two byte-identical `/api/memorize` payloads
+  → one `buildMemorizePayload`.
+- **Still open (WebUI tail):** the form-label `for=` associations across the editor
+  panes (additive accessibility, many sites) and `collectSummarizableRange` (a loop
+  restructure) — kept for a final small pass.
+- **Still open:** the Node duplication extractions + degradation hardening, the
+  privacy/logic items, and the ward-sign-off prompt items below.
 
 ## Headline
 
