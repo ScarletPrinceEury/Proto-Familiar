@@ -11,17 +11,55 @@ back clean or strong — the handful of real items are concrete and listed first
 
 ---
 
+## Method & depth of coverage (honest map — updated after a deeper pass)
+
+Two kinds of coverage, and they're not the same thing:
+
+- **Pattern coverage (whole tree, exhaustive):** grep sweeps for whole *classes*
+  of problem — wiring drift (both audit scripts), philosophy anti-patterns
+  (second-person framing, "the user", bias-toward-quiet, generic-care,
+  contrastive bloat), stale markers, orphaned files/modules, duplicated
+  functions/consts, dead internal helpers (Node + Python). High confidence on the
+  categories these catch.
+- **Deep read (targeted, verified end-to-end):**
+  - **Every tool (all 117):** verified each has a working executor and is
+    reachable in its scope; traced the 5 census anomalies (`reach_out_to_ward`,
+    `set_next_check`, the 2 MCP aliases, `relay_to_ward`) to their real wiring.
+    **Clean.**
+  - **`village.js` (940 lines): full read.** One finding (A4, villager UUIDs).
+  - **MCP surface of Phylactery/Unruh:** every `@mcp.tool` enumerated vs. every
+    Thalamus call (both call shapes). 4 orphan candidates (A2), 1 dead helper (A1).
+  - **Internal dead-function scan** on `cerebellum.js`, `thalamus.js`,
+    `discord-gateway.js`, `memorization.js`: **no dead internal helpers** — every
+    locally-defined function is referenced.
+
+**What is NOT yet a line-by-line logic read:** the *internal logic* of the big
+orchestration files — `cerebellum.js` (5,715), `thalamus.js` (4,027),
+`discord-gateway.js` (3,790) — and the WebUI `public/app.js` (15,470). Structural
+scans (dead-code, dup, philosophy, wiring) came back clean on all of them, so
+there is no *known* defect hiding there — but "no pattern flagged it" is weaker
+than "a human read every function." A complete per-function logic review of those
+~29k lines is a real multi-pass effort; see the note at the end for how to take it
+on. This report does not claim that read has happened.
+
+---
+
 ## TL;DR
 
 - **Wiring: clean.** `audit:wiring` (0/422 files) + `audit:mcp` both pass; the
-  library module tree is fully imported (no orphaned modules).
+  library module tree is fully imported (no orphaned modules); no dead internal
+  helpers in the big orchestration files.
+- **Every tool (all 117): clean.** Each declared tool has a working executor and
+  is reachable in its scope (web / noticing / Discord); no unrunnable-but-declared
+  tool, no orphan executor.
 - **Personality/autonomy: strong, and defended by tests.** Zero second-person
   imposed framing, zero "the user" leakage, zero bias-toward-quiet language —
   and the anti-patterns are pinned by regression tests. This is the healthiest
   part of the codebase.
-- **Real actionable items: 5**, none urgent. One dead helper, one efficiency
-  win that also retires an orphan tool, one self-acknowledged duplication, a
-  cluster of stale dev scripts, and one soft voice-nit to eyeball.
+- **Real actionable items: 6**, none urgent: one dead helper (A1), one efficiency
+  win that also retires an orphan tool (D1), one self-acknowledged duplication
+  (D2), a cluster of stale dev scripts (A3), the villager-UUID slug-rule break
+  (A4), and one soft voice-nit to eyeball (E).
 
 ---
 
@@ -61,6 +99,23 @@ after their milestone. (Others like `threat-demo`, `pondering-loop-demo`,
 `voice-bench`, `ui-walk`, `migrate-domain` DO have a doc/cross ref, so they're
 plausibly still useful — leave them.) Suggest: delete the five, or move dev-only
 probes under a `scripts/dev/` so the operational scripts stand out.
+
+### A4. Villager IDs are UUIDs, not slugs — breaks the mandatory slug-id rule — **[high]** (med/med)
+`village.js` mints villager ids with `randomUUID()` (`:793` create, `:927`
+trusted-contact import), while category ids were deliberately migrated to readable
+slugs (`migrateCategoryIds`, the whole `LEGACY_SEED_CATEGORY_IDS` path). But a
+villager id **is model-facing**: `village_lookup` prints `- ${v.name} (id: ${v.id})`
+(`cerebellum.js:4771`) and `village_upsert` takes that `id` back to edit — so the
+Familiar reads a 36-char UUID and must repeat it verbatim. That's exactly the
+cost the slug rule exists to kill ("Any identifier the Familiar can ever read … is
+a short readable slug, never a UUID"). Villagers were simply missed when
+categories were converted.
+**Caveat that sets the effort:** a villager id may also be stored as a memory
+`subject` and referenced by `graphNodeId` links, so a migration is the
+category-audience-remap shape (rewrite the mirror **and** chase references in
+Phylactery), not a one-line change. Worth doing for consistency + token cost, but
+scope it like the category remap, and it's ward-facing data, so confirm the
+migration plan first.
 
 ---
 
@@ -175,12 +230,26 @@ This is where I looked hardest, and it's the healthiest layer in the repo.
    orphan tool; add a pipeline test).
 3. **A3** confirm & prune the five stale probe scripts (declutter).
 4. **D2** extract the reconnect factory (careful, behavior-preserving, tested).
-5. **A2** reconcile the remaining orphan MCP tools against the multi-embodiment
+5. **A4** villager-id → slug migration (scope like the category-audience remap;
+   ward-facing data, confirm the plan first).
+6. **A2** reconcile the remaining orphan MCP tools against the multi-embodiment
    contract (decide keep-as-contract vs remove — needs the canonical-store lens,
    likely a you-decision).
-6. **E nit** decide on the manual-tome "gently" phrasing.
+7. **E nit** decide on the manual-tome "gently" phrasing.
 
 None of these are safety-path behavioural changes, so none need the ward-sign-off
 gate — except that **D1/D2 touch Thalamus wiring that must keep degrading
 gracefully**, so they ship as behavior-preserving refactors with tests, not
 rewrites.
+
+## Still owed: the per-function logic read
+
+The structural scans clear the big orchestration files + WebUI of *known* defects,
+but not of the subtle kind only a line-by-line logic read finds (a gate that's
+slightly too strict, an off-by-one in a cadence clamp, a branch that confabulates
+on an empty result). That read of `cerebellum.js` / `thalamus.js` /
+`discord-gateway.js` / `public/app.js` (~29k lines) hasn't been done and is a
+multi-pass effort. Two honest ways to take it on: (a) drill file-by-file over
+several sessions (I keep going), or (b) divide it across parallel review agents
+(you'd need to ask for subagents explicitly). Flagging it so the coverage gap is
+your decision, not a silent omission.
