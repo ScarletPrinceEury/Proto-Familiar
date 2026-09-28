@@ -3457,9 +3457,11 @@ function onDispatch(t, d) {
 
         // Ward-only `/update` control (the chat twin of the web update
         // button). Intercepted before any turn — it's a mechanical git op,
-        // not an LLM turn, and only my human can drive it. A villager typing
-        // "/update" falls through to normal handling (it's just chat to them).
-        if (decision.isWard && isUpdateCommand(d.content)) {
+        // not an LLM turn, and only my human can drive it. Ward-DM ONLY, like
+        // the console commands below: it reports repo / branch / version, which
+        // must never post into a shared guild just because the ward typed it
+        // there. In a guild it falls through to normal handling (just chat).
+        if (decision.isWard && decision.kind === 'ward-dm' && isUpdateCommand(d.content)) {
           await handleUpdateCommand(gw, d, d.content);
           return;
         }

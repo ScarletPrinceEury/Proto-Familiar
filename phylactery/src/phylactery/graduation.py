@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -248,6 +249,7 @@ def run_graduation_audit(
             snapshotted = True
 
         register = "me" if cand["category"] == "self" else "ward"
+        all_stored = True   # did EVERY safe_item actually land in memory?
         for item in safe_items:
             res = memory_create(
                 item["content"], granularity="significant",
@@ -255,10 +257,22 @@ def run_graduation_audit(
                 category=None, audience="ward-private", conn=conn,
             )
             mem_id = res.get("id") if res.get("ok") else None
+            if not mem_id:
+                # A failed create must NOT lead to trimming the identity file
+                # below — that would delete the only copy of a fact that was
+                # never stored ("graduated facts aren't deleted"). Don't log it
+                # to the graduation_log or count it; mark the candidate not fully
+                # graduated so the trim is withheld and the next pass retries.
+                all_stored = False
+                print(
+                    f"[graduation] memory_create failed for a '{cand['category']}' item "
+                    f"({res.get('error')}) — leaving identity intact, will retry next pass",
+                    file=sys.stderr,
+                )
+                continue
             # Stamp the register on the freshly-created record.
-            if mem_id:
-                with conn:
-                    conn.execute("UPDATE memories SET register=? WHERE id=?", (register, mem_id))
+            with conn:
+                conn.execute("UPDATE memories SET register=? WHERE id=?", (register, mem_id))
             summary = (item.get("summary") or item["content"])[:120]
             with conn:
                 # Slug id (summary-derived) — the notice block surfaces this id
@@ -274,20 +288,25 @@ def run_graduation_audit(
             graduated_total += 1
             details.append({"file": cand["filename"], "register": register, "summary": summary})
 
-        # Trim the identity file to the kept content the Familiar returned.
-        kept = parsed.get("kept_content")
-        if isinstance(kept, str) and kept.strip() and kept.strip() != (cand["content"] or "").strip():
-            with conn:
-                conn.execute(
-                    "UPDATE identity_files SET content=?, updated_at=?, last_graduated_at=? WHERE id=?",
-                    (kept.strip(), now_iso(), now_iso(), cand["id"]),
-                )
-        else:
-            with conn:
-                conn.execute(
-                    "UPDATE identity_files SET last_graduated_at=? WHERE id=?",
-                    (now_iso(), cand["id"]),
-                )
+        # Trim the identity file ONLY when every item was actually stored. On a
+        # failure we leave the file — content AND last_graduated_at — untouched,
+        # so the candidate is re-selected and retried rather than silently losing
+        # the un-stored detail (kept_content assumes a full graduation, so even a
+        # partial trim could drop exactly the item that failed to store).
+        if all_stored:
+            kept = parsed.get("kept_content")
+            if isinstance(kept, str) and kept.strip() and kept.strip() != (cand["content"] or "").strip():
+                with conn:
+                    conn.execute(
+                        "UPDATE identity_files SET content=?, updated_at=?, last_graduated_at=? WHERE id=?",
+                        (kept.strip(), now_iso(), now_iso(), cand["id"]),
+                    )
+            else:
+                with conn:
+                    conn.execute(
+                        "UPDATE identity_files SET last_graduated_at=? WHERE id=?",
+                        (now_iso(), cand["id"]),
+                    )
 
     return {"ok": True, "graduated": graduated_total, "reviewed": len(candidates), "details": details}
 

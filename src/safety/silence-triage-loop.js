@@ -166,12 +166,23 @@ export async function runOneTriageTick({
   _lastDecisionTier  = threat.tier;
 
   if (!decision || decision.action !== 'reach_out' || !decision.message) {
-    // An offered choice, answered "wait" — the one thing that increments
-    // the streak. Fire-and-forget: recording can never change the outcome.
-    Promise.resolve(recordWaitFn('triage')).catch(() => {});
+    // Distinguish a genuine "I looked and chose to wait" from a FAILED
+    // deliberation (no model configured / call error / unparseable — marked
+    // `failed`, or a null decision). Only a genuine wait increments the streak;
+    // a failure must not read as a legitimate wait (it would inflate the streak
+    // and hide that the model never actually decided). The re-check cool-down is
+    // already set above, so severe still re-checks on schedule regardless — this
+    // is observability, not passivity.
+    const failed = !decision || decision.failed === true;
+    if (failed) {
+      console.warn('[triage] deliberation failed — recorded as a failure, not a wait');
+    } else {
+      // Fire-and-forget: recording can never change the outcome.
+      Promise.resolve(recordWaitFn('triage')).catch(() => {});
+    }
     return {
       acted:        false,
-      reason:       'llm_said_wait',
+      reason:       failed ? 'deliberation_failed' : 'llm_said_wait',
       threat,
       silenceMs,
       decision,

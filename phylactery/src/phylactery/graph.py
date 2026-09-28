@@ -206,21 +206,29 @@ def list_nodes(
     node_type: str | None = None,
     limit: int = 500,
     offset: int = 0,
+    audiences=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
+        # Recall gate (Pillar E), mirroring search_nodes: None = ward sees all
+        # (the default, so every existing ward-only caller is unchanged); a set
+        # scopes to the room's cleared audiences; [] surfaces nothing. Defence in
+        # depth for the multi-embodiment surface — a gated caller can pass it.
+        aud_clause, aud_params = audience_in_sql(audiences, col="audience")
         if node_type:
             rows = conn.execute(
-                "SELECT id,label,type,description FROM graph_nodes WHERE type=? LIMIT ? OFFSET ?",
-                (node_type, limit, offset),
+                f"SELECT id,label,type,description FROM graph_nodes "
+                f"WHERE type=? AND {aud_clause} LIMIT ? OFFSET ?",
+                [node_type] + aud_params + [limit, offset],
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id,label,type,description FROM graph_nodes LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT id,label,type,description FROM graph_nodes "
+                f"WHERE {aud_clause} LIMIT ? OFFSET ?",
+                aud_params + [limit, offset],
             ).fetchall()
         return {"nodes": [_node_row_to_dict(r) for r in rows]}
     finally:
@@ -467,23 +475,30 @@ def delete_edge(
 def get_full_graph(
     node_type: str | None = None,
     limit: int = 500,
+    audiences=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
-    """Full node+edge dump for the Knowledge editor Map view."""
+    """Full node+edge dump for the Knowledge editor Map view. `audiences` is the
+    recall gate (None = ward sees all, the default); nodes AND edges are both
+    scoped, so a gated caller can't pull a hidden node in via an edge."""
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
-        node_data = list_nodes(node_type=node_type, limit=limit, conn=conn)
+        node_data = list_nodes(node_type=node_type, limit=limit, audiences=audiences, conn=conn)
         nodes = node_data["nodes"]
         node_ids = {n["id"] for n in nodes}
 
         if node_ids:
             placeholders = ",".join("?" * len(node_ids))
+            # Edges also carry their own audience — scope them too, so an edge the
+            # room isn't cleared for never surfaces even between two visible nodes.
+            aud_edge, aud_edge_p = audience_in_sql(audiences)
             edge_rows = conn.execute(f"""
                 SELECT id, from_id, to_id, type, weight FROM graph_edges
                 WHERE from_id IN ({placeholders}) AND to_id IN ({placeholders})
-            """, list(node_ids) + list(node_ids)).fetchall()
+                  AND {aud_edge}
+            """, list(node_ids) + list(node_ids) + aud_edge_p).fetchall()
             edges = [_edge_row_to_dict(r) for r in edge_rows]
         else:
             edges = []

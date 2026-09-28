@@ -847,10 +847,14 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // chose, so a ward running only a local model still gets triage (before, the
   // bare `!conn?.apiKey` guard silently returned 'wait' forever on such a setup —
   // a safety gap). Still returns 'wait' when there's genuinely no usable model.
-  if (!connectionReady(conn)) return { action: 'wait' };
+  // `failed: true` marks a NON-deliberation (config missing / call error /
+  // unparseable) so the loop doesn't record it as a genuine "I looked and chose
+  // to wait". The action stays 'wait' (the safe default — never a false reach-out),
+  // and the re-check cool-down still fires, so this is observability, not passivity.
+  if (!connectionReady(conn)) return { action: 'wait', failed: true };
 
   const url = resolveProviderUrl(conn);
-  if (!url) return { action: 'wait' };
+  if (!url) return { action: 'wait', failed: true };
 
   const nowMs = Date.now();
   // Use plainInterval so a half-minute silence reads as "less than a minute"
@@ -1091,10 +1095,10 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
       });
     } catch (err) {
       console.warn('[triage] deliberation call failed (safe default: wait):', err?.message ?? err);
-      return { action: 'wait' };
+      return { action: 'wait', failed: true };
     }
     const m = text.match(/\{[\s\S]+\}/);
-    if (!m) return { action: 'wait' };
+    if (!m) { console.warn('[triage] deliberation returned no parseable JSON (safe default: wait)'); return { action: 'wait', failed: true }; }
     const parsed = JSON.parse(m[0]);
     // Carry nextCheckInMs through to the loop regardless of action.
     // The loop clamps + falls back to a tier default if missing.
@@ -1135,7 +1139,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     return out;
   } catch (err) {
     console.error('[triage] LLM call failed:', err?.message ?? err);
-    return { action: 'wait' };
+    return { action: 'wait', failed: true };
   }
 }
 
