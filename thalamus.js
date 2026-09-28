@@ -21,6 +21,7 @@ import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { readSettingsSync } from './settings-store.js';
+import { makeReconnector } from './mcp-reconnector.js';
 import { recentReachOuts, formatReachOutBlock } from './src/warmth/reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
@@ -339,19 +340,34 @@ function loadPhylacteryEnv() {
 
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
-let phylacteryShuttingDown = false;
-let phylacteryReconnectAttempts = 0;
-/** @type {Promise<void> | null} */
-let phylacteryReconnectInFlight = null;          // mutex for reconnect path
+let phylacteryShuttingDown = false;   // shared with connect/onclose/shutdown
 const PHYLACTERY_RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const PHYLACTERY_RECONNECT_MAX_ATTEMPTS = 10;
 
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let unruhClient = null;
-let unruhShuttingDown = false;
-let unruhReconnectAttempts = 0;
+let unruhShuttingDown = false;        // shared with connect/onclose/shutdown
 const UNRUH_RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const UNRUH_RECONNECT_MAX_ATTEMPTS = 10;
+
+// One reconnect/backoff machine per MCP peer. Each owns its attempt counter
+// and its in-flight mutex; the peer-specific bits (connect, shutting-down
+// flag) are injected. `connect` is a lazy arrow so it resolves the hoisted
+// connect function at call time. See mcp-reconnector.js for why this is shared.
+const phylacteryReconnector = makeReconnector({
+  name: 'Phylactery',
+  connect: () => connectPhylactery(),
+  isShuttingDown: () => phylacteryShuttingDown,
+  maxAttempts: PHYLACTERY_RECONNECT_MAX_ATTEMPTS,
+  backoffMs: PHYLACTERY_RECONNECT_BACKOFF_MS,
+});
+const unruhReconnector = makeReconnector({
+  name: 'Unruh',
+  connect: () => connectUnruh(),
+  isShuttingDown: () => unruhShuttingDown,
+  maxAttempts: UNRUH_RECONNECT_MAX_ATTEMPTS,
+  backoffMs: UNRUH_RECONNECT_BACKOFF_MS,
+});
 
 // ── Canonical file orderings (mirrors Psycheros src/entity/context.ts) ───────
 
@@ -426,38 +442,16 @@ async function connectPhylactery() {
     // Unruh path. Skipped when we're tearing down on purpose (settings
     // change or server shutdown).
     if (phylacteryShuttingDown) return;
-    schedulePhylacteryReconnect();
+    phylacteryReconnector.schedule();
   };
 
   await client.connect(transport);
   mcpClient = client;
-  phylacteryReconnectAttempts = 0; // successful connect resets backoff
+  phylacteryReconnector.resetAttempts(); // successful connect resets backoff
   console.log(
     '[thalamus] Connected to Phylactery at', PHYLACTERY_ROOT,
     haveKey ? `(API key from connection "${phEnv.PHYLACTERY_LLM_PROVIDER}")` : '(no API key — designate one in the Connections sidebar)',
   );
-}
-
-// Reconnect with exponential backoff on unexpected close — same shape
-// as scheduleUnruhReconnect. Capped to avoid spinning forever when
-// Phylactery is fundamentally broken. Skips when a settings-change
-// reconnect is already in flight (no need to double up).
-function schedulePhylacteryReconnect() {
-  if (phylacteryShuttingDown) return;
-  if (phylacteryReconnectInFlight) return;
-  if (phylacteryReconnectAttempts >= PHYLACTERY_RECONNECT_MAX_ATTEMPTS) {
-    console.error(`[thalamus] Phylactery reconnect gave up after ${PHYLACTERY_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
-    return;
-  }
-  const delay = PHYLACTERY_RECONNECT_BACKOFF_MS[Math.min(phylacteryReconnectAttempts, PHYLACTERY_RECONNECT_BACKOFF_MS.length - 1)];
-  phylacteryReconnectAttempts += 1;
-  console.log(`[thalamus] Reconnecting to Phylactery in ${delay}ms (attempt ${phylacteryReconnectAttempts}/${PHYLACTERY_RECONNECT_MAX_ATTEMPTS})`);
-  setTimeout(() => {
-    connectPhylactery().catch(err => {
-      console.error('[thalamus] Phylactery reconnect failed:', err.message);
-      schedulePhylacteryReconnect();
-    });
-  }, delay).unref?.(); // unref so the timer doesn't keep the process alive
 }
 
 /**
@@ -466,13 +460,12 @@ function schedulePhylacteryReconnect() {
  * takes effect immediately). Safe to call when no client is connected —
  * behaves as a plain connectPhylactery().
  *
- * Two callers can fire this in quick succession (rapid settings PUTs
- * while a chat is in flight). A single in-flight promise serialises
- * them so concurrent calls don't orphan a child process.
+ * Two callers can fire this in quick succession (rapid settings PUTs while
+ * a chat is in flight); the reconnector's in-flight mutex serialises them so
+ * concurrent calls don't orphan a child process.
  */
 export async function reconnectPhylactery() {
-  if (phylacteryReconnectInFlight) return phylacteryReconnectInFlight;
-  phylacteryReconnectInFlight = (async () => {
+  return phylacteryReconnector.reconnect(async () => {
     phylacteryShuttingDown = true;
     try {
       if (mcpClient) {
@@ -482,38 +475,25 @@ export async function reconnectPhylactery() {
     } finally {
       phylacteryShuttingDown = false;
     }
-    try {
-      await connectPhylactery();
-      phylacteryReconnectAttempts = 0;
-    } catch (err) {
-      console.error('[thalamus] Phylactery reconnect failed:', err.message);
-      // Fall back to backoff retries — the user's settings change
-      // will eventually take effect when Phylactery comes back.
-      schedulePhylacteryReconnect();
-    }
-  })();
-  try {
-    await phylacteryReconnectInFlight;
-  } finally {
-    phylacteryReconnectInFlight = null;
-  }
+  });
 }
 
 // Reconnect the Unruh child after its db was swapped underneath it (holistic
-// restore). Mirrors reconnectPhylactery: close the client, respawn via
-// connectUnruh so it reads the new file.
+// restore). Mirrors reconnectPhylactery exactly — same in-flight mutex, so two
+// rapid callers (a db restore racing a settings PUT) can't both respawn and
+// orphan a child (that mutex used to be missing here — the reported asymmetry).
 export async function reconnectUnruh() {
-  unruhShuttingDown = true;
-  try {
-    if (unruhClient) {
-      try { await unruhClient.close?.(); } catch { /* best-effort */ }
-      unruhClient = null;
+  return unruhReconnector.reconnect(async () => {
+    unruhShuttingDown = true;
+    try {
+      if (unruhClient) {
+        try { await unruhClient.close?.(); } catch { /* best-effort */ }
+        unruhClient = null;
+      }
+    } finally {
+      unruhShuttingDown = false;
     }
-  } finally {
-    unruhShuttingDown = false;
-  }
-  try { await connectUnruh(); }
-  catch (err) { console.error('[thalamus] Unruh reconnect failed:', err?.message ?? err); }
+  });
 }
 
 // Unruh runs as an independent stdio child. Its failures must not affect
@@ -569,34 +549,13 @@ async function connectUnruh() {
     console.error('[thalamus] Unruh connection closed');
     unruhClient = null;
     if (unruhShuttingDown) return;
-    scheduleUnruhReconnect();
+    unruhReconnector.schedule();
   };
 
   await client.connect(transport);
   unruhClient = client;
-  unruhReconnectAttempts = 0; // success resets the backoff
+  unruhReconnector.resetAttempts(); // success resets the backoff
   console.log('[thalamus] Connected to Unruh via', uvBin);
-}
-
-// Reconnect with exponential backoff. Capped at MAX_ATTEMPTS so a
-// fundamentally-broken Unruh doesn't spin forever — after that the user
-// has to restart the server (or fix uv/.venv and restart). The cap is
-// reset by every successful connect, so transient crashes recover cleanly.
-function scheduleUnruhReconnect() {
-  if (unruhShuttingDown) return;
-  if (unruhReconnectAttempts >= UNRUH_RECONNECT_MAX_ATTEMPTS) {
-    console.error(`[thalamus] Unruh reconnect gave up after ${UNRUH_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
-    return;
-  }
-  const delay = UNRUH_RECONNECT_BACKOFF_MS[Math.min(unruhReconnectAttempts, UNRUH_RECONNECT_BACKOFF_MS.length - 1)];
-  unruhReconnectAttempts += 1;
-  console.log(`[thalamus] Reconnecting to Unruh in ${delay}ms (attempt ${unruhReconnectAttempts}/${UNRUH_RECONNECT_MAX_ATTEMPTS})`);
-  setTimeout(() => {
-    connectUnruh().catch(err => {
-      console.error('[thalamus] Unruh reconnect failed:', err.message);
-      scheduleUnruhReconnect();
-    });
-  }, delay).unref?.(); // unref so a pending retry doesn't keep the process alive
 }
 
 // Clean shutdown — called from server.js's SIGTERM/SIGINT/SIGHUP
@@ -1734,7 +1693,7 @@ export function startThalamus() {
       }),
       connectUnruh().catch(err => {
         console.error('[thalamus] Failed to start Unruh:', err.message);
-        scheduleUnruhReconnect();
+        unruhReconnector.schedule();
       }),
     ]);
   })();
@@ -3249,9 +3208,7 @@ export async function snapshotUnruhDb(destPath) {
     await startThalamus();
     if (!unruhClient) return { ok: false, error: 'unruh not connected' };
     const r = await unruhClient.callTool({ name: 'db_snapshot', arguments: { destPath } });
-    const err = mcpToolError(r);
-    if (err) return { ok: false, error: err };
-    return parseToolText(r, { ok: false, error: 'no result' });
+    return unruhResult(r, { ok: false, error: 'no result' });
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -3268,9 +3225,7 @@ export async function restoreUnruhDb(srcPath) {
     await startThalamus();
     if (!unruhClient) return { ok: false, error: 'unruh not connected' };
     const r = await unruhClient.callTool({ name: 'db_restore_plain', arguments: { srcPath } });
-    const err = mcpToolError(r);
-    if (err) return { ok: false, error: err };
-    const res = parseToolText(r, { ok: false, error: 'no result' });
+    const res = unruhResult(r, { ok: false, error: 'no result' });
     if (res?.ok) await reconnectUnruh().catch(e => console.warn('[thalamus] Unruh reconnect after db restore failed:', e?.message ?? e));
     return res;
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
