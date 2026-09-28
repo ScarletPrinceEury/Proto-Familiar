@@ -2669,15 +2669,15 @@ function speechFailureHint(detail) {
  * Returns true when it is safe to speak.
  */
 async function ensureSpeechModel(btn, token) {
-  let state;
+  let modelsState;
   try {
-    state = await (await fetch('/api/voice/models')).json();
+    modelsState = await (await fetch('/api/voice/models')).json();
   } catch {
     return true;   // cannot tell — let the speak attempt report the real problem
   }
-  if (!state?.ok) return true;
+  if (!modelsState?.ok) return true;
 
-  const missing = (state.models ?? []).filter((m) => m.id === 'tts-pocket' && !m.complete);
+  const missing = (modelsState.models ?? []).filter((m) => m.id === 'tts-pocket' && !m.complete);
   if (!missing.length) return true;
 
   // First click: ask. Second click within the offer: do it.
@@ -5189,10 +5189,11 @@ function showMemorizationNotice(count) {
  * scope: 'session' (whole session) or 'topic' (a topic's message range).
  * Returns the jobId, or null on error / when memorization isn't possible.
  */
-async function memorizeSessionToTome(messages, sessionId, opts = {}) {
-  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return null;
-  if (!Array.isArray(messages) || messages.length < 2) return null;
-  const payload = {
+// The /api/memorize request body — shared by the fetch path
+// (memorizeSessionToTome) and the sendBeacon path (memorizeViaBeacon), which
+// built byte-identical payloads. One shape, one place.
+function buildMemorizePayload(messages, sessionId, opts = {}) {
+  return {
     sessionId,
     scope:        opts.scope ?? 'session',
     topicId:      opts.topicId ?? null,
@@ -5201,10 +5202,16 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     messages,
     provider:     state.provider,
     apiKey:       state.apiKey,
-    baseUrl:       state.baseUrl,
+    baseUrl:      state.baseUrl,
     model:        state.model,
     audienceTag:  'ward-private',
   };
+}
+
+async function memorizeSessionToTome(messages, sessionId, opts = {}) {
+  if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return null;
+  if (!Array.isArray(messages) || messages.length < 2) return null;
+  const payload = buildMemorizePayload(messages, sessionId, opts);
   try {
     const resp = await fetch('/api/memorize', {
       method:  'POST',
@@ -5232,19 +5239,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
 function memorizeViaBeacon(messages, sessionId, opts = {}) {
   if (providerNeedsKey(state.provider) && !state.apiKey.trim()) return false;
   if (!Array.isArray(messages) || messages.length < 2) return false;
-  const payload = {
-    sessionId,
-    scope:        opts.scope ?? 'session',
-    topicId:      opts.topicId ?? null,
-    topicLabel:   opts.topicLabel ?? null,
-    messageRange: opts.messageRange ?? null,
-    messages,
-    provider:     state.provider,
-    apiKey:       state.apiKey,
-    baseUrl:       state.baseUrl,
-    model:        state.model,
-    audienceTag:  'ward-private',
-  };
+  const payload = buildMemorizePayload(messages, sessionId, opts);
   try {
     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
     return navigator.sendBeacon('/api/memorize', blob);
@@ -5605,34 +5600,34 @@ async function setTailscaleEnabled(enabled) {
   if (!r.ok) throw new Error(`tailscale toggle HTTP ${r.status}`);
   return r.json();
 }
-function renderTailscaleState(state) {
+function renderTailscaleState(tsState) {
   const btn       = $('tailscale-btn');
   const sw        = $('tailscale-switch');
   const statusEl  = $('tailscale-status');
   const urlsEl    = $('tailscale-urls');
-  btn.classList.toggle('is-active', !!state.enabled);
-  btn.setAttribute('aria-pressed', state.enabled ? 'true' : 'false');
-  btn.title = state.enabled
+  btn.classList.toggle('is-active', !!tsState.enabled);
+  btn.setAttribute('aria-pressed', tsState.enabled ? 'true' : 'false');
+  btn.title = tsState.enabled
     ? 'External-device access ON (click for URLs)'
     : 'External-device access OFF (click to enable)';
-  sw.checked = !!state.enabled;
+  sw.checked = !!tsState.enabled;
 
   urlsEl.innerHTML = '';
-  if (state.enabled) {
-    if (state.hostname) {
-      const url = `http://${state.hostname}:${state.port}`;
+  if (tsState.enabled) {
+    if (tsState.hostname) {
+      const url = `http://${tsState.hostname}:${tsState.port}`;
       urlsEl.insertAdjacentHTML('beforeend',
         `<li>Tailscale: <a href="${url}" target="_blank" rel="noopener">${url}</a></li>`);
     }
-    if (state.ipv4) {
-      const url = `http://${state.ipv4}:${state.port}`;
+    if (tsState.ipv4) {
+      const url = `http://${tsState.ipv4}:${tsState.port}`;
       urlsEl.insertAdjacentHTML('beforeend',
         `<li>Tailscale IPv4: <a href="${url}" target="_blank" rel="noopener">${url}</a></li>`);
     }
-    if (!state.hostname && !state.ipv4) {
-      statusEl.textContent = state.available
-        ? 'Tailscale CLI found but no addresses returned. Use this machine\'s LAN IP on port ' + state.port + '.'
-        : 'Tailscale CLI not detected. Use this machine\'s LAN/Tailscale address on port ' + state.port + '.';
+    if (!tsState.hostname && !tsState.ipv4) {
+      statusEl.textContent = tsState.available
+        ? 'Tailscale CLI found but no addresses returned. Use this machine\'s LAN IP on port ' + tsState.port + '.'
+        : 'Tailscale CLI not detected. Use this machine\'s LAN/Tailscale address on port ' + tsState.port + '.';
     } else {
       statusEl.textContent = 'Open one of these on any device on your tailnet:';
     }
@@ -5710,8 +5705,8 @@ function initTailscaleToggle() {
   sw.addEventListener('change', async () => {
     const next = sw.checked;
     try {
-      const state = await setTailscaleEnabled(next);
-      renderTailscaleState(state);
+      const tsState = await setTailscaleEnabled(next);
+      renderTailscaleState(tsState);
     } catch (err) {
       console.error('tailscale toggle failed', err);
       sw.checked = !next; // revert
@@ -9255,15 +9250,15 @@ function populateCallLanguages(langs) {
  */
 async function refreshVoiceBackendPane() {
   const sel = $('voice-backend-select');
-  const state = $('voice-backend-state');
+  const stateEl = $('voice-backend-state');
   const install = $('voice-sidecar-install');
   const cancel = $('voice-sidecar-cancel');
-  if (!sel || !state) return;
+  if (!sel || !stateEl) return;
 
   let st;
   try { st = await vbGet('/api/voice/status?probe=0'); } catch { st = null; }
   populateCallLanguages(st?.asrLanguages);
-  if (!st?.backend) { state.textContent = ''; return; }
+  if (!st?.backend) { stateEl.textContent = ''; return; }
 
   const { using, askedFor, available } = st.backend;
   sel.value = askedFor ?? using;
@@ -9282,18 +9277,18 @@ async function refreshVoiceBackendPane() {
   cancel?.classList.toggle('hidden', !downloading);
 
   if (using === 'pocket') {
-    state.textContent = 'Speaking through the Kyutai sidecar.';
+    stateEl.textContent = 'Speaking through the Kyutai sidecar.';
   } else if (askedFor === 'pocket' && downloading) {
-    state.textContent = 'Downloading the Kyutai sidecar (~395 MB, torch is most of it). I’m speaking on the built-in engine until it lands; you can keep using everything else, or cancel above.';
+    stateEl.textContent = 'Downloading the Kyutai sidecar (~395 MB, torch is most of it). I’m speaking on the built-in engine until it lands; you can keep using everything else, or cancel above.';
     if (!VP.installPolling) pollSidecarInstall();
   } else if (askedFor === 'pocket' && !pocketReady) {
     // Chosen (it's the default) but not downloaded yet. It will fetch itself the
     // first time I speak — but the button is here for someone who wants it now.
     // Never point at a terminal: the raw server `reason` ("run: uv sync …") is
     // developer-facing and would send my human to a shell they don't need.
-    state.textContent = 'Kyutai is the default but isn’t downloaded yet — it’ll fetch itself (~395 MB) the first time I speak. Speaking on the built-in engine until then, or use the button above to get it now.';
+    stateEl.textContent = 'Kyutai is the default but isn’t downloaded yet — it’ll fetch itself (~395 MB) the first time I speak. Speaking on the built-in engine until then, or use the button above to get it now.';
   } else {
-    state.textContent = 'Speaking through the built-in engine. It can shift voice between paragraphs on long messages.';
+    stateEl.textContent = 'Speaking through the built-in engine. It can shift voice between paragraphs on long messages.';
   }
 }
 
@@ -9461,12 +9456,12 @@ async function initVoiceprints() {
 
 async function onVoiceBackendChange(ev) {
   const backend = ev.target.value;
-  const state = $('voice-backend-state');
-  if (state) state.textContent = 'Saving…';
+  const stateEl = $('voice-backend-state');
+  if (stateEl) stateEl.textContent = 'Saving…';
   try {
     await updateVoiceTts({ backend });
   } catch (err) {
-    if (state) state.textContent = `Could not save: ${String(err?.message ?? err)}`;
+    if (stateEl) stateEl.textContent = `Could not save: ${String(err?.message ?? err)}`;
     return;
   }
 
@@ -9499,7 +9494,7 @@ async function onVoiceBackendChange(ev) {
 async function pollSidecarInstall() {
   if (VP.installPolling) return;
   VP.installPolling = true;
-  const state = $('voice-backend-state');
+  const stateEl = $('voice-backend-state');
   const poll = setInterval(async () => {
     let s;
     try { s = await (await fetch('/api/voice/install-sidecar')).json(); } catch { return; }
@@ -9508,11 +9503,11 @@ async function pollSidecarInstall() {
     clearInterval(poll);
     VP.installPolling = false;
     if (job.ok) {
-      if (state) state.textContent = 'Kyutai is installed — I’m speaking through it now.';
+      if (stateEl) stateEl.textContent = 'Kyutai is installed — I’m speaking through it now.';
     } else if (job.cancelled || job.detail === 'cancelled') {
-      if (state) state.textContent = 'Download cancelled. Still speaking on the built-in engine; pick Kyutai again to retry.';
-    } else if (state) {
-      state.textContent = `Kyutai download failed: ${job.detail ?? 'no detail'}. Still speaking on the built-in engine.`;
+      if (stateEl) stateEl.textContent = 'Download cancelled. Still speaking on the built-in engine; pick Kyutai again to retry.';
+    } else if (stateEl) {
+      stateEl.textContent = `Kyutai download failed: ${job.detail ?? 'no detail'}. Still speaking on the built-in engine.`;
     }
     await refreshVoiceBackendPane();
   }, 3000);
@@ -9524,23 +9519,23 @@ async function pollSidecarInstall() {
  */
 async function installVoiceSidecar() {
   const btn = $('voice-sidecar-install');
-  const state = $('voice-backend-state');
+  const stateEl = $('voice-backend-state');
   if (btn) { btn.disabled = true; btn.textContent = '⬇ Installing…'; }
-  if (state) state.textContent = 'Downloading ~395 MB (torch is most of it). This takes a while; you can keep using everything else, or cancel below.';
+  if (stateEl) stateEl.textContent = 'Downloading ~395 MB (torch is most of it). This takes a while; you can keep using everything else, or cancel below.';
   try {
     const started = await (await fetch('/api/voice/install-sidecar', { method: 'POST' })).json();
     if (!started.ok) throw new Error(started.detail || started.reason || 'could not start');
     await refreshVoiceBackendPane();   // flips Install→Cancel and starts the poll
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = '⬇ Try again'; }
-    if (state) state.textContent = `Install failed: ${String(err?.message ?? err)}`;
+    if (stateEl) stateEl.textContent = `Install failed: ${String(err?.message ?? err)}`;
   }
 }
 
 /** Cancel an in-flight download — changed mind, or the disk is tight. */
 async function cancelVoiceSidecar() {
-  const state = $('voice-backend-state');
-  if (state) state.textContent = 'Cancelling…';
+  const stateEl = $('voice-backend-state');
+  if (stateEl) stateEl.textContent = 'Cancelling…';
   try { await fetch('/api/voice/install-sidecar', { method: 'DELETE' }); } catch { /* the poll will still settle it */ }
   await refreshVoiceBackendPane();
 }
@@ -9555,9 +9550,9 @@ async function cancelVoiceSidecar() {
  */
 async function fixKyutai() {
   const btn = $('voice-fix-kyutai');
-  const state = $('voice-fix-kyutai-state');
+  const stateEl = $('voice-fix-kyutai-state');
   if (btn) { btn.disabled = true; btn.textContent = '🔧 Rebuilding…'; }
-  if (state) state.textContent = 'Deleting the old environment and rebuilding it (torch is a large download, so this takes a while)…';
+  if (stateEl) stateEl.textContent = 'Deleting the old environment and rebuilding it (torch is a large download, so this takes a while)…';
   try {
     const res = await fetch('/api/voice/fix-kyutai', { method: 'POST' });
     // A 404 here means the running server is the OLD code — the files were
@@ -9566,7 +9561,7 @@ async function fixKyutai() {
     // page; the route did not. Say that plainly instead of a cryptic error.
     if (res.status === 404) {
       if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
-      if (state) state.textContent = 'This button is here but the server doesn’t know it yet — you updated the files but haven’t restarted. Close Proto-Familiar and relaunch it (reloading the page is not enough), then try again.';
+      if (stateEl) stateEl.textContent = 'This button is here but the server doesn’t know it yet — you updated the files but haven’t restarted. Close Proto-Familiar and relaunch it (reloading the page is not enough), then try again.';
       return;
     }
     const started = await res.json();
@@ -9574,7 +9569,7 @@ async function fixKyutai() {
     pollFixKyutai();
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
-    if (state) state.textContent = `Couldn't start the repair: ${String(err?.message ?? err)}`;
+    if (stateEl) stateEl.textContent = `Couldn't start the repair: ${String(err?.message ?? err)}`;
   }
 }
 
@@ -9583,7 +9578,7 @@ function pollFixKyutai() {
   if (VP.fixKyutaiPolling) return;
   VP.fixKyutaiPolling = true;
   const btn = $('voice-fix-kyutai');
-  const state = $('voice-fix-kyutai-state');
+  const stateEl = $('voice-fix-kyutai-state');
   const poll = setInterval(async () => {
     let s;
     try { s = await (await fetch('/api/voice/fix-kyutai')).json(); } catch { return; }
@@ -9591,19 +9586,19 @@ function pollFixKyutai() {
     if (!job) return;
     if (!job.done) {
       const last = job.log?.[job.log.length - 1];
-      if (last && state) state.textContent = `Rebuilding… ${last}`;
+      if (last && stateEl) stateEl.textContent = `Rebuilding… ${last}`;
       return;
     }
     clearInterval(poll);
     VP.fixKyutaiPolling = false;
     if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
-    if (state) {
+    if (stateEl) {
       if (job.ok) {
-        state.textContent = `Kyutai is repaired${job.torch ? ` (torch ${job.torch})` : ''}. Try reading a reply aloud again.`;
+        stateEl.textContent = `Kyutai is repaired${job.torch ? ` (torch ${job.torch})` : ''}. Try reading a reply aloud again.`;
       } else {
         // The hint carries the actionable next step (e.g. install the MSVC
         // redistributable); the detail is the raw error for someone digging.
-        state.textContent = `Repair failed: ${job.hint || job.detail || job.reason || 'no detail'}`;
+        stateEl.textContent = `Repair failed: ${job.hint || job.detail || job.reason || 'no detail'}`;
       }
     }
     await refreshVoiceBackendPane();
@@ -12279,10 +12274,11 @@ function relTimeShort(iso) {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+// The temporal editor's null-safe HTML escaper. Delegates to the shared esc()
+// (which assumes a string) rather than re-implementing the same 5-char escape —
+// the null/number coercion is the only reason this wrapper exists.
 function teEscapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return esc(String(s ?? ''));
 }
 
 // ── Time helpers for the temporal editor ───────────────────────────
