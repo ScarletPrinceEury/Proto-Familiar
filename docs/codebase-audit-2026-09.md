@@ -241,11 +241,15 @@ meaning-bearing helper (`slug-ids.js` / `db.slug_id`), which already exists:
 - **`cerebellum.js:1058`** — `nextCheckInMs` guidance "picking too long is much
   cheaper than too short" biases the crisis re-check cadence toward waiting
   (tension with Rule 5 "tune toward action"). Bounded by tier defaults.
-- **`silence-triage-loop.js:168`** — a failed deliberation is logged identically to
-  a genuine `wait` (inflates the wait-streak; 15-min severe re-check still fires,
-  so no passivity — pure observability).
-- **`noticing.js:392`** — a threat-*read* failure silently runs noticing at the
-  `calm` register (still runs — good — but loses the elevated line); log loudly.
+- **`silence-triage-loop.js:168` — FIXED (0.14.45, ward-approved).** A failed
+  deliberation was logged identically to a genuine `wait` and incremented the
+  streak. `decideTriageViaLLM` now marks non-deliberations `failed:true` (config
+  missing / call error / unparseable); the loop records the wait streak only for a
+  genuine wait and logs `deliberation_failed` otherwise. The re-check cool-down is
+  unchanged, so no passivity — pure observability. Tested + red-checked.
+- **`noticing.js:392` — FIXED (0.14.45, ward-approved).** A threat-*read* failure
+  now logs loudly instead of silently defaulting to `calm`; the turn still runs at
+  calm as the safe fallback (noticing never stands down).
 
 These bundle naturally: the triage/care prompts carry a small set of residual
 hedge/equal-weight phrasings that predate the Rule-2 correction. Worth one
@@ -259,23 +263,30 @@ deliberate ward pass.
   saying "Mom"/"Sam" in a gated room can resolve to a pre-existing **ward-private**
   node and attach an edge under the narrower audience (correlation leak). The
   hygiene pass already treats this as ambiguous; the write path doesn't. **[med]**
-- **`graph.py` `list_nodes`/`get_full_graph`** — no `audiences` param (unlike
-  `search_nodes`). Safe today (ward-only endpoints) but no defense-in-depth for the
-  multi-embodiment surface. **[med]** Add the optional param.
+- **`graph.py` `list_nodes`/`get_full_graph` — FIXED (0.14.45, ward-approved).**
+  Both gained an optional `audiences` recall-gate param (None = ward sees all, the
+  default, so every existing ward-only caller is unchanged); `get_full_graph` scopes
+  BOTH nodes and edges so a hidden node can't leak in via an edge. Tested.
 - **`discord-gateway.js:1641` `!consent` menu** — fetches a villager's memories with
   no audience/topic filter → could show a ward-authored sensitive note *to* that
   villager. May be intentional subject-transparency — **your decision**. **[low-med]**
-- **`discord-gateway.js:3454` `/update`** — gated on `isWard` only, not `ward-dm` (unlike
-  its siblings) → posts repo/branch/version into a public guild. **[low-med]**
+- **`discord-gateway.js:3454` `/update` — FIXED (0.14.45, ward-approved).** Now
+  gated `isWard && kind === 'ward-dm'` like its console-command siblings, so it
+  can't post repo/branch/version into a public guild.
 
 ## Logic bugs (non-safety)
 
-- **`graduation.py:250-291`** — a failed `memory_create` isn't distinguished before
-  the identity file is trimmed → graduated detail can be **silently, permanently
-  lost** (contradicts "graduated facts aren't deleted"). Latent today. **[med]**
-- **`memory.py:556` `_dedup_merge_pending`** — additive-but-non-identical pending
-  facts (sim 0.70–0.85) are silently dropped like exact restatements → new detail
-  ("need Earl Grey") vanishes. Tension with "never silently discard." **[med]**
+- **`graduation.py:250-291` — FIXED (0.14.45, ward-approved, urgent).** A failed
+  `memory_create` no longer trims the identity file: the candidate is left fully
+  intact (content AND `last_graduated_at`) so the next pass retries, and the failed
+  item is neither logged to `graduation_log` nor counted. The trim happens only when
+  EVERY item stored. Tested (failure + paired success) + red-checked.
+- **`memory.py:556` `_dedup_merge_pending`** — PARTLY already fixed: the
+  pending-vs-pending additive path now APPENDS new detail. The remaining gap is the
+  pending-vs-**confirmed** drop (any sim ≥ 0.70 vs a confirmed memory is dropped as
+  "already known", losing additive detail like "need Earl Grey" vs a confirmed "need
+  tea"). **Fix proposed, awaiting ward:** drop only near-IDENTICAL vs confirmed;
+  fall through to a normal insert (own consent pass) for additive detail. **[med]**
 - **`tracker.py:137-141`** — the `date` field validation is **dead**: `to_local_naive`
   returns unparseable input unchanged, so `'banana'` stores as a valid date.
   Contradicts the "malformed dropped" contract. **[med]**

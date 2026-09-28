@@ -389,7 +389,16 @@ export async function runOneNoticingTick({
   }
   const nowMs = now();
 
-  const threat = (await getThreat().catch(() => null)) || { tier: 'calm', disabled: true };
+  // A threat-READ failure must be loud, not silent: noticing still runs (it never
+  // stands down), but it would run at the `calm` register and lose the elevated
+  // line — so a swallowed read error would quietly downgrade a distressed turn.
+  // Log it; the turn continues at calm as the safe fallback.
+  let threat = null;
+  try { threat = await getThreat(); }
+  catch (err) {
+    console.warn('[noticing] threat read failed — running at calm register, elevated line lost this tick:', err?.message ?? err);
+  }
+  threat = threat || { tier: 'calm', disabled: true };
   const tier = threat.disabled ? 'calm' : (threat.tier || 'calm');
 
   const inputs = (await getWakeInputs().catch(() => null)) || {};

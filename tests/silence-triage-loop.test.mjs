@@ -114,6 +114,52 @@ test('runOneTriageTick: thresholds met, LLM says wait → no outbox enqueue', as
   assert.equal(enq.calls.length, 0);
 });
 
+test('runOneTriageTick: a FAILED deliberation (failed:true) is not recorded as a wait', async () => {
+  freshLoop();
+  const enq = makeEnq();
+  let waitRecorded = 0;
+  const r = await runOneTriageTick({
+    getThreat:       async () => ({ tier: 'high', weight: 5 }),
+    getLastActivity: async () => ({ ts: '...', ms: Date.now() - 2 * 60 * 60_000 }),
+    decideTriage:    async () => ({ action: 'wait', failed: true }),   // e.g. call error / no model
+    recordWaitFn:    async () => { waitRecorded++; },
+    enqueueOutboxFn: enq.fn,
+  });
+  assert.equal(r.acted,  false);
+  assert.equal(r.reason, 'deliberation_failed');   // NOT llm_said_wait
+  assert.equal(waitRecorded, 0, 'a failure must not increment the wait streak');
+  assert.equal(enq.calls.length, 0);
+  assert.ok(Number.isFinite(r.nextCheckInMs), 're-check still scheduled — no passivity');
+});
+
+test('runOneTriageTick: a null decision is treated as a failure, not a wait', async () => {
+  freshLoop();
+  let waitRecorded = 0;
+  const r = await runOneTriageTick({
+    getThreat:       async () => ({ tier: 'high', weight: 5 }),
+    getLastActivity: async () => ({ ts: '...', ms: Date.now() - 2 * 60 * 60_000 }),
+    decideTriage:    async () => null,
+    recordWaitFn:    async () => { waitRecorded++; },
+    enqueueOutboxFn: makeEnq().fn,
+  });
+  assert.equal(r.reason, 'deliberation_failed');
+  assert.equal(waitRecorded, 0);
+});
+
+test('runOneTriageTick: a GENUINE wait (no failed flag) still records the wait streak', async () => {
+  freshLoop();
+  let waitRecorded = 0;
+  const r = await runOneTriageTick({
+    getThreat:       async () => ({ tier: 'high', weight: 5 }),
+    getLastActivity: async () => ({ ts: '...', ms: Date.now() - 2 * 60 * 60_000 }),
+    decideTriage:    async () => ({ action: 'wait' }),   // model looked, chose to wait
+    recordWaitFn:    async () => { waitRecorded++; },
+    enqueueOutboxFn: makeEnq().fn,
+  });
+  assert.equal(r.reason, 'llm_said_wait');
+  assert.equal(waitRecorded, 1, 'a genuine wait still counts');
+});
+
 test('runOneTriageTick: thresholds met, LLM says reach_out → enqueues triage outbox', async () => {
   freshLoop();
   const enq = makeEnq();
