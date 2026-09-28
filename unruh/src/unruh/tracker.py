@@ -331,6 +331,36 @@ def ensure_from_template(conn: sqlite3.Connection, *, template_id: str) -> dict[
     return {"ok": True, "id": res["id"], "created": True}
 
 
+def list_templates(conn: sqlite3.Connection | None = None) -> list[dict[str, Any]]:
+    """The shipped tracker templates (templates/trackers/*.json) — the catalog behind
+    a create-from-template picker. Each carries id (the filename stem), label,
+    archetype, sensitive, and its schema/config so a UI can preview the shape before
+    creating. When `conn` is given, each template is annotated `exists: True` if a
+    live tracker was already created from it (the `template` column) — so the picker
+    can say "already added" instead of silently making a second Mood."""
+    live: set[str] = set()
+    if conn is not None:
+        for r in conn.execute(
+            "SELECT DISTINCT template FROM trackers WHERE template IS NOT NULL",
+        ).fetchall():
+            if r["template"]:
+                live.add(str(r["template"]))
+    out: list[dict[str, Any]] = []
+    for path in sorted(TEMPLATES_DIR.glob("*.json")):
+        try:
+            tpl = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue  # a malformed template file is skipped, never crashes the catalog
+        tid = path.stem
+        out.append({
+            "id": tid, "label": tpl.get("label", tid), "archetype": tpl.get("archetype"),
+            "sensitive": bool(tpl.get("sensitive", False)),
+            "schema": tpl.get("schema", []), "config": tpl.get("config", {}),
+            "exists": tid in live,
+        })
+    return out
+
+
 def _get_tracker(conn: sqlite3.Connection, tid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM trackers WHERE id = ?", (tid,)).fetchone()
 
@@ -464,7 +494,11 @@ def read_tracker(conn: sqlite3.Connection, *, id: str, days: int = 14, now: date
         return {"ok": False, "error": f"no tracker {id!r}"}
     arch = trk["archetype"]
     cfg = json.loads(trk["config_json"] or "{}")
-    base = {"ok": True, "id": id, "label": trk["label"], "archetype": arch, "sensitive": bool(trk["sensitive"])}
+    # The full schema rides along so a ward-facing add-entry form can render the
+    # right input per field (enum → select, number → bounded number, date, …)
+    # from the same read — no second call, and the form always matches the gate.
+    base = {"ok": True, "id": id, "label": trk["label"], "archetype": arch,
+            "sensitive": bool(trk["sensitive"]), "schema": json.loads(trk["schema_json"] or "[]")}
 
     if arch == "gauge":
         last = conn.execute(

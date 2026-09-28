@@ -474,3 +474,42 @@ def test_drop_deletes_tracker_and_entries(conn):
     assert not any(t["id"] == tid for t in tracker.list_trackers(conn, include_archived=True))
     # entries cascaded
     assert conn.execute("SELECT COUNT(*) c FROM tracker_entries WHERE tracker_id=?", (tid,)).fetchone()["c"] == 0
+
+
+# ── UI-support additions (§7 tracker-tab pass) ───────────────────────────────
+
+def test_read_tracker_carries_full_schema(conn):
+    # The add-entry form renders from read_tracker's schema — it must ride along
+    # on every archetype so the form can match the validate_entry gate.
+    schema = [{"name": "mood", "type": "enum", "required": True, "values": ["good", "low"]},
+              {"name": "note", "type": "text"}]
+    tid = tracker.create_tracker(conn, label="Mood", archetype="series", schema=schema)["id"]
+    r = tracker.read_tracker(conn, id=tid, now=NOW)
+    assert [f["name"] for f in r["schema"]] == ["mood", "note"]
+    assert r["schema"][0]["values"] == ["good", "low"]  # enum values survive for the <select>
+    # a gauge (empty schema) still carries the key, as []
+    gid = tracker.create_tracker(conn, label="Water", archetype="gauge", schema=[],
+                                 config={"gauge": {"grace_hours": 1, "low_hours": 2, "overdue_hours": 3, "extreme_hours": 4}})["id"]
+    assert tracker.read_tracker(conn, id=gid, now=NOW)["schema"] == []
+
+
+def test_list_templates_shape_and_exists_flag(conn):
+    tpls = tracker.list_templates(conn)
+    ids = {t["id"] for t in tpls}
+    # the shipped catalog (all six live template files)
+    assert {"mood", "sleep", "laundry", "pantry", "hydration", "meals"} <= ids
+    mood = next(t for t in tpls if t["id"] == "mood")
+    assert mood["archetype"] == "series" and mood["sensitive"] is True
+    assert [f["name"] for f in mood["schema"]][0] == "mood"   # schema rides along for the preview
+    assert mood["exists"] is False                            # nothing created yet
+    # once a tracker is made from a template, its card reads "already added"
+    tracker.create_from_template(conn, template_id="mood")
+    assert next(t for t in tracker.list_templates(conn) if t["id"] == "mood")["exists"] is True
+    # a template with no live tracker stays exists:False
+    assert next(t for t in tracker.list_templates(conn) if t["id"] == "sleep")["exists"] is False
+
+
+def test_list_templates_without_conn_omits_exists_annotation(conn):
+    # No conn → catalog still lists, every card just reads not-yet-added.
+    tpls = tracker.list_templates()
+    assert tpls and all(t["exists"] is False for t in tpls)

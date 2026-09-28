@@ -1437,6 +1437,22 @@ def tracker_create_from_template(template_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def tracker_list_templates() -> dict[str, Any]:
+    """Ward-facing: the shipped ledger templates behind the Trackers-tab
+    create-from-template picker — their ids, labels, shapes, and an `exists` flag
+    (a live tracker already made from this template) so the picker never stands up a
+    silent second copy. Reached from the ward's management UI/HTTP, not the
+    Familiar's toolset (the Familiar's own tracker_create_from_template already names
+    its templates). Returns {ok, templates: [{id, label, archetype, sensitive, schema,
+    config, exists}]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, "templates": trk.list_templates(conn)}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def tracker_log(tracker_id: str, payload: dict | None = None, ts: str | None = None,
                 supersedes: str | None = None, source: str = "chat") -> dict[str, Any]:
     """I use this to record one entry in a tracker — my human just told me something

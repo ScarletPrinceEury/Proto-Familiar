@@ -605,7 +605,8 @@ Currently owns:
   `save_to_tome` (the read return is provenance-stamped so the source
   rides along). See docs/websearch-setup.md and docs/websearch-build-spec.md.
 - **Tracker tools (ward-only, 0.14.x; trackers build spec §3)** —
-  `tracker_list` / `tracker_create` / `tracker_create_from_template` /
+  `tracker_list` / `tracker_list_templates` / `tracker_create` /
+  `tracker_create_from_template` /
   `tracker_log` / `tracker_read` / `tracker_adjust`, thin executors over
   the `thalamus.js` wrappers (`createTracker`, `logTrackerEntry`,
   `readTracker`, …) that bridge to Unruh's `tracker_*` MCP tools (the store
@@ -727,6 +728,17 @@ Currently owns:
   **Trackers tab** in the Knowledge editor. The Familiar never reaches
   archive/drop — a ledger is the ward's to retire; `tracker_list` gained
   `include_archived` (default off = the Familiar's active view).
+  **Tracker-tab UI pass (0.14.32):** the tab now also renders a per-schema
+  **add-entry form** (inputs matched to each field's type; POST to the existing
+  `POST /api/trackers/:id/entries`, Unruh's `validate_entry` still the gate — its
+  structured refusal shown inline), a **series sparkline** (inline SVG over
+  `read.entries` — first numeric field, else an enum's ordinal, else per-day
+  count; `read_tracker` now carries the full `schema`), and a **create-from-template**
+  picker (`GET /api/tracker-templates` via `tracker_list_templates` →
+  `trk.list_templates` over `templates/trackers/*.json`, `exists`-annotated so a
+  live template reads "already added"; `POST /api/trackers/from-template
+  {template_id}` creates via `createTrackerFromTemplate`). Both new routes are
+  ward-only/localhost-gated like the rest.
   See docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,

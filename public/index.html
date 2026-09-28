@@ -1207,11 +1207,13 @@
 
         <div class="ke-pane" id="ke-pane-trackers">
           <div class="ke-toolbar">
+            <button id="ke-trk-new" class="btn-secondary">＋ New from template</button>
             <button id="ke-trk-refresh" class="btn-ghost">Refresh</button>
             <label class="ke-inline-check"><input type="checkbox" id="ke-trk-show-archived"> Show archived</label>
             <span id="ke-trk-count" class="vl-count" aria-live="polite"></span>
           </div>
           <p class="field-hint">The ledgers your Familiar keeps for you. Archiving pauses one (it goes quiet everywhere but keeps its data — un-archive any time); deleting removes it and every entry for good.</p>
+          <div id="ke-trk-templates" class="ke-trk-templates" hidden aria-live="polite"></div>
           <div class="ke-split">
             <div class="ke-list" id="ke-trk-list"></div>
             <div class="ke-detail" id="ke-trk-detail">
