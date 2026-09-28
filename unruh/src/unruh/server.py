@@ -39,7 +39,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from unruh import __version__
-from unruh.db import get_conn, ids_to_slugs, now_iso
+from unruh.db import get_conn, ids_to_slugs, now_iso, now_local, to_naive_local
 from unruh import schedule as sched
 from unruh import templates as tmpl
 from unruh import interest as interests
@@ -64,10 +64,10 @@ def _window_base(now: str | None) -> datetime:
     falling back to the local clock if it's missing/unparseable."""
     if now:
         try:
-            return datetime.fromisoformat(now)
+            return to_naive_local(datetime.fromisoformat(now))
         except (TypeError, ValueError):
             pass
-    return datetime.now()
+    return now_local()
 
 
 def _err(message: str, code: str = "bad_request") -> dict[str, Any]:

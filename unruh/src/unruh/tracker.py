@@ -25,7 +25,7 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any
 
-from .db import insert_with_slug_retry, now_iso, to_local_naive
+from .db import insert_with_slug_retry, now_iso, now_local, to_local_naive, to_naive_local
 
 # ── Vocabulary (constants so tests + the MCP layer validate without re-typing) ──
 
@@ -135,10 +135,17 @@ def _check_field(spec: dict[str, Any], val: Any) -> tuple[bool, Any, str]:
             return (True, out, "")
         return (False, val, "expected a number or {value, unit}")
     if t == "date":
-        norm = to_local_naive(val) if isinstance(val, str) else None
-        if norm is None:
+        # to_local_naive returns unparseable input UNCHANGED (it validates at the
+        # caller), so we must parse-check here ourselves — else a garbage value
+        # like "banana" would sail through and store as a valid date. Accept a
+        # date-only ("2026-07-02") or a datetime, offset-bearing or not.
+        if not isinstance(val, str):
             return (False, val, "expected a local ISO date/datetime")
-        return (True, norm, "")
+        try:
+            datetime.fromisoformat(val.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return (False, val, "expected a local ISO date/datetime")
+        return (True, to_local_naive(val), "")
     if t == "text":
         return (isinstance(val, str), val, "expected text")
     if t == "text[]":
@@ -176,7 +183,9 @@ def validate_entry(schema: Any, payload: Any) -> dict[str, Any]:
 
 
 def _naive(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+    # Shift an aware value to the ward's zone before dropping tzinfo (an offset
+    # dropped without converting would be wrong); a naive value is already local.
+    return to_naive_local(dt)
 
 
 def gauge_bands(config: dict[str, Any]) -> dict[str, float]:
@@ -249,7 +258,7 @@ def gauge_level(last_refill_ts: str | None, config: dict[str, Any], *, now: date
     b = gauge_bands(config)
     if not last_refill_ts:
         return {"level": 0.0, "band": "extreme", "hours_since": None}
-    n = _naive(now) if now is not None else datetime.now()
+    n = _naive(now) if now is not None else now_local()
     try:
         last = _naive(datetime.fromisoformat(last_refill_ts))
     except (TypeError, ValueError):
@@ -469,7 +478,7 @@ def drop_tracker(conn: sqlite3.Connection, *, id: str) -> dict[str, Any]:
 
 def _entries(conn: sqlite3.Connection, tid: str, *, days: int | None = None, now: datetime | None = None) -> list[sqlite3.Row]:
     if days is not None:
-        n = _naive(now) if now is not None else datetime.now()
+        n = _naive(now) if now is not None else now_local()
         floor = (n - _timedelta_days(days)).isoformat(timespec="seconds")
         return conn.execute(
             "SELECT * FROM tracker_entries WHERE tracker_id = ? AND superseded = 0 AND ts >= ? ORDER BY ts ASC",
@@ -571,7 +580,7 @@ def archive_tracker(conn: sqlite3.Connection, *, id: str, archived: bool = True)
 def stale_trackers(conn: sqlite3.Connection, *, now: datetime | None = None) -> list[dict[str, Any]]:
     """Trackers whose newest entry is older than their `staleness_hours` (a §5.3
     cue candidate). Gauges are excluded — their staleness is the gauge band itself."""
-    n = _naive(now) if now is not None else datetime.now()
+    n = _naive(now) if now is not None else now_local()
     out = []
     for r in conn.execute("SELECT * FROM trackers WHERE archetype != 'gauge' AND archived_at IS NULL").fetchall():
         cfg = json.loads(r["config_json"] or "{}")
@@ -668,7 +677,7 @@ def expiring_items(conn: sqlite3.Connection, *, within_days: int = EXPIRY_LEAD_D
     already-expired items included (days_left < 0), soonest first. Pure derivation;
     code owns the date maths, the model never computes days-left. Returns
     {items: [{tracker_id, tracker_label, name, expires, days_left, entry_id}]}."""
-    n = _naive(now) if now is not None else datetime.now()
+    n = _naive(now) if now is not None else now_local()
     today = n.date()
     out = []
     for trk in conn.execute("SELECT * FROM trackers WHERE archetype='inventory' AND archived_at IS NULL").fetchall():
@@ -718,7 +727,7 @@ def entry_rate_flag(conn: sqlite3.Connection, *, id: str, now: datetime | None =
     """Watchdog (§6): a 7-day entry rate > 3× the trailing 28-day median AND ≥10
     entries in the week → flagged. A private reflection signal, never an accusation.
     Returns {flagged, week_count, median_daily}."""
-    n = _naive(now) if now is not None else datetime.now()
+    n = _naive(now) if now is not None else now_local()
     from datetime import timedelta
     week_floor = (n - timedelta(days=7)).isoformat(timespec="seconds")
     month_floor = (n - timedelta(days=28)).isoformat(timespec="seconds")

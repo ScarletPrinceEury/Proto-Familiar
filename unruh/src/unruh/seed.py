@@ -23,7 +23,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .db import get_conn
+from .db import get_conn, now_local, to_naive_local
 from . import schedule as sched
 
 SEED_PATH = Path(__file__).parent / "seed_routine.json"
@@ -33,9 +33,7 @@ def _local_today(hhmm: str, base_date: datetime | None = None) -> str:
     """'HH:MM' (system local) on the given base date (default today) as a
     LOCAL-naive ISO string — the form Unruh stores and compares in. No UTC
     conversion: the seed routine is the ward's local day."""
-    today = base_date or datetime.now()
-    if today.tzinfo is not None:
-        today = today.astimezone().replace(tzinfo=None)
+    today = to_naive_local(base_date) if base_date else now_local()
     h, m = (int(x) for x in hhmm.split(":"))
     local = today.replace(hour=h, minute=m, second=0, microsecond=0)
     return local.isoformat(timespec="seconds")
@@ -49,9 +47,7 @@ def _phase_end_today(start_hhmm: str, end_hhmm: str, base_date: datetime | None 
     raises on month-end boundaries (May 31 → June 31 is invalid). The
     seed-routine command was broken on the 31st of any 30-day month and
     on Feb 28/29 before this fix landed."""
-    today = base_date or datetime.now()
-    if today.tzinfo is not None:
-        today = today.astimezone().replace(tzinfo=None)
+    today = to_naive_local(base_date) if base_date else now_local()
     sh, sm = (int(x) for x in start_hhmm.split(":"))
     eh, em = (int(x) for x in end_hhmm.split(":"))
     local_end = today.replace(hour=eh, minute=em, second=0, microsecond=0)
@@ -70,7 +66,7 @@ def seed_today(*, replace: bool = False, seed_path: Path = SEED_PATH) -> dict:
     seeds. User-created events / tasks are never touched.
     """
     data = json.loads(seed_path.read_text(encoding="utf-8"))
-    now = datetime.now()  # local-naive — matches stored when_ts
+    now = now_local()  # ward-local-naive — matches stored when_ts
 
     summary = {"phases_added": 0, "events_added": 0, "skipped": 0}
 

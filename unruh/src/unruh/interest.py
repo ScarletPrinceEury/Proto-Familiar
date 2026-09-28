@@ -49,7 +49,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import insert_with_slug_retry, new_id, now_iso, to_local_naive
+from .db import insert_with_slug_retry, new_id, now_iso, now_local, to_local_naive, to_naive_local
 
 # ── Allowed values. Surfaced as constants so tests + the MCP layer
 # can validate against them without re-typing strings. ──────────────
@@ -109,16 +109,14 @@ def effective_weight(
         return 0.0
     if raw_weight <= 0:
         return 0.0
-    # Local-naive throughout. Normalise BOTH sides to naive so a stray
-    # offset (an injected aware `now` in a test, or a pre-migration
-    # last_touched) can't raise naive-vs-aware. The elapsed delta is
-    # unaffected by which clock — both shift together.
-    n = now if now is not None else datetime.now()
-    if n.tzinfo is not None:
-        n = n.astimezone().replace(tzinfo=None)
-    last = datetime.fromisoformat(last_touched)
-    if last.tzinfo is not None:
-        last = last.astimezone().replace(tzinfo=None)
+    # Local-naive throughout, on the WARD's clock. Default `now` to now_local()
+    # (not bare datetime.now(), which reads the platform zone) and shift any
+    # aware value to ward-local via to_naive_local — otherwise, when the server
+    # TZ differs from the ward's, `n` (platform wall-clock) and the stored
+    # ward-local `last_touched` are on different clocks and the elapsed delta is
+    # off by the offset. Both on the ward's clock → the delta is correct.
+    n = to_naive_local(now) if now is not None else now_local()
+    last = to_naive_local(datetime.fromisoformat(last_touched))
     elapsed_days = (n - last).total_seconds() / 86_400.0
     if elapsed_days <= 0:
         return raw_weight

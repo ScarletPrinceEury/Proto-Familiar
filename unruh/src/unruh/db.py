@@ -112,6 +112,52 @@ def to_local_naive(s: str | None) -> str | None:
     return dt.isoformat(timespec="seconds")
 
 
+def now_local() -> datetime:
+    """The ward-local wall-clock 'now' as a NAIVE datetime — the datetime-object
+    twin of now_iso().
+
+    Every derived-signal computation (gauge decay, tracker staleness, pantry
+    expiry, interest decay, elapsed-event stamping) must default its `now` to
+    THIS, never to a bare `datetime.now()`. A bare `datetime.now()` reads the
+    PLATFORM local zone; on a server whose TZ differs from the ward's
+    (WSL/Docker/hosted), that computes every "hours since"/"is it past" against
+    the wrong clock — the same 0.7.86 bug class the reminder/`[Now]` paths were
+    already fixed for. Resolved from TZ via zoneinfo (like now_iso), tzinfo
+    stripped so it compares against the local-naive values Unruh stores."""
+    zone = _local_zone()
+    now = datetime.now(zone) if zone is not None else datetime.now()
+    return now.replace(tzinfo=None)
+
+
+def to_naive_local(dt: datetime) -> datetime:
+    """An aware datetime → ward-local NAIVE (offset shifted to the ward's zone,
+    tzinfo dropped); a naive datetime is returned unchanged (already local
+    wall-clock). The datetime-object twin of to_local_naive(str).
+
+    Use this instead of a hand-rolled `dt.astimezone().replace(tzinfo=None)`,
+    which resolves a naive/aware value against the PLATFORM zone rather than the
+    ward's — the same class of bug now_local() guards the 'now' side against."""
+    if dt.tzinfo is None:
+        return dt
+    zone = _local_zone()
+    return (dt.astimezone(zone) if zone is not None else dt.astimezone()).replace(tzinfo=None)
+
+
+def local_to_utc(dt: datetime) -> datetime:
+    """A ward-local NAIVE wall-clock datetime → aware UTC. Interprets the naive
+    value in the ward's zone (from TZ) BEFORE converting, so an outbound instant
+    (an `.ics` DTSTART, a Google `dates=…Z`) is correct even when the server's
+    own timezone differs from the ward's. A naive value with no ward zone
+    configured falls back to the platform zone (co-located behaviour); an
+    already-aware value is converted directly."""
+    zone = _local_zone()
+    if dt.tzinfo is None:
+        aware = dt.replace(tzinfo=zone) if zone is not None else dt.astimezone()
+    else:
+        aware = dt
+    return aware.astimezone(timezone.utc)
+
+
 def new_id() -> str:
     """Generate an opaque fallback id (UUID4 hex). Prefer slug_id() for
     anything a model reads — 32-hex ids tokenize terribly and carry no

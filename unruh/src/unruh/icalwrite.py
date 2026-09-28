@@ -8,9 +8,11 @@ exact-machine-values spine, §3). Pure functions, no DB, no network.
 Local → UTC at this one boundary (mirror of the §1.2 ingest seam): Unruh
 stores `when_ts`/`end_ts` as the ward's local wall-clock with no offset, but
 an external calendar needs a real instant, so a timed event's DTSTART/DTEND
-and the Google `dates=…Z` are converted UP to UTC here — using the system's
-local offset, which is the ward's zone (thalamus spawns Unruh with
-TZ=wardTimeZone). All-day events stay date-only (no instant to convert).
+and the Google `dates=…Z` are converted UP to UTC here — interpreting the
+naive value EXPLICITLY in the ward's zone (from TZ) via db.local_to_utc, not
+via a bare `.astimezone()` that would read the platform zone and misfire when
+the server's timezone differs from the ward's. All-day events stay date-only
+(no instant to convert).
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
+
+from .db import local_to_utc, to_naive_local
 
 _PRODID = "-//Proto-Familiar//Unruh//EN"
 
@@ -32,16 +36,16 @@ def _parse_local(s: str | None) -> datetime | None:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
-    return dt
+    return to_naive_local(dt)
 
 
 def _utc_basic(dt: datetime) -> str:
-    """Naive-local datetime → iCal basic UTC string '20260702T140000Z'. The
-    naive value is interpreted in the system local zone (the ward's, via
-    TZ=wardTimeZone) and converted to UTC."""
-    return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    """Naive-local datetime → iCal basic UTC string '20260702T140000Z'. The naive
+    value is interpreted in the WARD's zone (from TZ, via db.local_to_utc) before
+    converting — NOT via a bare `.astimezone()`, which resolves a naive value
+    against the platform zone and, on a server whose TZ differs from the ward's,
+    exports every timed event shifted by the offset (Windows DST included)."""
+    return local_to_utc(dt).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _date_basic(dt: datetime) -> str:
