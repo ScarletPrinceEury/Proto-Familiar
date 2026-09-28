@@ -223,7 +223,7 @@
           <div class="field-row" style="margin-top:8px">
             <label for="notif-sound-toggle">Notification sounds</label>
             <input type="checkbox" id="notif-sound-toggle" checked>
-            <button id="notif-sound-test" class="btn-ghost" type="button" title="Play a test chime" style="margin-left:6px">▶</button>
+            <button id="notif-sound-test" class="btn-ghost" type="button" title="Play a test chime" aria-label="Play a test chime" style="margin-left:6px">▶</button>
           </div>
           <div class="field-hint">A soft chime when a new message arrives while this tab is open — always for proactive ones (reminders, check-ins), and for replies only when the tab isn't focused, so an active conversation stays quiet.</div>
 
@@ -1110,9 +1110,9 @@
 
         <div class="ke-pane" id="ke-pane-coverage">
           <div class="ke-toolbar">
-            <button id="ke-cov-prev" class="btn-ghost" title="Previous month">‹</button>
+            <button id="ke-cov-prev" class="btn-ghost" title="Previous month" aria-label="Previous month">‹</button>
             <span id="ke-cov-month" class="ke-cov-month"></span>
-            <button id="ke-cov-next" class="btn-ghost" title="Next month">›</button>
+            <button id="ke-cov-next" class="btn-ghost" title="Next month" aria-label="Next month">›</button>
             <button id="ke-cov-refresh" class="btn-ghost">Refresh</button>
             <button id="ke-cov-import" class="btn-secondary">Import logs…</button>
             <div class="ke-cov-legend">
