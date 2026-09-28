@@ -27,6 +27,7 @@ import { fileURLToPath } from 'url';
 import { getAsset, getAssetMeta, setAssetDescription, buildStandin, VIDEO_MAX_BYTES } from './media.js';
 import { shortSlug } from '../../slug-ids.js';
 import { callProviderChat } from '../../llm-call.js';
+import { resolveReasoningEffort } from '../../providers.js';
 import { connectionForFeature, primaryConnectionFrom } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
 import { sanitizeExternal } from '../../injection-guard.js';
@@ -562,7 +563,8 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
       try {
         text = await callProviderChat({
           provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-          messages, maxTokens: 700, temperature: 0.4, fetchFn,
+          messages, maxTokens: 4000, temperature: 0.4, fetchFn,
+          reasoningEffort: resolveReasoningEffort(conn),
         });
       } catch (err) {
         return { ok: false, reason: `describe-call-failed: ${err?.message ?? err}` };

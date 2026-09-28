@@ -4075,6 +4075,16 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         _roundCapHitThisTurn = true;
         continue;
       }
+      // A thinking model streamed its finished answer only in reasoning_content;
+      // the server recovered it and sends it once at the end. The stream carried
+      // no delta.content, so render this as the reply (else the turn shows empty).
+      if (typeof parsed._recoveredReply === 'string' && parsed._recoveredReply) {
+        if (!shell) { setTyping(false); shell = appendAssistantShell(new Date().toISOString()); }
+        fullContent = parsed._recoveredReply;
+        shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(fullContent));
+        scrollToBottom();
+        continue;
+      }
       // A mid-loop upstream failure on the server side - surface it as a
       // normal request error so the retry/fallback ladder handles it.
       if (parsed._loopError) throw new Error(parsed._loopError);

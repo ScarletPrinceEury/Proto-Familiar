@@ -48,8 +48,16 @@ hits in the swept set.
   uniform derived-signal signature; prediction is correct without it) and the
   measure-zero `gauge_level` grace-boundary `<`/`<=` (gauge band logic is a
   ward-sign-off path). Unruh is now closed out.
-- **Still open:** the Node/WebUI halves of Themes 1–3, the RULE A/B/C server-side
-  gaps, the privacy/logic items, and the ward-sign-off prompt items below.
+- **RULE A/B/C (Theme 2) — DONE (0.14.35):** guide-chat now routes through
+  `callProviderChat` (≥4000 + reasoning fold); the streaming SSE loop accumulates
+  `reasoning_content` and emits a one-shot `_recoveredReply` the client renders
+  (server + `app.js`); page-watch's 2000 cap → 4000 + `reasoning_effort`;
+  `zai-vision` checks `result.isError` (no more caching an error string as a
+  description); Gemini `extractGeminiText` drops `thought:true` parts; the
+  sub-4000 caps in vision/content-regate/voice-greeting raised to 4000 +
+  `reasoning_effort`.
+- **Still open:** the Node/WebUI halves of Themes 1 & 3, the privacy/logic items,
+  and the ward-sign-off prompt items below.
 
 ## Headline
 

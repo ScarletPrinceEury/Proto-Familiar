@@ -39,6 +39,20 @@ test('extractGeminiText joins text parts, empty on a shapeless body', () => {
   assert.equal(extractGeminiText({}), '');
 });
 
+test('extractGeminiText drops `thought: true` reasoning parts (no CoT dump)', () => {
+  // A thinking model interleaves reasoning parts (thought:true) with the answer.
+  const json = { candidates: [{ content: { parts: [
+    { text: 'let me think about the image...', thought: true },
+    { text: 'A cat on a sofa.' },
+  ] } }] };
+  assert.equal(extractGeminiText(json), 'A cat on a sofa.');
+  // All-thought (budget spent reasoning) → no answer, never the raw chain.
+  const allThought = { candidates: [{ content: { parts: [
+    { text: 'reasoning only', thought: true },
+  ] } }] };
+  assert.equal(extractGeminiText(allThought), '');
+});
+
 test('uploadVideoToGemini: START → upload → ACTIVE returns the uri', async () => {
   const calls = [];
   const fetchFn = async (url, opts) => {

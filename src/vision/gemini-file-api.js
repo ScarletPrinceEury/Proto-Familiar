@@ -127,7 +127,14 @@ export function toGeminiRequest({ history = [], prompt = '', fileUri, mimeType }
 export function extractGeminiText(json) {
   const parts = json?.candidates?.[0]?.content?.parts;
   if (!Array.isArray(parts)) return '';
-  return parts.map(p => (typeof p?.text === 'string' ? p.text : '')).join('').trim();
+  // Gemini "thinking" models return reasoning parts flagged `thought: true`
+  // interleaved with the answer parts — join only the ANSWER parts, else the raw
+  // chain-of-thought is concatenated into the reply (the RULE B corollary /
+  // "thinking dump" class). All-thought (budget spent reasoning) → '', no answer.
+  return parts
+    .filter(p => !p?.thought)
+    .map(p => (typeof p?.text === 'string' ? p.text : ''))
+    .join('').trim();
 }
 
 /**
