@@ -67,6 +67,8 @@ try:  # py3.9+; present on every supported runtime
 except Exception:  # pragma: no cover - defensive
     ZoneInfo = None  # type: ignore
 
+from .db import now_local
+
 
 # How far ahead an un-mappable recurring series is materialised (§1.4).
 # Occurrence-horizon, NOT tied to the sync cadence — each sync refreshes
@@ -638,7 +640,7 @@ def parse_ical(text: str, *, now: datetime | None = None) -> dict[str, Any]:
     it explicitly in tests for determinism.
     """
     if now is None:
-        now = datetime.now()
+        now = now_local()
     lines = _unfold(text or "")
     # Pass 1 — collect every VEVENT's properties. Overrides (RECURRENCE-ID)
     # share their series' UID, so events can only be normalized after the

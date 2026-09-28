@@ -193,7 +193,10 @@ def projection_candidates(
     try:
         horizon = (datetime.fromisoformat(now_local) + timedelta(days=horizon_days)).isoformat(timespec="seconds")
     except (TypeError, ValueError):
-        horizon = (datetime.now() + timedelta(days=horizon_days)).isoformat(timespec="seconds")
+        # Fall back to the ward-local clock (now_iso), never bare datetime.now()
+        # (platform zone) — the horizon must anchor to the same clock the stored
+        # when_ts values use.
+        horizon = (datetime.fromisoformat(now_iso()) + timedelta(days=horizon_days)).isoformat(timespec="seconds")
     rows = conn.execute(
         """SELECT id, label, when_ts FROM nodes
             WHERE layer = 'schedule'

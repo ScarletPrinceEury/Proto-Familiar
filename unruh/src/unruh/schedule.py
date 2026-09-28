@@ -39,7 +39,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .db import insert_with_slug_retry, new_id, now_iso, to_local_naive
+from .db import insert_with_slug_retry, new_id, now_iso, now_local, to_local_naive, to_naive_local
 
 # ── Allowed values. Surfaced as constants so tests + the MCP layer
 # can validate without re-typing the strings. Adding a new value
@@ -524,7 +524,7 @@ def stamp_elapsed(
     already-stamped node is never re-stamped.
     """
     hours = max(1.0, min(720.0, float(hours)))
-    now_dt = datetime.fromisoformat(now) if now else datetime.now()
+    now_dt = to_naive_local(datetime.fromisoformat(now)) if now else now_local()
     cutoff = (now_dt - timedelta(hours=hours)).isoformat(timespec="seconds")
     rows = conn.execute(
         """SELECT id, label, payload_json FROM nodes
@@ -652,9 +652,7 @@ def _parse_iso(s: str | None) -> datetime | None:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
-    return dt
+    return to_naive_local(dt)
 
 
 def _window_fraction(when: str | None, end: str | None, acted: str) -> float | None:
@@ -778,7 +776,7 @@ def get_window(
     from_ts = to_local_naive(from_ts) if from_ts else from_ts
     to_ts   = to_local_naive(to_ts) if to_ts else to_ts
     if not from_ts or not to_ts:
-        now = datetime.now()  # local-naive — matches stored when_ts
+        now = now_local()  # ward-local-naive — matches stored when_ts
         if not from_ts: from_ts = (now - timedelta(hours=DEFAULT_WINDOW_HOURS / 2)).isoformat(timespec="seconds")
         if not to_ts:   to_ts   = (now + timedelta(hours=DEFAULT_WINDOW_HOURS / 2)).isoformat(timespec="seconds")
 
