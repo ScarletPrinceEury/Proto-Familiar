@@ -99,8 +99,16 @@ hits in the swept set.
   category grants) — which head a *container* of controls, not one control — got
   `role="group"` + `aria-labelledby` instead (a `for=` can't target a container).
   Zero unassociated field labels remain in those panes.
-- **Still open:** the Node duplication extractions + degradation hardening, the
-  privacy/logic items, and the ward-sign-off prompt items below.
+- **Node duplication extractions — pt.1 DONE (0.14.41):** the settings reader
+  (`settings-store.js` leaf module shared by thalamus + cerebellum, replacing 8
+  inline `JSON.parse(readFileSync(SETTINGS_FILE))` in thalamus; tested with a
+  red-checked fixture suite), `buildThalamusEnvelope` (server.js, 2 sites), and
+  `buildHistoryForPrompt` (discord-gateway, 2 sites). The `renderSliceBody`
+  finding was reviewed and deliberately NOT merged (behaviorally distinct + on the
+  ward-signed triage path — see the duplication list).
+- **Still open:** the reconnect-factory PR (thalamus reconnect helpers +
+  `reconnectUnruh`'s missing mutex + snapshot/restore `unruhResult`), degradation
+  hardening, the privacy/logic items, and the ward-sign-off prompt items below.
 
 ## Headline
 
@@ -267,16 +275,28 @@ deliberate ward pass.
   `isToolPlumbing` + `collectSummarizableRange` (five call sites unified).
 - `app.js:12270` — `teEscapeHtml` duplicates `esc()` → make `esc` null-safe. **[med]**
 - `thalamus.js` — 8× `JSON.parse(readFileSync(SETTINGS_FILE))` (6 in `enrich()`
-  alone) → `readSettingsLocal()`. **[med]**
+  alone) → `readSettingsLocal()`. **[med]** — **DONE (0.14.41):** extracted to a
+  leaf module `settings-store.js` (`SETTINGS_FILE` + `readSettingsSync`) that
+  BOTH thalamus and cerebellum import — cerebellum re-exports it so its ~11
+  consumers are untouched; thalamus routed its 8 sites through it (cerebellum
+  couldn't be the home: it imports thalamus, so that would cycle). Tested.
 - `thalamus.js:3276/3298` — snapshot/restore reimplement `unruhResult()`. **[low]**
+  — deferred to the reconnect-factory PR (same file region).
 - `thalamus.js` `schedulePhylacteryReconnect`/`scheduleUnruhReconnect` (self-
   acknowledged) + `reconnectUnruh` lacks the in-flight mutex `reconnectPhylactery`
-  has. **[med]**
+  has. **[med]** — its own PR (carries a latent-bug fix, MCP-peer-adjacent).
 - `cerebellum.js:922` vs `432` — `renderSliceBody` duplicates
-  `formatRecentMessagesForContext`. **[med]**
+  `formatRecentMessagesForContext`. **[med]** — **WON'T-MERGE:** on close reading
+  they are behaviorally DISTINCT (triage uses the ward's name as the default
+  speaker label, a 400-char cap, and no empty-line filter; the exported context
+  formatter uses `'Them'`, 300, and filters empties). `renderSliceBody` also sits
+  inside the ward-signed triage deliberation assembly — merging would change a
+  safety-path render, which needs ward sign-off. Left separate by design.
 - `discord-gateway.js:357` vs `2689` — history-building block verbatim →
-  `buildHistoryForPrompt`. **[med]**
-- `server.js:954/1355` — `thalamusEnvelope` construction copy-pasted. **[med]**
+  `buildHistoryForPrompt`. **[med]** — **DONE (0.14.41):** extracted
+  `buildHistoryForPrompt(session)`, both sites collapsed.
+- `server.js:954/1355` — `thalamusEnvelope` construction copy-pasted. **[med]** —
+  **DONE (0.14.41):** extracted `buildThalamusEnvelope(...)`, both sites collapsed.
 - Unruh: strip-tzinfo pattern reimplemented 4× (→ one ward-TZ helper — also fixes
   Theme 1). **[low-med]**
 

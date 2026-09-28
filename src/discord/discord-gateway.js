@@ -182,6 +182,30 @@ function formatMsgTime(isoString) {
   } catch { return ''; }
 }
 
+// The user/assistant history a Discord turn feeds the model: tool scaffolding
+// collapsed (collapseToolTurns), capped at HISTORY_LIMIT, each line timestamp-
+// stamped and carrying its speaker + any media attachments. The live turn and
+// the [later:…] revisit path built this identically — one builder now.
+function buildHistoryForPrompt(session) {
+  return collapseToolTurns(session.messages ?? [])
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .slice(-HISTORY_LIMIT)
+    .map(m => {
+      const clean = stripLlmTimestamps(m.content);
+      return {
+        role: m.role,
+        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Speaker rides through so the name-field stamp resolves who said it: the
+        // ward's stored turns carry no speaker (→ ward-<slug>), a villager's carries
+        // their name (→ their slug). Assistant turns ignore it (role carries them).
+        ...(m.role === 'user' && m.speaker ? { speaker: m.speaker } : {}),
+        // Media references ride beside content into the materializer (§5) so a
+        // past image message replays as a live image or a stand-in, not lost.
+        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
+      };
+    });
+}
+
 // ── Deferred presence — [later:…] revisit token (V9) ─────────────
 
 const REVISIT_FILE    = path.join(REPO_ROOT, 'tomes', '.discord-revisits.json');
@@ -354,23 +378,7 @@ async function fireRevisit(item) {
   // Familiar being itself in this room, so it carries its identity too.
   const coreSeg = coreSystemSegment(settings);
   const systemContent = [enriched.static, coreSeg, preamble].filter(Boolean).join('\n\n---\n\n');
-  const history = collapseToolTurns(session.messages ?? [])
-    .filter(m => m.role === 'user' || m.role === 'assistant')
-    .slice(-HISTORY_LIMIT)
-    .map(m => {
-      const clean = stripLlmTimestamps(m.content);
-      return {
-        role: m.role,
-        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
-        // Speaker rides through so the name-field stamp resolves who said it: the
-        // ward's stored turns carry no speaker (→ ward-<slug>), a villager's carries
-        // their name (→ their slug). Assistant turns ignore it (role carries them).
-        ...(m.role === 'user' && m.speaker ? { speaker: m.speaker } : {}),
-        // Media references ride beside content into the materializer (§5) so a
-        // past image message replays as a live image or a stand-in, not lost.
-        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
-      };
-    });
+  const history = buildHistoryForPrompt(session);
 
   const phMsg = postHistoryMessage(settings);
   // Same web-parity order as the live turn: dynamic is depth-injected above the
@@ -2686,23 +2694,7 @@ async function handleTurn(gw, msg, decision) {
   // the current message (`content`) is scanned as the live input, not yet in it.
   const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey });
   const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
-  const history = collapseToolTurns(session.messages ?? [])
-    .filter(m => m.role === 'user' || m.role === 'assistant')
-    .slice(-HISTORY_LIMIT)
-    .map(m => {
-      const clean = stripLlmTimestamps(m.content);
-      return {
-        role: m.role,
-        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
-        // Speaker rides through so the name-field stamp resolves who said it: the
-        // ward's stored turns carry no speaker (→ ward-<slug>), a villager's carries
-        // their name (→ their slug). Assistant turns ignore it (role carries them).
-        ...(m.role === 'user' && m.speaker ? { speaker: m.speaker } : {}),
-        // Media references ride beside content into the materializer (§5) so a
-        // past image message replays as a live image or a stand-in, not lost.
-        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
-      };
-    });
+  const history = buildHistoryForPrompt(session);
 
   // Speakers are name-prefixed so a multi-party room stays legible to me
   // across turns — my human included, marked (WARD), so I never read their
