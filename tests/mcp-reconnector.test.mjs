@@ -56,6 +56,18 @@ test('reconnect() resets the attempt counter on a successful connect', async () 
   assert.equal(scheduled.length, 2, 'reconnect success schedules no retry');
 });
 
+test('reconnect() whose connect FAILS arms a backoff retry (guard-vs-fallback fix)', async () => {
+  const { fn, scheduled } = fakeTimers();
+  const r = makeReconnector({
+    name: 'T', connect: () => Promise.reject(new Error('boom')), isShuttingDown: () => false,
+    maxAttempts: 5, backoffMs: [7, 8], setTimeoutFn: fn, logger: silent,
+  });
+  await r.reconnect(async () => {});          // connect rejects → caught, not thrown
+  assert.equal(scheduled.length, 1, 'a failed reconnect schedules exactly one retry');
+  assert.equal(scheduled[0].delay, 7, 'retry uses the first backoff rung');
+  assert.equal(r._peek().inFlight, false, 'mutex released before the retry is armed');
+});
+
 test('schedule() arms a timer with the backoff ladder and increments attempts', () => {
   const { fn, scheduled } = fakeTimers();
   const r = makeReconnector({

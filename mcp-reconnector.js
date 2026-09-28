@@ -12,11 +12,12 @@
  * respawn, orphaning a process. Sharing the implementation makes that class
  * of drift impossible.
  *
- * The `schedule`/`reconnect` behaviour is a faithful extraction of the
- * Phylactery original — including that, when `reconnect()`'s own connect
- * fails, its fallback `schedule()` is a no-op because the in-flight promise
- * is still set (the guard sees it). That quirk is preserved deliberately;
- * changing it is a separate call, not a silent side effect of this refactor.
+ * When `reconnect()`'s own connect fails, it arms a backoff retry — but only
+ * AFTER releasing the in-flight mutex, so `schedule()`'s in-flight guard doesn't
+ * swallow it. (The original called `schedule()` from inside the still-in-flight
+ * promise, so the guard saw the mutex set and no retry ever fired; a failed
+ * settings-change reconnect left the peer down until the next external trigger.
+ * Ward-approved fix.)
  *
  * @param {object} o
  * @param {string}            o.name           peer name for log lines
@@ -71,6 +72,7 @@ export function makeReconnector({
   // flag around the close.
   async function reconnect(teardown) {
     if (inFlight) return inFlight;
+    let failed = false;
     inFlight = (async () => {
       await teardown();
       try {
@@ -78,11 +80,14 @@ export function makeReconnector({
         attempts = 0;
       } catch (err) {
         logger.error(`[thalamus] ${name} reconnect failed:`, err?.message ?? err);
-        schedule();
+        failed = true;
       }
     })();
     try { await inFlight; }
     finally { inFlight = null; }
+    // Mutex released — NOW a failed reconnect can arm a backoff retry (the guard
+    // would have swallowed a schedule() call made while inFlight was still set).
+    if (failed) schedule();
   }
 
   return {

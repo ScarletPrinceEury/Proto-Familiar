@@ -298,9 +298,12 @@ deliberate ward pass.
   `connect`/`isShuttingDown`, owning the attempt counter + in-flight mutex.
   Phylactery behavior preserved byte-for-byte; **Unruh gains the mutex it was
   missing** (two rapid `reconnect()` calls could orphan a child). Unit-tested
-  with injected timer + logger (mutex red-checked); the guard-vs-fallback quirk
-  (a `reconnect()`-internal `schedule()` no-ops because its own in-flight promise
-  is still set) is preserved deliberately, flagged for a separate ward call.
+  with injected timer + logger (mutex red-checked). **Guard-vs-fallback quirk
+  FIXED (0.14.43, ward-approved):** a `reconnect()` whose connect fails now arms
+  a backoff retry *after* releasing the mutex — the original called `schedule()`
+  while its own in-flight promise was still set, so the guard swallowed it and a
+  failed settings-change reconnect left the peer down until the next external
+  trigger. Red-checked.
 - `cerebellum.js:922` vs `432` — `renderSliceBody` duplicates
   `formatRecentMessagesForContext`. **[med]** — **WON'T-MERGE:** on close reading
   they are behaviorally DISTINCT (triage uses the ward's name as the default
