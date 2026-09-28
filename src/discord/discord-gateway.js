@@ -2342,13 +2342,19 @@ export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId
   // take the still thumbnail as an image. A pseudo-attachment ({url,filename})
   // rides the same fetchers as a real attachment.
   if (!gifEmbedsDisabled(settings)) {
-    for (const g of parseGifEmbeds(msg)) {
-      const label = labelFromGifPage(g.page);
-      if (!videoOff && g.videoUrl) {
-        items.push({ att: { url: g.videoUrl, width: g.width, height: g.height, filename: mediaFilename(g.videoUrl, 'gif.mp4') }, kind: 'video', label });
-      } else if (g.imageUrl) {
-        items.push({ att: { url: g.imageUrl, width: g.width, height: g.height, filename: mediaFilename(g.imageUrl, 'gif.png') }, kind: 'image', label });
+    // parseGifEmbeds reads external embed data — keep a malformed embed from
+    // throwing out of an ingest the caller treats as never-throwing.
+    try {
+      for (const g of parseGifEmbeds(msg)) {
+        const label = labelFromGifPage(g.page);
+        if (!videoOff && g.videoUrl) {
+          items.push({ att: { url: g.videoUrl, width: g.width, height: g.height, filename: mediaFilename(g.videoUrl, 'gif.mp4') }, kind: 'video', label });
+        } else if (g.imageUrl) {
+          items.push({ att: { url: g.imageUrl, width: g.width, height: g.height, filename: mediaFilename(g.imageUrl, 'gif.png') }, kind: 'image', label });
+        }
       }
+    } catch (err) {
+      console.error('[discord] gif-embed parse failed:', err?.message ?? err);
     }
   }
   if (!items.length) return { attachments: [], failed: 0 };
@@ -2357,16 +2363,26 @@ export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId
   let failed = 0;
   for (const { att: a, kind, label } of items.slice(0, MAX_IMAGES_PER_MESSAGE)) {
     if (discordMediaHourCount(decision.locationKey) >= cap) break;
-    const got = kind === 'video' ? await fetchDiscordVideo(a) : await fetchDiscordImage(a);
-    if (!got) { failed++; continue; }
-    const meta = await saveAsset({
-      buffer: got.buffer, mime: got.mime,
-      origin: { surface: 'discord', sessionId: sessionId ?? null, speaker: decision.isWard ? null : (decision.speakerName ?? null) },
-      audienceTag: audienceTag || 'ward-private',
-      label: label || a.filename || '',
-    });
-    if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: meta.kind, mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
-    else failed++;
+    // Per-item fail-soft: a fetch OR a store failure (the fetchers return null,
+    // but saveAsset does real disk I/O and CAN throw on a full/broken disk) is a
+    // `failed` count, never a throw — this is what makes the "Never throws"
+    // contract above true and keeps a bad save off the chat turn (vision §3: no
+    // image path may 500 a turn; it degrades to the "[image failed to load]" note).
+    try {
+      const got = kind === 'video' ? await fetchDiscordVideo(a) : await fetchDiscordImage(a);
+      if (!got) { failed++; continue; }
+      const meta = await saveAsset({
+        buffer: got.buffer, mime: got.mime,
+        origin: { surface: 'discord', sessionId: sessionId ?? null, speaker: decision.isWard ? null : (decision.speakerName ?? null) },
+        audienceTag: audienceTag || 'ward-private',
+        label: label || a.filename || '',
+      });
+      if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: meta.kind, mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
+      else failed++;
+    } catch (err) {
+      console.error('[discord] media ingest failed:', err?.message ?? err);
+      failed++;
+    }
   }
   return { attachments: out, failed };
 }
