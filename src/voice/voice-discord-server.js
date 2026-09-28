@@ -39,6 +39,7 @@ import {
   formatPresenceNote, buildGreetingPrompt, parseGreeting,
 } from './voice-presence.js';
 import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
+import { resolveReasoningEffort } from '../../providers.js';
 import { substituteMacros } from '../../macros.js';
 import { audienceTagFor } from '../village/audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
@@ -243,7 +244,7 @@ export function attachDiscordVoice(deps) {
     const raw = await callProviderChat({
       provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
       messages: familiarDeliberationMessages({ body: prompt, cue: '(someone just joined the call)' }),
-      temperature: 0.8, maxTokens: 2000,
+      temperature: 0.8, maxTokens: 4000, reasoningEffort: resolveReasoningEffort(conn),
     });
     const line = parseGreeting(raw);
     if (!line || !engine.isCallActive() || engine.currentCallId() !== callId) return;

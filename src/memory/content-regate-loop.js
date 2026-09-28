@@ -18,6 +18,7 @@ import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync, connectionForFeature } from '../../cerebellum.js';
 import { connectionReady } from '../../providers.js';
 import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
+import { resolveReasoningEffort } from '../../providers.js';
 import { substituteMacros } from '../../macros.js';
 import { runOneRetagTick, DEFAULT_BATCH_SIZE } from './content-regate.js';
 
@@ -64,7 +65,7 @@ async function runTick() {
     // reasoning-content recovery. temperature low — this is careful judgment.
     callLLM: (messages) => callProviderChat({
       provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-      messages, temperature: 0.2, maxTokens: 3000,
+      messages, temperature: 0.2, maxTokens: 4000, reasoningEffort: resolveReasoningEffort(conn),
     }),
     updateMemory: ({ id, audience, contentTag }) => updateMemoryById({
       id, ...(audience ? { audience } : {}), ...(contentTag ? { contentTag } : {}),

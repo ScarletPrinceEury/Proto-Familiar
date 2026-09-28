@@ -214,6 +214,15 @@ export async function describeViaZaiVision({ apiKey, buffer, mime, prompt } = {}
         new Promise((_, rej) => { callTimer = setTimeout(() => rej(new Error('analyze_image timed out')), 40_000); }),
       ]);
     } finally { clearTimeout(callTimer); }
+    // An MCP error comes back as { isError: true, content:[{text: "<message>"}] }.
+    // Without this check textFromToolResult would return that error message and
+    // it would be CACHED as the image's description forever (describe never
+    // regenerates once set) — a silent permanent mis-description.
+    if (result?.isError) {
+      const errText = (textFromToolResult(result) || 'unknown error').slice(0, 200);
+      console.error(`[zai-vision] ${_toolName} returned isError:`, errText);
+      return { ok: false, reason: `zai-vision-error: ${errText.slice(0, 120)}` };
+    }
     const text = textFromToolResult(result);
     if (!text) return { ok: false, reason: 'empty-result' };
     return { ok: true, text, by: { provider: 'zai-coding', model: 'glm-4.6v(vision-mcp)' } };

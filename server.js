@@ -1128,6 +1128,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     let currentMsgs = enrichedMessages;
     let headersSent = false;
     let finalText   = '';
+    // A thinking model may stream its finished answer only in reasoning_content
+    // (the stream carries no delta.content). We fold that in at the end and emit
+    // it once as `_recoveredReply` so the client renders it — RULE B corollary,
+    // the streaming twin of foldReasoningIntoContent on the non-stream path.
+    let recoveredReply = null;
     // Stop wasting upstream tokens if the browser goes away mid-loop.
     const clientGone = () => res.writableEnded || res.destroyed;
 
@@ -1210,7 +1215,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // tool-call deltas server-side.
       const reader  = upstream.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '', fullContent = '', finishReason = null;
+      let buffer = '', fullContent = '', fullReasoning = '', finishReason = null;
       const toolCallsAcc = {};
       try {
         while (true) {
@@ -1230,6 +1235,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
               if (choice?.finish_reason) finishReason = choice.finish_reason;
               const delta = choice?.delta;
               if (typeof delta?.content === 'string') fullContent += delta.content;
+              // Accumulate reasoning separately — NOT forwarded to the display
+              // (live-rendering it is the CoT-dump bug); folded in only if the
+              // turn ends with empty content and wasn't budget-truncated.
+              if (typeof delta?.reasoning_content === 'string') fullReasoning += delta.reasoning_content;
               for (const tc of (delta?.tool_calls ?? [])) {
                 const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
                 if (tc.id)                  acc.id                 += tc.id;
@@ -1289,6 +1298,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       }
 
       finalText = fullContent;
+      // Empty content but a finished (not length-truncated) reasoning stream:
+      // the answer was parked in reasoning_content. Recover it as the reply and
+      // flag it for a one-shot emit so the client — which only rendered
+      // delta.content — actually shows it. A length-truncated empty stays empty
+      // (budget exhausted = no answer, never a raw CoT dump), matching
+      // extractTurnReply.
+      if (!fullContent && finishReason !== 'length' && fullReasoning) {
+        finalText = fullReasoning;
+        recoveredReply = fullReasoning;
+      }
       break;
     }
 
@@ -1305,6 +1324,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // request_tools grant vanished the moment the turn ended).
     if (surfacing) tickSurfacing();
     if (!res.writableEnded) {
+      // A thinking model's answer recovered from reasoning_content — emit it
+      // once so the client (which only rendered delta.content) shows the reply
+      // instead of an empty turn. Stripped like every outgoing LLM text.
+      if (recoveredReply) res.write(`data: ${JSON.stringify({ _recoveredReply: stripLlmTimestamps(recoveredReply) })}\n\n`);
       // Round budget ran out mid-reach → the client offers a one-click "go on".
       if (forceTextRound) res.write(`data: ${JSON.stringify({ _roundCapHit: true })}\n\n`);
       res.write('data: [DONE]\n\n');
@@ -5538,18 +5561,15 @@ app.post('/api/guide-chat', async (req, res) => {
   }
 
   try {
-    const r = await fetch(url, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeader(apiKey) },
-      body:    JSON.stringify({ model: model.trim(), messages: finalMessages, stream: false }),
+    // Through callProviderChat (RULE A): a ≥4000 cap + reasoning-content fold, so
+    // an always-on-thinking model (GLM-5.3 etc.) doesn't spend its whole budget
+    // reasoning and hand back empty content — the guide used to raw-fetch with no
+    // cap and read .content directly, returning a blank reply on those models.
+    const raw = await callProviderChat({
+      provider, apiKey, baseUrl, model: model.trim(), messages: finalMessages,
+      reasoningEffort: resolveReasoningEffort({ provider, reasoningEffort: req.body?.reasoningEffort }),
     });
-    if (!r.ok) {
-      const t = await r.text();
-      return res.status(502).json({ error: `The model service answered with an error (${r.status}).`, detail: t.slice(0, 200) });
-    }
-    const data = await r.json();
-    const content = stripLlmTimestamps(data?.choices?.[0]?.message?.content ?? '');
-    res.json({ content });
+    res.json({ content: stripLlmTimestamps(raw) });
   } catch (err) {
     res.status(502).json({ error: `I couldn't reach the model service (${err.message}).` });
   }
@@ -6884,7 +6904,10 @@ function startPageWatches() {
       const raw = await callProviderChat({
         provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
         messages: familiarDeliberationMessages({ body: prompt, cue: '(a quiet moment checking a page I watch)' }),
-        temperature: 0.4, maxTokens: 2000,
+        // ≥4000 floor (RULE A) + reasoning_effort for the always-thinking family:
+        // 2000 let an always-on-thinking model spend the whole budget reasoning
+        // and starve the judgment, so it more readily failed outright.
+        temperature: 0.4, maxTokens: 4000, reasoningEffort: resolveReasoningEffort(conn),
       });
       return parsePageWatchDecision(raw);
     },
