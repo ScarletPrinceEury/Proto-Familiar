@@ -58,7 +58,30 @@ _(appended as the audit proceeds)_
 
 ---
 
+### Doc readability
+
+- **User-facing docs are already good — no significant editorializing needed.**
+  `README.md` is warm, honest, and plain (the "what is a Familiar" framing, the
+  candid "coding is primarily done by AI" disclosure, the "before you start"
+  safety note all read clearly to a layperson). `troubleshooting.md` is
+  bucket-organized and concrete. `getting-started.md` is clear, with one
+  tightening opportunity: the **Windows step 3** packs winget + per-tool
+  fallbacks + `npm install` + `uv sync` + shortcut creation into one ~80-word
+  sentence — split into sub-bullets for scanability. **[low]**
+- **Dev specs (`architecture.md`, the `*-build-spec.md` set) are dense but
+  appropriately so** — they're developer/AI-agent references, not layperson docs,
+  so "editorialise for a layperson" would be a category error there. Their wordiness
+  is load-bearing context. Not flagged for a readability rewrite; the comment-concision
+  passes below apply to *code* comments, not these specs.
+
+---
+
 ## Coverage log
+
+- ◐ Node hot paths (root utilities line-read; big orchestration files audited in the recent PR work)
+- ☐ Python (memory.py, consolidate.py, schedule.py, tracker.py, graph.py)
+- ☐ Comment-density sweep (the big files)
+- ◐ docs/*.md readability pass (user-facing docs assessed — clear; dev specs out of scope)
 
 - ☐ Node hot paths (enrich, chat turn, tool loop, discord turn, memorization)
 - ☐ Python (memory.py, consolidate.py, schedule.py, tracker.py, graph.py)
