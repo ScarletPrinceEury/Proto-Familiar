@@ -170,7 +170,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/voice-call-audience.js
 - [x] src/voice/voice-call-guard.js
 - [ ] src/voice/voice-call-server.js
-- [ ] src/voice/voice-call-sfx.js
+- [x] src/voice/voice-call-sfx.js
 - [ ] src/voice/voice-call-turn.js
 - [x] src/voice/voice-catalogue.js
 - [ ] src/voice/voice-chat-turn.js
@@ -189,9 +189,9 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/voice-pin.js
 - [ ] src/voice/voice-presence.js
 - [x] src/voice/voice-speech.js
-- [ ] src/voice/voice-synthesize.js
+- [x] src/voice/voice-synthesize.js
 - [x] src/voice/voice-tagging.js
-- [ ] src/voice/voice-transcribe.js
+- [x] src/voice/voice-transcribe.js
 - [ ] src/voice/voice-web-adapter.js
 - [x] src/voice/voiceprints.js
 - [ ] src/voice/voices.js
