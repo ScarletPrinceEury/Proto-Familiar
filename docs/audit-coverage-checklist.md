@@ -55,12 +55,12 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/discord/discord-menu-kit.js
 - [ ] src/discord/discord-write-log.js
 ### src/gcal
-- [ ] src/gcal/gcal-attribution.js
-- [ ] src/gcal/gcal-google.js
-- [ ] src/gcal/gcal-projection.js
-- [ ] src/gcal/gcal-source.js
-- [ ] src/gcal/gcal-sync-loop.js
-- [ ] src/gcal/gcal-sync-status.js
+- [x] src/gcal/gcal-attribution.js
+- [x] src/gcal/gcal-google.js
+- [x] src/gcal/gcal-projection.js
+- [x] src/gcal/gcal-source.js
+- [x] src/gcal/gcal-sync-loop.js
+- [x] src/gcal/gcal-sync-status.js
 ### src/memory
 - [ ] src/memory/content-regate-loop.js
 - [ ] src/memory/content-regate.js
