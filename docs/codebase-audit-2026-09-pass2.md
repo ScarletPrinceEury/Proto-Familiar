@@ -490,6 +490,22 @@ writer's atomicity/merge like the reader's fixture suite.
   a codebase that says "my human" everywhere else, and the seed string in
   particular is the sort of thing that could drift into a real interest label.
   **[low]** (voice/convention consistency, dev surfaces)
+- **`phylactery/src/phylactery/__main__.py:20-22` — the `migrate-ec` subcommand
+  claims the migration is "not yet implemented" when it fully IS.** The
+  subcommand prints `"entity-core migration not yet implemented (Pillar F)"` and
+  returns 1, and `--help` (line 26) advertises it as "one-time entity-core →
+  Phylactery conversion". But the migration is fully implemented in
+  `phylactery/src/phylactery/migrate_from_entity_core.py` and actively used — the
+  prestart hook (`scripts/ensure-phylactery-deps.mjs:156`) and
+  `scripts/import-entity.js:142` both invoke it directly as
+  `python -m phylactery.migrate_from_entity_core`. So a ward or dev who follows
+  the `--help` text and runs `python -m phylactery migrate-ec` gets a false "not
+  implemented" instead of the working path. Stale placeholder that outlived the
+  feature it stood in for (the CLAUDE.md "never leave a placeholder for an op that
+  has an implementation" lesson, in a CLI-dispatch shape). Fix: either wire the
+  subcommand to call the real module's entry, or drop it and its help line and
+  point at `import-entity`. **[low]** (stale/misleading placeholder for a shipped
+  feature)
 
 ---
 

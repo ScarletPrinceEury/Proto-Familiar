@@ -248,24 +248,24 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] scripts/voice-temperature-probe.mjs
 
 ## Python
-- [ ] phylactery/src/phylactery/__init__.py
-- [ ] phylactery/src/phylactery/__main__.py
-- [ ] phylactery/src/phylactery/audience.py
+- [x] phylactery/src/phylactery/__init__.py
+- [x] phylactery/src/phylactery/__main__.py
+- [x] phylactery/src/phylactery/audience.py
 - [ ] phylactery/src/phylactery/backup.py
 - [ ] phylactery/src/phylactery/consolidate.py
-- [ ] phylactery/src/phylactery/content_gate.py
-- [ ] phylactery/src/phylactery/db.py
-- [ ] phylactery/src/phylactery/embed.py
+- [x] phylactery/src/phylactery/content_gate.py
+- [x] phylactery/src/phylactery/db.py
+- [x] phylactery/src/phylactery/embed.py
 - [ ] phylactery/src/phylactery/graduation.py
 - [ ] phylactery/src/phylactery/graph.py
 - [ ] phylactery/src/phylactery/identity.py
 - [ ] phylactery/src/phylactery/memory.py
 - [ ] phylactery/src/phylactery/migrate_from_entity_core.py
-- [ ] phylactery/src/phylactery/remember.py
-- [ ] phylactery/src/phylactery/scheduler.py
+- [x] phylactery/src/phylactery/remember.py
+- [x] phylactery/src/phylactery/scheduler.py
 - [ ] phylactery/src/phylactery/server.py
-- [ ] phylactery/src/phylactery/snapshot.py
-- [ ] phylactery/src/phylactery/village_registry.py
+- [x] phylactery/src/phylactery/snapshot.py
+- [x] phylactery/src/phylactery/village_registry.py
 - [ ] unruh/src/unruh/__init__.py
 - [ ] unruh/src/unruh/__main__.py
 - [ ] unruh/src/unruh/db.py
