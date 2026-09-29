@@ -1399,10 +1399,20 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // choices[0].message.content HERE, so no caller has to remember. A response
     // carrying tool_calls is left untouched: an empty content beside tool_calls
     // is legitimate, and reasoning is not an answer there.
+    //
+    // BUT a budget-exhausted turn (finish_reason 'length', empty content) is NO
+    // answer — only chain-of-thought parked in reasoning_content. Folding THAT
+    // into content is the GLM-5.3 "thinking dump" (RULE B corollary): the client
+    // renders/stores/speaks raw CoT as the reply. So skip the fold on 'length'
+    // and leave content empty — the web client's empty-retry/fallback then fires
+    // exactly as for any empty reply, and the other callers get an honest blank
+    // rather than the CoT. This mirrors the streaming twin's `finishReason !==
+    // 'length'` guard above, so the two paths finally agree.
     let parsed = null;
     if (upstream.ok) {
       try { parsed = JSON.parse(text); } catch { parsed = null; }
-      if (parsed?.choices?.[0]?.message) foldReasoningIntoContent(parsed.choices[0].message);
+      const choice = parsed?.choices?.[0];
+      if (choice?.message && choice.finish_reason !== 'length') foldReasoningIntoContent(choice.message);
     }
     if (thalamusEnvelope && parsed) {
       parsed._thalamus = thalamusEnvelope;
