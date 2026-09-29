@@ -556,6 +556,38 @@ writer's atomicity/merge like the reader's fixture suite.
   everywhere and stays safe if a future caller ever passes a less-controlled path.
   **[low]** (defensive consistency, not a live vuln)
 
+- **Stale "storage is UTC" comments in the temporal-editor section of
+  `public/app.js` (comment-only — the code is correct).** Unruh's time model has
+  been LOCAL-NAIVE since 0.7.84, and this file's own header block for the
+  temporal helpers (`app.js:12292–12302`) states it plainly ("Unruh's time model
+  is LOCAL-NAIVE … the UI sends plain local-naive strings and does NO timezone
+  math … These helpers used to convert to UTC with a Z suffix; that only worked
+  because a server-side seam converted it straight back"). But four inline
+  comments further down still describe the pre-0.7.84 UTC world:
+    - `app.js:13279–13282` (`teSaveScheduleNode`): *"Convert to ISO UTC so the
+      server stores absolute moments"* — the very next lines call
+      `teDatetimeLocalToNaive`, which deliberately keeps local-naive and never
+      converts. The comment describes the exact behaviour that was removed.
+    - `app.js:13383–13385` (`teLoadRoutine`): *"Show time-of-day in the USER'S
+      local TZ (storage is UTC)."* Storage is local-naive; the code correctly
+      uses `teIsoToLocalHhMm` / `getHours()`.
+    - `app.js:13717–13719` (`teEditPhase`): *"the storage is UTC, but the user
+      thinks in their own clock."* Same drift.
+    - `app.js:13349–13351` (`teLoadRoutine` sort): *"raw UTC HH:MM in the ISO
+      string (slicing the ISO returns UTC hours, which lie…)"* — borderline: the
+      `getHours()`-not-string-slice approach it defends is correct for both
+      local-naive rows and legacy offset-bearing rows, but the "UTC hours"
+      framing is a leftover from the old model.
+  No behavioural impact — every one of these code paths already does the
+  local-naive-correct thing (this file's helpers are `teDatetimeLocalToNaive`,
+  `teLocalTimeToday`, `teIsoToLocalHhMm`, `teNaiveFromDate`, all local-naive).
+  This is pure doc-drift: a reader trusting the comments would think the UI still
+  round-trips through UTC and might "helpfully" reintroduce a `toISOString()` —
+  which the UI rule (architecture.md "Temporal editor modal": *"no `toISOString()`
+  on schedule writes or query bounds"*) explicitly forbids. Fixing the four
+  comments to match the local-naive reality (and the file's own header) removes a
+  trap. **[low]** (comment-only; the code is already correct and matches 0.7.84)
+
 ---
 
 ## Coverage log
@@ -566,5 +598,15 @@ Files/areas line-read this pass (✓ = done, ◐ = partial, ☐ = not yet):
 - ◐ src/*: cross-cutting sweeps (debt, philosophy, wiring, empty-catch, dead-export, settings-access) cover the whole tree; surface-context + ponder-research line-read. Voice / browser / discord-internals / village / schedule / weather / gcal / sessions not yet fully line-read (flagged clean by the sweeps; no per-file deep-read yet).
 - ◐ phylactery: graph.py, graduation.py, consolidate.py (structure) read; memory.py/server.py/identity/remember/backup partial.
 - ☐ unruh/src/unruh/*.py — not yet this pass (deep-read in the Theme-1 work earlier).
-- ◐ public/: app.js audited in the WebUI PRs; graph-map/voice-call not this pass.
+- ✓ public/: the whole directory is now fully line-read. app.js (all 15,487
+  lines) — one finding: the stale "storage is UTC" comment cluster in the
+  temporal editor (recorded above). index.html (2,385 lines) — clean: every id
+  matches the app.js bindings, icon-only buttons carry aria-label, the viewport
+  meta keeps pinch-zoom, scripts load at the foot. style.css (4,298 lines) —
+  clean: WCAG-annotated throughout (contrast ratios commented, focus-visible,
+  skip-link, reduced-motion, 44px touch targets), lessons recorded inline.
+  graph-map / voice-call / icons / voice-recorder / worklet were line-read in
+  the earlier public-JS batch. **With this, every file in
+  `docs/audit-coverage-checklist.md` is checked off — the two audits now cover
+  100% of source files.**
 - ☐ scripts/

@@ -211,7 +211,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/weather/weather-source.js
 
 ## Node — public/ + scripts/
-- [ ] public/app.js
+- [x] public/app.js
 - [x] public/graph-map.js
 - [x] public/icons.js
 - [x] public/voice-call-capture-worklet.js
@@ -284,5 +284,5 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] unruh/src/unruh/tracker_projection.py
 
 ## public non-JS
-- [ ] public/index.html
-- [ ] public/style.css
+- [x] public/index.html
+- [x] public/style.css
