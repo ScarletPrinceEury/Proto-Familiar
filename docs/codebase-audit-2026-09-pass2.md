@@ -390,6 +390,35 @@ writer's atomicity/merge like the reader's fixture suite.
   (`relative-time` has a dedicated suite), so a behaviour-preserving extraction is
   safe — but it feeds the `[Now]` block + scheduling, so extract carefully and
   keep the tests green. **[med]** (copy-paste → shared helper)
+- **⚠️ FLAG (robustness, cross-path): the non-stream reply boundary folds raw
+  chain-of-thought into `content` on a budget-exhausted thinking model, where the
+  streaming twin correctly suppresses it.** `server.js:1405` (the `/api/chat`
+  non-stream path) calls `foldReasoningIntoContent(parsed.choices[0].message)`.
+  That helper (`llm-call.js:73`) takes only the `message` — it structurally
+  cannot see `finish_reason` — and folds `reasoning_content` into `content`
+  whenever `content` is empty, via the *blanket* `extractContent` fallback. The
+  STREAMING twin at `server.js:1316` does the opposite on purpose: `if
+  (!fullContent && finishReason !== 'length' && fullReasoning)` — its own comment
+  says it is "matching extractTurnReply" (the 0.11.20 RULE B corollary: a reply
+  truncated mid-thought at `finish_reason:'length'` is NO answer, only parked CoT,
+  and must never surface as the reply — the GLM-5.3 "thinking dump"). So on an
+  always-on-thinking model (GLM-5.3 family, `reasoning_effort` forced high) whose
+  reasoning spends the whole `max_tokens:4000` cap, the two paths diverge: the
+  stream stays empty (honest no-reply), but the non-stream path hands the caller
+  raw chain-of-thought as `content`. Every non-stream caller inherits it — the
+  comment at `server.js:1394` itself names them: **the voice turn
+  (`voice-chat-turn.js`, which then SPEAKS the CoT aloud through TTS),
+  guide-chat, and the handoff summariser.** Because the server folds first,
+  `voice-chat-turn.js`'s own `extractContent` read is already too late — the fix
+  belongs at the server boundary where `finish_reason` is in scope, and fixing it
+  there protects all three callers at once. **Robust fix:** make the non-stream
+  path finish_reason-aware — use `extractTurnReply(parsed.choices[0])` (already
+  exported, already the streaming path's model), or give
+  `foldReasoningIntoContent` the whole `choice` so it can apply the same
+  `finish_reason !== 'length'` guard. Not a ward-sign-off file (plumbing), but it
+  is a RULE-A/RULE-B-class surface-parity gap, hence the flag. **[med]** (the
+  CoT-dump the corollary exists to prevent, still live on the non-stream surface;
+  worst on the voice path, where it's spoken)
 
 ---
 

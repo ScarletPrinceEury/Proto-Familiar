@@ -157,23 +157,23 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/vision/zai-vision.js
 ### src/voice
 - [x] src/voice/audio-frame.js
-- [ ] src/voice/audio-worker-current.js
-- [ ] src/voice/audio-worker-host.js
+- [x] src/voice/audio-worker-current.js
+- [x] src/voice/audio-worker-host.js
 - [x] src/voice/audio-worker.mjs
-- [ ] src/voice/call-engine.js
+- [x] src/voice/call-engine.js
 - [x] src/voice/offline-asr-models.js
 - [x] src/voice/voice-audio-features.js
 - [x] src/voice/voice-audio-tags.js
 - [x] src/voice/voice-backend.js
-- [ ] src/voice/voice-bench-run.js
-- [ ] src/voice/voice-bench.js
+- [x] src/voice/voice-bench-run.js
+- [x] src/voice/voice-bench.js
 - [x] src/voice/voice-call-audience.js
 - [x] src/voice/voice-call-guard.js
-- [ ] src/voice/voice-call-server.js
+- [x] src/voice/voice-call-server.js
 - [x] src/voice/voice-call-sfx.js
-- [ ] src/voice/voice-call-turn.js
+- [x] src/voice/voice-call-turn.js
 - [x] src/voice/voice-catalogue.js
-- [ ] src/voice/voice-chat-turn.js
+- [x] src/voice/voice-chat-turn.js
 - [x] src/voice/voice-clips.js
 - [x] src/voice/voice-diarize.js
 - [ ] src/voice/voice-discord-adapter.js
@@ -192,7 +192,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/voice-synthesize.js
 - [x] src/voice/voice-tagging.js
 - [x] src/voice/voice-transcribe.js
-- [ ] src/voice/voice-web-adapter.js
+- [x] src/voice/voice-web-adapter.js
 - [x] src/voice/voiceprints.js
 - [ ] src/voice/voices.js
 ### src/ward
