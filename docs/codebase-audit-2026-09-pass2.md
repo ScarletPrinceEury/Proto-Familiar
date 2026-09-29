@@ -75,6 +75,11 @@ _(appended as the audit proceeds)_
   - `tomes/.ponder-web-budget.json` — daily read counter (ponder-web-budget.js)
   - `tomes/.noticing-asked.json` — overdue-event ask ledger (noticing-outcomes.js)
   - `tomes/.gauge-checks.json` — open safety-check state (gauge-escalation.js, ward-signed path)
+  - `tomes/.tracker-cue.json`, `tomes/.offer-tracker.json` — tracker cue/offer aging state
+  - `tomes/.village-servers.json` — **the clearest illustration of the drift:** its two
+    siblings written by the same module (`.village-knocks.json`,
+    `.village-location-knocks.json`) ARE both in `.gitignore` (:65-68); this one was
+    added later and never listed.
   Contrast `logs/`, ignored by a single directory glob (`.gitignore:6 logs/`) — so
   every JSONL event log is covered; only `tomes/` carries the fragile list. **The
   harm:** a dev/user (or an agent) running the server then `git add -A` stages
@@ -229,6 +234,24 @@ in the tree; each verified by hand:
   :142 ("Use our local toMs since the param name clashes") documents the confusion
   rather than fixing it. Clean fix: delete line 141 and the unused helper (:27-32).
   No behaviour change. **[low]**
+
+### src/village
+
+- **`village/village.js:793,927` villager ids are `randomUUID()`, but they're
+  model-facing — the slug-id rule the category ids already follow.** Category ids
+  were deliberately migrated to readable slugs (`migrateCategoryIds`, this file)
+  precisely because "a category id rides in memory audiences, villager assignments,
+  and surfaces the model can read." Villager ids are model-facing the SAME way:
+  `pondering.js buildGroundingBlock` renders each as `${v.name} (id: ${v.id})` in
+  the "People I know" block, and the model must echo that id back verbatim as a
+  tell's `recipient` (validated against the roster in `ponderOnce`). A 36-char UUID
+  there is ~16 tokens of noise the model has to reproduce exactly, and it's not
+  greppable — exactly what the slug rule exists to prevent. The category migration
+  is the template (a `meaningSlugId(name)` mint + a legacy-UUID→slug load-time
+  remap that also rewrites references). Lower urgency than the category case
+  (villager ids don't also key an `audience`), but the same class, and left
+  half-done. **[low — slug-id consistency; villager ids didn't get the category
+  treatment]**
 
 ### src/tomes
 

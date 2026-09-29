@@ -142,12 +142,12 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/util/json-state.js
 ### src/village
 - [x] src/village/audience.js
-- [ ] src/village/knocks.js
-- [ ] src/village/village-card.js
-- [ ] src/village/village-presence.js
-- [ ] src/village/village-registry-json.js
-- [ ] src/village/village.js
-- [ ] src/village/villager-consent.js
+- [x] src/village/knocks.js
+- [x] src/village/village-card.js
+- [x] src/village/village-presence.js
+- [x] src/village/village-registry-json.js
+- [x] src/village/village.js
+- [x] src/village/villager-consent.js
 ### src/vision
 - [ ] src/vision/gemini-file-api.js
 - [ ] src/vision/media-retention-loop.js
