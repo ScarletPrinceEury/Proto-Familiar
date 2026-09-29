@@ -43,17 +43,45 @@ test('reads reasoning_content when a FINISHED answer is parked there (no length-
   assert.equal(await run({ transcript: 'hi' }), 'thought-through answer');
 });
 
-test('a length-truncated empty is SILENCE, never a spoken CoT dump', async () => {
+// A fetch stub that plays a queued list of choices, one per call, tracking the
+// max_tokens each request carried. The last entry repeats once the queue drains.
+function seqFetch(choices) {
+  const calls = [];
+  const fn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    calls.push({ maxTokens: body.max_tokens });
+    const choice = choices[Math.min(calls.length - 1, choices.length - 1)];
+    return { ok: true, status: 200, json: async () => ({ choices: [choice] }) };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('a length-truncated empty is SILENCE, never a spoken CoT dump — and retries with a bigger cap', async () => {
   // An always-thinking model that spent its whole budget reasoning: finish_reason
   // 'length', empty content, raw chain-of-thought parked in reasoning_content.
-  // Speaking that aloud is the GLM-5.3 "thinking dump" — the turn must go quiet
-  // (null) so the call resets and my human just speaks again, never TTS the CoT.
-  const fetchFn = async () => ({
-    ok: true, status: 200,
-    json: async () => ({ choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'let me think… they asked… I should…' } }] }),
-  });
+  // Speaking that aloud is the GLM-5.3 "thinking dump" — the reply must never be
+  // the CoT. When BOTH attempts exhaust the budget, the turn goes quiet (null).
+  const lengthEmpty = { finish_reason: 'length', message: { content: '', reasoning_content: 'let me think… they asked… I should…' } };
+  const fetchFn = seqFetch([lengthEmpty, lengthEmpty]);
   const run = createVoiceChatTurn(deps(fetchFn));
-  assert.equal(await run({ transcript: 'hi' }), null);
+  assert.equal(await run({ transcript: 'hi' }), null, 'never speaks the raw CoT');
+  assert.equal(fetchFn.calls.length, 2, 'one bounded retry');
+  assert.equal(fetchFn.calls[0].maxTokens, 4000, 'first attempt at the base cap');
+  assert.equal(fetchFn.calls[1].maxTokens, 8000, 'length-truncation retry gets more room to finish');
+});
+
+test('an empty first turn is rescued by the retry (spoken reply, not silence)', async () => {
+  // First attempt hits the budget (length, empty); the retry — with the larger
+  // cap — actually finishes and returns a real answer. The turn speaks it.
+  const fetchFn = seqFetch([
+    { finish_reason: 'length', message: { content: '', reasoning_content: 'thinking…' } },
+    { finish_reason: 'stop',   message: { content: 'Tuesday at 3.' } },
+  ]);
+  const run = createVoiceChatTurn(deps(fetchFn));
+  assert.equal(await run({ transcript: 'when is my dentist?' }), 'Tuesday at 3.');
+  assert.equal(fetchFn.calls.length, 2);
+  assert.equal(fetchFn.calls[1].maxTokens, 8000);
 });
 
 test('empty transcript → null, no fetch', async () => {

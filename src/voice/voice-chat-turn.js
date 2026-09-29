@@ -19,6 +19,14 @@ import { stripLlmTimestamps } from '../../message-sanitize.mjs';
 // the caller can reset my human off "Thinking…". Generous, but finite.
 const VOICE_TURN_TIMEOUT_MS = 90_000;
 
+// A thinking model bills its reasoning against max_tokens, so a small cap = empty
+// content = dead silence (RULE A). The base cap gives room to finish; the retry
+// cap doubles it for the ONE case a same-cap retry can't rescue — a first turn
+// that came back finish_reason 'length' (spent the whole budget thinking), where
+// the codebase's own remedy is "raise max_tokens".
+const VOICE_BASE_MAX_TOKENS  = 4000;
+const VOICE_RETRY_MAX_TOKENS = 8000;
+
 /**
  * @param {object}   deps
  * @param {number}   deps.port
@@ -54,27 +62,29 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), VOICE_TURN_TIMEOUT_MS);
     const started = Date.now();
-    try {
+
+    // One provider round-trip at a given token cap. stream:false lands on
+    // /api/chat's RAW non-stream path, so this replicates callProviderChat's
+    // RULE-A guarantees itself (0.9 post-mortem): a generous max_tokens (a
+    // thinking model bills reasoning against the cap) + extractTurnReply at the
+    // reply boundary — the answer may sit in reasoning_content, but a
+    // budget-exhausted turn (finish_reason 'length', empty content) is no answer
+    // at all, only raw chain-of-thought, and extractTurnReply returns '' there so
+    // we never speak the CoT aloud. Returns the spoken reply (preambles + answer,
+    // stripped) or '' when there was no answer, plus finish_reason + httpOk so the
+    // caller can decide whether a retry is worth it.
+    const attempt = async (maxTokens) => {
       const res = await fetchFn(`http://127.0.0.1:${port}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: ctrl.signal,
         body: JSON.stringify({
           provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-          // stream:false lands on /api/chat's RAW non-stream path, so we
-          // replicate BOTH of callProviderChat's guarantees ourselves (RULE A,
-          // 0.9 post-mortem): a generous max_tokens (a thinking model bills
-          // reasoning against the cap — no cap = empty content = dead silence)
-          // and extractTurnReply at the reply boundary (the answer may sit in
-          // reasoning_content, not content — BUT a budget-exhausted turn
-          // (finish_reason 'length', empty content) is no answer at all, only
-          // raw chain-of-thought; extractTurnReply returns '' there so we go
-          // quiet instead of speaking the CoT aloud). runToolLoop follows the ward's
-          // per-call setting; the server caps voiceMode tool rounds tightly so a
-          // spoken "Eury?" still gets a fast "Hey?" and only a real go-look-it-up
-          // request spends rounds.
+          // runToolLoop follows the ward's per-call setting; the server caps
+          // voiceMode tool rounds tightly so a spoken "Eury?" still gets a fast
+          // "Hey?" and only a real go-look-it-up request spends rounds.
           messages, stream: false, runToolLoop: toolsOn, enrich: true,
-          max_tokens: 4000,
+          max_tokens: maxTokens,
           userMessage: text,
           voiceMode: true,          // reply comes out speech-shaped, not screen-shaped
           injectCorePrompts: true,  // no browser here — the server folds in the ward's four core prompts
@@ -82,6 +92,10 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
         }),
       });
       const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`);
+        return { reply: '', finishReason: null, httpOk: false };
+      }
       const finalReply = extractTurnReply(data?.choices?.[0] ?? {});
       // When she used tools, speak her own preamble on each round first ("let me
       // check…" — the carrier `content` runToolCallLoop records per round), then
@@ -91,9 +105,26 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
         ? data._toolRounds.map(r => (typeof r?.content === 'string' ? r.content.trim() : '')).filter(Boolean)
         : [];
       const reply = stripLlmTimestamps([...preambles, finalReply].filter(Boolean).join(' ')).trim();
-      if (!res.ok) { log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`); return null; }
-      if (!reply) { log(`voice turn produced no content after ${Date.now() - started}ms (thinking model with empty content?)`); return null; }
-      return reply;
+      return { reply, finishReason: data?.choices?.[0]?.finish_reason ?? null, httpOk: true };
+    };
+
+    try {
+      let out = await attempt(VOICE_BASE_MAX_TOKENS);
+      // An OK-but-empty reply → ONE bounded retry, the spoken counterpart to the
+      // web client's empty-retry (capped at a single extra round-trip so a live
+      // call stays responsive; the shared timer still bounds both attempts). If
+      // the first empty was a length-truncation the model spent its whole budget
+      // thinking, so a same-cap retry would just re-fail — give it more room
+      // instead. A truly-empty (transient) reply retries at the base cap. An HTTP
+      // error is NOT retried here (httpOk false): an immediate identical retry
+      // rarely rescues a 4xx/5xx, and the call resets faster without it.
+      if (out.httpOk && !out.reply) {
+        const retryCap = out.finishReason === 'length' ? VOICE_RETRY_MAX_TOKENS : VOICE_BASE_MAX_TOKENS;
+        log(`voice turn empty after ${Date.now() - started}ms (finish_reason=${out.finishReason}) — retrying once${retryCap !== VOICE_BASE_MAX_TOKENS ? ` with a larger cap (${retryCap})` : ''}`);
+        out = await attempt(retryCap);
+      }
+      if (!out.reply) { log(`voice turn still no content after ${Date.now() - started}ms — staying silent so the call can reset`); return null; }
+      return out.reply;
     } catch (err) {
       if (err?.name === 'AbortError') log(`voice turn timed out after ${VOICE_TURN_TIMEOUT_MS}ms — giving up so the call can reset`);
       else log(`voice turn /api/chat failed: ${err?.message ?? err}`);
