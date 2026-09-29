@@ -441,6 +441,12 @@ writer's atomicity/merge like the reader's fixture suite.
   importing the same helper (repo-root ESM, so a shared module works). This is the
   CLAUDE.md "no copy-paste of substantial logic" rule — a copy-pasted helper
   function is exactly its threshold. **[med]** (copy-paste ×3 → shared helper)
+  - **RESOLVED as recommended.** Extracted to `scripts/lib/resolve-uv.mjs`
+    (exports `resolveUv`); the two prestart scripts and `thalamus.js` now import
+    it, their local copies and the now-orphan `os` import dropped, thalamus's
+    call sites renamed `resolveUvBinary()` → `resolveUv()`. The thalamus-specific
+    "GUI launchers inherit a minimal PATH → StdioClientTransport ENOENT" rationale
+    is kept as a comment at the import. audit:wiring clean, full suite green.
 - **⚠️ `scripts/audit-wiring.mjs` check #4 ("settings synced but unread") is a
   DEAD CHECK — it reads the stripped copy and can never fire.** Line 293 takes
   `const app = code['public/app.js']` — the comment-and-literal-STRIPPED copy —
