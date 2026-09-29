@@ -427,6 +427,20 @@ writer's atomicity/merge like the reader's fixture suite.
   import list was cloned for the Discord server, `ASR_MODEL_DIR` included, after
   the code that used it had already moved to the inline form. Fix: drop the
   symbol from both import statements. **[low]** (orphaned import ×2)
+- **uv-binary resolution is copy-pasted across THREE sites.**
+  `scripts/ensure-phylactery-deps.mjs:39` `resolveUv()` and
+  `scripts/ensure-unruh-deps.mjs:44` `resolveUv()` are byte-identical (same
+  `UV_BIN` env check, same per-platform candidate list, same PATH last-resort),
+  and `thalamus.js:124` `resolveUvBinary()` is the same logic with only different
+  inline comments — the unruh script's own comment even says "Mirror thalamus.js's
+  resolveUvBinary()". That's ~20 lines of non-trivial, platform-specific probing
+  maintained in triplicate; a new install location (or a fix to one) has to be
+  remembered in three places or they drift. The scripts already share
+  `scripts/lib/verify-python-peer.mjs`, so the natural home is a
+  `scripts/lib/resolve-uv.mjs` the two prestart scripts import, with `thalamus.js`
+  importing the same helper (repo-root ESM, so a shared module works). This is the
+  CLAUDE.md "no copy-paste of substantial logic" rule — a copy-pasted helper
+  function is exactly its threshold. **[med]** (copy-paste ×3 → shared helper)
 
 ---
 

@@ -224,17 +224,17 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] scripts/build-voice-catalogue.mjs
 - [ ] scripts/chat-with-ponderings.mjs
 - [ ] scripts/check-voice-ready.mjs
-- [ ] scripts/ensure-audio-models.mjs
-- [ ] scripts/ensure-node-deps.mjs
-- [ ] scripts/ensure-phylactery-deps.mjs
-- [ ] scripts/ensure-port-free.mjs
-- [ ] scripts/ensure-unruh-deps.mjs
-- [ ] scripts/ensure-voicebox.mjs
+- [x] scripts/ensure-audio-models.mjs
+- [x] scripts/ensure-node-deps.mjs
+- [x] scripts/ensure-phylactery-deps.mjs
+- [x] scripts/ensure-port-free.mjs
+- [x] scripts/ensure-unruh-deps.mjs
+- [x] scripts/ensure-voicebox.mjs
 - [ ] scripts/import-entity.js
 - [ ] scripts/import-tome.js
-- [ ] scripts/lib/verify-python-peer.mjs
+- [x] scripts/lib/verify-python-peer.mjs
 - [ ] scripts/migrate-domain.mjs
-- [ ] scripts/pin-audio-models.mjs
+- [x] scripts/pin-audio-models.mjs
 - [ ] scripts/ponder-from-interests.mjs
 - [ ] scripts/ponder-once.mjs
 - [ ] scripts/pondering-loop-demo.mjs
