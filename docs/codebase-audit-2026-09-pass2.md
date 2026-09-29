@@ -441,6 +441,27 @@ writer's atomicity/merge like the reader's fixture suite.
   importing the same helper (repo-root ESM, so a shared module works). This is the
   CLAUDE.md "no copy-paste of substantial logic" rule — a copy-pasted helper
   function is exactly its threshold. **[med]** (copy-paste ×3 → shared helper)
+- **⚠️ `scripts/audit-wiring.mjs` check #4 ("settings synced but unread") is a
+  DEAD CHECK — it reads the stripped copy and can never fire.** Line 293 takes
+  `const app = code['public/app.js']` — the comment-and-literal-STRIPPED copy —
+  then extracts the synced key names from it with `block.matchAll(/'([A-Za-z][\w]*)'/g)`.
+  But `stripNonCode` replaces every string literal with `""` (line 132), and
+  `SERVER_SYNCED_KEYS` in `public/app.js:612` is an array of SINGLE-QUOTED string
+  literals (`'provider', 'apiKey', …`). In the stripped copy those are all gone,
+  so the single-quote regex matches nothing, `keys` is always empty, the
+  `for (const k of keys)` loop never runs, and the report prints a reassuring
+  `✓ setting unread (0)` while providing ZERO coverage. This is the *exact* trap
+  the same file's check #6 (line 333) and check #7 (line 387) carry loud ⚠️
+  comments about — "RAW app.js, not the stripped copy … reading `code` here found
+  zero synced keys and reported all 88 as drift" — both were fixed to read
+  `src[...]`; check #4 was the one that got the fix's mirror wrong (it wants raw
+  too, and instead reads stripped, so it under-reports to nothing rather than
+  over-reporting). It's the CLAUDE.md verification-law #8 failure ("noise is
+  indistinguishable from no check" — here, *silence* is) in the very tool built
+  to catch the ward's oversights: a whole class of synced-but-unread settings
+  drift goes unaudited behind a green tick. Fix: read `src['public/app.js']`
+  (raw), exactly as check #6 does two blocks down. **[med]** (dead check in a
+  maintenance tool — reports a pass while testing nothing)
 
 ---
 

@@ -218,12 +218,12 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] public/voice-call.js
 - [ ] public/voice-recorder.js
 - [ ] scripts/_unruh-mcp.mjs
-- [ ] scripts/audit-mcp-contracts.mjs
-- [ ] scripts/audit-wiring.mjs
+- [x] scripts/audit-mcp-contracts.mjs
+- [x] scripts/audit-wiring.mjs
 - [ ] scripts/build-prompt-catalog.mjs
-- [ ] scripts/build-voice-catalogue.mjs
+- [x] scripts/build-voice-catalogue.mjs
 - [ ] scripts/chat-with-ponderings.mjs
-- [ ] scripts/check-voice-ready.mjs
+- [x] scripts/check-voice-ready.mjs
 - [x] scripts/ensure-audio-models.mjs
 - [x] scripts/ensure-node-deps.mjs
 - [x] scripts/ensure-phylactery-deps.mjs
