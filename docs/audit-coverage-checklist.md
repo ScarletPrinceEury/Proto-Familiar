@@ -134,10 +134,10 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/tomes/tome-macros.js
 - [x] src/tomes/tome-store.js
 ### src/tracker
-- [ ] src/tracker/mood-threat.js
-- [ ] src/tracker/offer-tracker.js
-- [ ] src/tracker/tracker-cues.js
-- [ ] src/tracker/tracker-projections.js
+- [x] src/tracker/mood-threat.js
+- [x] src/tracker/offer-tracker.js
+- [x] src/tracker/tracker-cues.js
+- [x] src/tracker/tracker-projections.js
 ### src/util
 - [x] src/util/json-state.js
 ### src/village
