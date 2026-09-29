@@ -53,8 +53,9 @@ def _derive_prompt_label(filename: str) -> str:
 
 
 def get_all(conn: sqlite3.Connection | None = None, audience: str = "ward-private") -> dict[str, Any]:
-    """Return all identity files in entity-core's response shape:
-      { self: [{filename, content, promptLabel}], user: [...], ... }
+    """Return all identity files bucketed by category:
+      { self: [...], ward: [...], relationship: [...], custom: [...] }
+    each a list of {filename, content, promptLabel}.
     """
     own_conn = conn is None
     if own_conn:

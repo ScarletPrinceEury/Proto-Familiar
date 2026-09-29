@@ -13,7 +13,7 @@
  *
  * Recency-only (not relevance search): ponderings are a short list of
  * what's been on the Familiar's mind lately, not a knowledge base.
- * Entity-core's RAG handles relevance search for memories.
+ * Phylactery's recall handles relevance search for memories.
  */
 
 import path from 'path';
