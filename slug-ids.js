@@ -46,12 +46,6 @@ export function outboxSlugId(kind = 'item') {
 const CAMERA_NOISE = /^((img|pxl|dsc|photo|image|screenshot|capture)[-_ ]?[\d_\- ]+|screenshot[-_ ].*|[\d][\d_\- ]{5,})$/i;
 
 /**
- * Turn a human label into slug words — lowercased, non-alphanumerics collapsed
- * to single hyphens, trimmed, and capped to the first `maxWords` content words
- * so a long caption doesn't become a 12-word id. Returns '' when there's
- * nothing meaningful left (empty, punctuation-only, or camera-noise filename).
- */
-/**
  * The one slug transform every readable id shares: lowercase, non-alphanumeric
  * runs → single hyphen, edge hyphens trimmed. '' when nothing is left. The
  * callers add their own trims (word cap, length cap, first-line-only).
@@ -60,6 +54,12 @@ export function slugCore(text) {
   return String(text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+/**
+ * Turn a human label into slug words — lowercased, non-alphanumerics collapsed
+ * to single hyphens, trimmed, and capped to the first `maxWords` content words
+ * so a long caption doesn't become a 12-word id. Returns '' when there's
+ * nothing meaningful left (empty, punctuation-only, or camera-noise filename).
+ */
 export function slugifyLabel(label, { maxWords = 4 } = {}) {
   let s = String(label ?? '').trim();
   if (!s) return '';

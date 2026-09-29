@@ -40,9 +40,6 @@ export const CONTENT_TOPICS = [
 
 const _TOPIC_SET = new Set(CONTENT_TOPICS);
 
-// Two sensitivity levels, ordered. `open` = shareable within a tier that knows
-// this topic at all; `sensitive` = only a tier trusted with this topic deeply.
-export const CONTENT_LEVELS = ['open', 'sensitive'];
 const _LEVEL_RANK = { none: 0, open: 1, sensitive: 2 };
 
 /** Numeric rank of a level string (unknown/absent → 0 = "not permitted"). */

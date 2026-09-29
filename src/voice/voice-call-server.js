@@ -35,7 +35,7 @@ import { createSynthesizer } from './voice-synthesize.js';
 import { scoreThreatMessage } from '../safety/crisis-classifier.js';
 import { recordThreat } from '../safety/threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
+import { voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
 import { enqueueSessionByDay } from '../memory/memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
 import { sessionSlugId } from '../../slug-ids.js';

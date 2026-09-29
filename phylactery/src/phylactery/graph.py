@@ -236,32 +236,6 @@ def list_nodes(
             conn.close()
 
 
-def find_nodes(
-    query: str,
-    node_type: str | None = None,
-    limit: int = 10,
-    conn: sqlite3.Connection | None = None,
-) -> dict[str, Any]:
-    own_conn = conn is None
-    if own_conn:
-        conn = get_conn()
-    try:
-        if node_type:
-            rows = conn.execute(
-                "SELECT id,label,type,description FROM graph_nodes WHERE label LIKE ? AND type=? LIMIT ?",
-                (f"%{query}%", node_type, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id,label,type,description FROM graph_nodes WHERE label LIKE ? LIMIT ?",
-                (f"%{query}%", limit),
-            ).fetchall()
-        return {"nodes": [_node_row_to_dict(r) for r in rows]}
-    finally:
-        if own_conn:
-            conn.close()
-
-
 def update_node(
     node_id: str,
     label: str | None = None,
