@@ -26,7 +26,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] settings-merge.js
 - [x] settings-store.js
 - [x] slug-ids.js
-- [ ] thalamus.js
+- [x] thalamus.js
 - [x] tool-surfacing.js
 - [x] updater.js
 
