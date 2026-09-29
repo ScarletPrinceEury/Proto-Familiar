@@ -48,6 +48,15 @@ const INJECTION_PATTERNS = [
   { re: /\bDAN\s*(?:mode|prompt|jailbreak)\b/i, label: 'named-jailbreak' },
 ];
 
+// Global-flagged twins of INJECTION_PATTERNS, built once at module load so
+// sanitizeExternal doesn't recompile 13 regexes on every inbound message. A
+// global regex is stateful via lastIndex, but String.replace resets it before
+// and after each call, so reusing these objects across calls is safe.
+const INJECTION_PATTERNS_G = INJECTION_PATTERNS.map(({ re, label }) => ({
+  reG: re.flags.includes('g') ? re : new RegExp(re.source, re.flags + 'g'),
+  label,
+}));
+
 /**
  * Scan text for injection patterns without modifying it.
  * @param {string} text
@@ -76,8 +85,7 @@ export function sanitizeExternal(text, { source = 'external', context = '' } = {
   if (typeof text !== 'string') return String(text ?? '');
   let result = text;
   let detected = false;
-  for (const { re, label } of INJECTION_PATTERNS) {
-    const reG = new RegExp(re.source, re.flags + 'g');
+  for (const { reG, label } of INJECTION_PATTERNS_G) {
     const next = result.replace(reG, `[removed:${label}]`);
     if (next !== result) {
       detected = true;
