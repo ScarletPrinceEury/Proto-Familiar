@@ -55,6 +55,16 @@ and the rest of the Python were sweep-covered and sampled, not each line-read �
 the coverage log marks which. Given the uniformity found, per-file line-reads of
 those would very likely confirm cleanliness; happy to do named ones on request.
 
+### Python (phylactery + unruh) — CLEAN
+
+No bare `except:`, no `TODO`/`FIXME`, no debug `print()` in the largest modules
+(unruh/server.py, phylactery/memory.py). The `except…: pass` sites (memory/graph
+embedding-deletes, a defensive `json.loads`, the deliberate stdio clean-exit in
+both servers) are all benign best-effort/defensive, not dangerous swallows.
+`consolidate.py` is well-optimized (range fetches, single-statement prune, one
+rollup per period, no N+1). Graph/graduation/memory-dedup were deep-read during
+the ward-directed fix batch (#504). MCP contracts pass `audit:mcp`.
+
 ### Off-switch invariant — CLEAN
 
 All 13 background loops (`src/**/*-loop.js`) have a `PROTO_FAMILIAR_*_DISABLED`
