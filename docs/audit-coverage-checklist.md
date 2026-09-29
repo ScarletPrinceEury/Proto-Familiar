@@ -280,7 +280,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] unruh/src/unruh/seed.py
 - [ ] unruh/src/unruh/server.py
 - [x] unruh/src/unruh/templates.py
-- [ ] unruh/src/unruh/tracker.py
+- [x] unruh/src/unruh/tracker.py
 - [x] unruh/src/unruh/tracker_projection.py
 
 ## public non-JS
