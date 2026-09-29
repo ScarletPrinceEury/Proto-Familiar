@@ -176,8 +176,8 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/voice-chat-turn.js
 - [x] src/voice/voice-clips.js
 - [x] src/voice/voice-diarize.js
-- [ ] src/voice/voice-discord-adapter.js
-- [ ] src/voice/voice-discord-server.js
+- [x] src/voice/voice-discord-adapter.js
+- [x] src/voice/voice-discord-server.js
 - [x] src/voice/voice-embedding.js
 - [x] src/voice/voice-enroll.js
 - [x] src/voice/voice-extract.js
@@ -187,14 +187,14 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/voice-guest-watchdog.js
 - [x] src/voice/voice-models.js
 - [x] src/voice/voice-pin.js
-- [ ] src/voice/voice-presence.js
+- [x] src/voice/voice-presence.js
 - [x] src/voice/voice-speech.js
 - [x] src/voice/voice-synthesize.js
 - [x] src/voice/voice-tagging.js
 - [x] src/voice/voice-transcribe.js
 - [x] src/voice/voice-web-adapter.js
 - [x] src/voice/voiceprints.js
-- [ ] src/voice/voices.js
+- [x] src/voice/voices.js
 ### src/ward
 - [x] src/ward/ward-connections.js
 - [x] src/ward/ward-consent-queue.js

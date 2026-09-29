@@ -419,6 +419,14 @@ writer's atomicity/merge like the reader's fixture suite.
   is a RULE-A/RULE-B-class surface-parity gap, hence the flag. **[med]** (the
   CoT-dump the corollary exists to prevent, still live on the non-stream surface;
   worst on the voice path, where it's spoken)
+- **`voice-call-server.js:38` and `voice-discord-server.js:56` — dead
+  `ASR_MODEL_DIR` import in BOTH.** Both files import `ASR_MODEL_DIR` from
+  `voice-transcribe.js` and neither uses it — each builds the streaming-ASR model
+  dir inline as `path.join(rootDir, MODELS_SUBDIR, \`asr-streaming-${asrLang(...)}\`)`.
+  The identical dead import in both is the copy-paste tell: the web server's
+  import list was cloned for the Discord server, `ASR_MODEL_DIR` included, after
+  the code that used it had already moved to the inline form. Fix: drop the
+  symbol from both import statements. **[low]** (orphaned import ×2)
 
 ---
 
