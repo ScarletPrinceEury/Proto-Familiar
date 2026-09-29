@@ -521,6 +521,15 @@ writer's atomicity/merge like the reader's fixture suite.
   later. Worth raising alongside #5 when the ward returns to the graph
   audience-blindness question, since it's the same class. **[low]** (orphaned +
   latent audience gap; sibling of benched #5 — report only, NOT actioned)
+- **Stale `user:` response-key in two `identity_get_all` docstrings.**
+  `phylactery/src/phylactery/server.py:119` and `identity.py:56` both document
+  the response shape as `{ self: [...], user: [...] }`, but `get_all` buckets are
+  keyed `self` / `ward` / `relationship` / `custom` — `user` was renamed to `ward`
+  at Pillar F (identity.py:21 even says "rename complete"). Verified harmless:
+  `thalamus.js:2022` reads `id.ward`, so it's doc drift only, not a contract
+  mismatch — but a reader wiring a new consumer from the docstring would look for
+  `.user` and find nothing. Fix: say `ward:` in both docstrings. **[low]** (stale/
+  misleading comment)
 
 ---
 

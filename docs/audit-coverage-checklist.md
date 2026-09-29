@@ -263,7 +263,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] phylactery/src/phylactery/migrate_from_entity_core.py
 - [x] phylactery/src/phylactery/remember.py
 - [x] phylactery/src/phylactery/scheduler.py
-- [ ] phylactery/src/phylactery/server.py
+- [x] phylactery/src/phylactery/server.py
 - [x] phylactery/src/phylactery/snapshot.py
 - [x] phylactery/src/phylactery/village_registry.py
 - [ ] unruh/src/unruh/__init__.py
