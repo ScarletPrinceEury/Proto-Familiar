@@ -164,7 +164,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/offline-asr-models.js
 - [x] src/voice/voice-audio-features.js
 - [x] src/voice/voice-audio-tags.js
-- [ ] src/voice/voice-backend.js
+- [x] src/voice/voice-backend.js
 - [ ] src/voice/voice-bench-run.js
 - [ ] src/voice/voice-bench.js
 - [x] src/voice/voice-call-audience.js
@@ -179,7 +179,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/voice/voice-discord-adapter.js
 - [ ] src/voice/voice-discord-server.js
 - [x] src/voice/voice-embedding.js
-- [ ] src/voice/voice-enroll.js
+- [x] src/voice/voice-enroll.js
 - [x] src/voice/voice-extract.js
 - [x] src/voice/voice-fetch.js
 - [x] src/voice/voice-footprint.js
@@ -188,7 +188,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/voice-models.js
 - [x] src/voice/voice-pin.js
 - [ ] src/voice/voice-presence.js
-- [ ] src/voice/voice-speech.js
+- [x] src/voice/voice-speech.js
 - [ ] src/voice/voice-synthesize.js
 - [x] src/voice/voice-tagging.js
 - [ ] src/voice/voice-transcribe.js
