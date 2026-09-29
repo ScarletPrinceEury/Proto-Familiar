@@ -11,7 +11,7 @@
  * with a stubbed worker.
  */
 
-import { test } from 'node:test';
+import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -22,6 +22,15 @@ import { transcribeTimeoutMs, transcriptionAllowed, continuousListeningAllowed }
 import { materializeAttachments } from '../src/vision/vision.js';
 import { encodeWav, toMono, elapsedLabel, TARGET_RATE } from '../public/voice-recorder.js';
 import { parseWav } from '../src/voice/voice-audio-features.js';
+
+// The store writes under MEDIA_DIR; a dir under the OS tmpdir would mean a
+// rewrite started writing outside the store. Clear any leftover ONCE up front so
+// the guard below can't be tripped by cruft from a prior crashed run — then it
+// truly proves this run's saveAsset (exercised by the write-tests above it)
+// never leaked there.
+const STRAY_TMP_DIR = path.join(os.tmpdir(), 'proto-familiar-voice-notes');
+const dirExists = (p) => fs.stat(p).then(() => true, () => false);
+before(async () => { await fs.rm(STRAY_TMP_DIR, { recursive: true, force: true }); });
 
 // ── The kind derivation ───────────────────────────────────────────
 
@@ -309,11 +318,12 @@ test('PIPELINE: with voice hard-disabled, nothing is transcribed and the turn st
   assert.match(out.messages[0].content, /voice note/);
 });
 
-test('a temp dir is not left behind by these tests', async () => {
-  // Guard against a future rewrite that starts writing outside the store.
-  const stray = path.join(os.tmpdir(), 'proto-familiar-voice-notes');
-  await fs.rm(stray, { recursive: true, force: true });
-  assert.ok(true);
+test('the voice-note store never leaks a dir into the OS tmpdir', async () => {
+  // saveAsset writes under MEDIA_DIR; the write-tests above exercised it. If a
+  // rewrite made it (or anything here) write to os.tmpdir instead, this dir would
+  // exist. Assert its absence. (The old shape deleted the dir and asserted
+  // `true` — a cleanup wearing a test's clothes; it verified nothing.)
+  assert.ok(!(await dirExists(STRAY_TMP_DIR)), 'a voice-note write landed in os.tmpdir instead of the media store');
 });
 
 // ── What the first real voice note broke ──────────────────────────
