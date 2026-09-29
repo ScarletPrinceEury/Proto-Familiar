@@ -5,7 +5,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 (optimization/clarity). `x` = line-read; blank = pending. Durable across resets.
 
 ## Node — root
-- [ ] cerebellum.js
+- [x] cerebellum.js
 - [x] core-prompts.js
 - [x] entity-ref.js
 - [x] guide-chat.js
