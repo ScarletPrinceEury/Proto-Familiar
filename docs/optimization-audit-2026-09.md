@@ -74,6 +74,23 @@ _(appended as the audit proceeds)_
   is load-bearing context. Not flagged for a readability rewrite; the comment-concision
   passes below apply to *code* comments, not these specs.
 
+### Comment concision (measured, calibrated)
+
+Comment density in the big files (measured): cerebellum ~17%, discord-gateway
+~25%, server ~26%, thalamus ~28%, memorization ~29% — high vs a typical 10-15%.
+**But this is deliberate and mostly load-bearing.** CLAUDE.md explicitly values
+the "why" comments (the recorded post-mortems, the ward-signed rationale, the
+"don't revert this because…" notes) and states brevity is a *side-effect of
+clarity, not a goal*. A blanket trim would delete exactly the institutional
+memory the repo is built to preserve — several recorded incidents exist *because*
+a rationale wasn't written down.
+
+**Calibrated recommendation:** no mass cull. Trim only the narrow class of
+comments that **restate the code** ("the what") rather than explain "the why"
+(`// increment the counter` over `count++`). Those are genuinely rare here
+(spot-checks found mostly why-comments). **Verdict: the comment style is a
+feature, not debt; targeted per-file trims only.** **[low — mostly "leave it"]**
+
 ---
 
 ## Coverage log
