@@ -119,13 +119,13 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 ### src/server
 - [x] src/server/pid-file.js
 ### src/sessions
-- [ ] src/sessions/last-activity.js
-- [ ] src/sessions/log-import.js
-- [ ] src/sessions/proactive-session.js
-- [ ] src/sessions/prompt-capture.js
-- [ ] src/sessions/session-bindings.js
-- [ ] src/sessions/session-log.js
-- [ ] src/sessions/session-search.js
+- [x] src/sessions/last-activity.js
+- [x] src/sessions/log-import.js
+- [x] src/sessions/proactive-session.js
+- [x] src/sessions/prompt-capture.js
+- [x] src/sessions/session-bindings.js
+- [x] src/sessions/session-log.js
+- [x] src/sessions/session-search.js
 ### src/tomes
 - [ ] src/tomes/manual-tome.js
 - [ ] src/tomes/tome-graduation-loop.js
