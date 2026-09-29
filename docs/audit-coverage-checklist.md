@@ -269,11 +269,11 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] unruh/src/unruh/__init__.py
 - [x] unruh/src/unruh/__main__.py
 - [x] unruh/src/unruh/db.py
-- [ ] unruh/src/unruh/gcal.py
+- [x] unruh/src/unruh/gcal.py
 - [x] unruh/src/unruh/handoff.py
 - [ ] unruh/src/unruh/ical.py
 - [x] unruh/src/unruh/icalwrite.py
-- [ ] unruh/src/unruh/intention.py
+- [x] unruh/src/unruh/intention.py
 - [ ] unruh/src/unruh/interest.py
 - [x] unruh/src/unruh/location.py
 - [ ] unruh/src/unruh/schedule.py
