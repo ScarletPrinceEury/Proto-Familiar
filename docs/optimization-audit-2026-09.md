@@ -30,6 +30,20 @@ newcomer would genuinely stumble on · **[med]** a worthwhile tidy · **[low]** 
 
 _(appended as the audit proceeds)_
 
+### Root Node utilities
+
+- **`own-files.js:106-136` `readOwnFile` — redundant second `fs.stat`.** Line 114
+  already stats the file (`st.size` is the full size); line 132 re-stats only to
+  compute `truncated`. Reuse the first: `truncated = st.size > buf.length`, drop
+  the second stat + its try/catch. One fewer syscall per file read; behaviour
+  identical. **[low]**
+- **Comment-density note (not yet a fix):** several root utilities carry a
+  15-20-line header comment above a 4-8-line function (`macros.js`,
+  `phylactery-result.js`). These are genuine "why" (fallback rationale, the
+  silent-failure class) and read well, so they *stay* — noting only that the
+  house style runs comment-heavy, which the per-file passes below weigh case by
+  case rather than trimming reflexively.
+
 ---
 
 ## Coverage log
