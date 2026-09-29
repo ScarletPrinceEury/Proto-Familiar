@@ -69,7 +69,8 @@ reoccurring.
 - [CDP mode: driving the ward's own Chrome](browser-cdp-mode) — the browser milestone's §9
   Horizon #2 alternate engine backing: designed in full, deliberately parked while the owned
   SSRF-proxy floor it cannot rely on proved itself elsewhere, then shipped to spec at
-  0.11.31-alpha behind a forced single-domain allowlist and two human gates nothing can fake.
+  0.11.31-alpha behind a forced single-domain allowlist and two human gates nothing can fake —
+  still pending the live desktop shakeout that would verify the actual attach-and-drive.
 
 ## The Initiative build spec: wait-streak and contact rhythm
 
