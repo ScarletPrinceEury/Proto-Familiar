@@ -27,7 +27,36 @@ Severity: **[high]** safety/data/privacy or a real bug · **[med]** worth fixing
 
 _(appended as the audit proceeds)_
 
-### Settings access — centralization is incomplete (headline finding)
+### Orphaned exports (dead-export scan: 3 of 1433 — very clean)
+
+A heuristic scan of all 1433 Node exports found only 3 with no caller anywhere
+in the tree; each verified by hand:
+
+- **`thalamus.js:1134` `supersedeTrackerEntry({id})` — dead.** Wraps Unruh's
+  `tracker_supersede`, but the Familiar's actual supersede path is `tracker_log`
+  with a `supersedes` arg (`cerebellum.js:4023-4030` threads it through). So this
+  wrapper is orphaned — the capability is reached another way. Remove it (the
+  Unruh `tracker_supersede` tool may still serve other MCP clients, so leave the
+  Python side). **[med]**
+- **`browser/browser-driver.js:813` `listTabs()` — orphaned; wire-or-remove.** No
+  `list_tabs` tool, no caller. This is the "dead code that looks like care"
+  case: either it's a genuine browser capability that was built but never
+  surfaced as a Familiar tool (then wire it, per "every capability reachable"),
+  or it's vestigial (then remove). **Ward/design call which.** **[med]**
+- **`memory/content-tags.js:45` `CONTENT_LEVELS = ['open','sensitive']` — dead
+  constant, and a near-miss.** Never imported; meanwhile `isLevel(l)` (:54)
+  hardcodes `l === 'open' || l === 'sensitive'` inline instead of referencing it.
+  Fix: `isLevel` → `return CONTENT_LEVELS.includes(l)` (wires the constant and
+  removes the duplicated literal), or delete `CONTENT_LEVELS`. **[low]**
+
+### Silent-catch anti-pattern — CLEAN
+
+Swept every truly-empty `catch {}` (the 0.9-vision-post-mortem class). All are
+benign best-effort paths — browser/proxy teardown `close()`, `localStorage` in a
+private window, `mkdir`, optional-upgrade reads that fall to a floor. None
+swallow a DOING-path error of the dangerous kind. (Minor: `ponder-research.js`
+109/118 skip a failed search/read silently while the success path logs — a
+parity-of-observability nit, noted in the opt report, not a bug.)
 
 The pt.1 refactor (PR #500) extracted `readSettingsSync` + `SETTINGS_FILE` into
 the `settings-store.js` leaf module — but only routed **thalamus's** 8 sites
@@ -92,9 +121,9 @@ writer's atomicity/merge like the reader's fixture suite.
 
 Files/areas line-read this pass (✓ = done, ◐ = partial, ☐ = not yet):
 
-- ☐ root Node: server.js, thalamus.js, cerebellum.js, relative-time.js, tool-surfacing.js, macros.js, message-sanitize.mjs, providers.js, llm-call.js, organs.js, own-files.js, slug-ids.js, settings-store.js, mcp-reconnector.js, phylactery-result.js, name-field.js, updater.js
-- ☐ src/safety, src/memory, src/pondering, src/schedule, src/village, src/vision, src/voice, src/weather, src/search, src/browser, src/gcal, src/sessions, src/discord, src/server
-- ☐ phylactery/src/phylactery/*.py
-- ☐ unruh/src/unruh/*.py
-- ☐ public/ (app.js, graph-map.js, voice-call.js, index.html, style.css)
+- ◐ root Node: line-read macros, slug-ids, phylactery-result, name-field, organs, own-files, message-sanitize, relative-time, providers, settings-store, mcp-reconnector. (server/thalamus/cerebellum deep-audited in the recent PR work; re-scanned here for the settings-access + dead-export sweeps.)
+- ◐ src/*: cross-cutting sweeps (debt, philosophy, wiring, empty-catch, dead-export, settings-access) cover the whole tree; surface-context + ponder-research line-read. Voice / browser / discord-internals / village / schedule / weather / gcal / sessions not yet fully line-read (flagged clean by the sweeps; no per-file deep-read yet).
+- ◐ phylactery: graph.py, graduation.py, consolidate.py (structure) read; memory.py/server.py/identity/remember/backup partial.
+- ☐ unruh/src/unruh/*.py — not yet this pass (deep-read in the Theme-1 work earlier).
+- ◐ public/: app.js audited in the WebUI PRs; graph-map/voice-call not this pass.
 - ☐ scripts/
