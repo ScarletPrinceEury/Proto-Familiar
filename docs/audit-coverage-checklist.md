@@ -182,10 +182,10 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/voice/voice-enroll.js
 - [x] src/voice/voice-extract.js
 - [x] src/voice/voice-fetch.js
-- [ ] src/voice/voice-footprint.js
-- [ ] src/voice/voice-generation.js
+- [x] src/voice/voice-footprint.js
+- [x] src/voice/voice-generation.js
 - [x] src/voice/voice-guest-watchdog.js
-- [ ] src/voice/voice-models.js
+- [x] src/voice/voice-models.js
 - [x] src/voice/voice-pin.js
 - [ ] src/voice/voice-presence.js
 - [ ] src/voice/voice-speech.js
