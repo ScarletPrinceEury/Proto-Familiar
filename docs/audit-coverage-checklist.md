@@ -127,12 +127,12 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/sessions/session-log.js
 - [x] src/sessions/session-search.js
 ### src/tomes
-- [ ] src/tomes/manual-tome.js
-- [ ] src/tomes/tome-graduation-loop.js
-- [ ] src/tomes/tome-graduation.js
-- [ ] src/tomes/tome-lore.js
-- [ ] src/tomes/tome-macros.js
-- [ ] src/tomes/tome-store.js
+- [x] src/tomes/manual-tome.js
+- [x] src/tomes/tome-graduation-loop.js
+- [x] src/tomes/tome-graduation.js
+- [x] src/tomes/tome-lore.js
+- [x] src/tomes/tome-macros.js
+- [x] src/tomes/tome-store.js
 ### src/tracker
 - [ ] src/tracker/mood-threat.js
 - [ ] src/tracker/offer-tracker.js

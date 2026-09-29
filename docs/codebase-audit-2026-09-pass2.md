@@ -230,6 +230,25 @@ in the tree; each verified by hand:
   rather than fixing it. Clean fix: delete line 141 and the unused helper (:27-32).
   No behaviour change. **[low]**
 
+### src/tomes
+
+- **`tomes/tome-graduation.js:24-27` header comment is STALE — says graph routing
+  is deferred, but it shipped.** The module header reads *"v1 routes to identity +
+  memory only. Autonomous graph construction … is the one risky route and is
+  deferred to v2 — a graph-worthy fact files to identity prose for now."* But
+  `home:'graph'` is fully implemented: `HOMES` includes `'graph'` (:87),
+  `routeDecision` dispatches it to `routeGraph` (:170-173),
+  `resolveOrCreateNode`/`routeGraph` are complete (:112-150), the loop wires
+  `searchGraphNodes/createGraphNode/createGraphEdge/getGraphSubgraph` into `deps`
+  (tome-graduation-loop.js:150), and `buildGraduationPrompt` offers `home "graph"`
+  with a `relations` format (tome-graduation-loop.js:75, :95). So the "deferred to
+  v2 / files to identity prose for now" claim inverts the truth — a reader trusting
+  the header would think graph graduation is off when it's live. Also
+  `parseGraduationDecision`'s docstring (:74) lists the homes without `'graph'`
+  though the code accepts it. Fix: update the header to say graph routing is
+  implemented, and add `graph` to the parse docstring's home list. Comment-only.
+  **[low — stale/inverted comment in a ward-facing autonomous path]**
+
 ### Silent-catch anti-pattern — CLEAN
 
 Swept every truly-empty `catch {}` (the 0.9-vision-post-mortem class). All are
