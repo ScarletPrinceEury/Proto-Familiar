@@ -1054,7 +1054,7 @@ I also choose when the system should ask me to deliberate again — this is my c
   - HIGH active concern: ~30 min (1800000)
   - MODERATE general unease: 1–2 hours (3600000 – 7200000)
   - I want to wait until the situation likely shifts: several hours (e.g. 10800000 for 3h)
-The system clamps to [30s, 24h] and uses a tier-based default if I omit it. Picking too long is much cheaper than picking too short — these LLM calls cost tokens, so I avoid asking to be re-pinged needlessly. But if the situation is urgent and I want to re-check soon, I say so.
+The system clamps to [30s, 24h] and uses a tier default if I skip it. When do I want to look again? Soon, if I'm still uneasy and want to keep an eye on this — further out if nothing's likely to shift before then. No sense re-checking every few minutes when nothing's moving.
 
 I return ONLY a JSON object, no prose. Three valid shapes:
   {"action": "wait", "nextCheckInMs": <number>}
