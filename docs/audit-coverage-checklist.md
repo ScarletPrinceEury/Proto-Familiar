@@ -62,15 +62,15 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/gcal/gcal-sync-loop.js
 - [x] src/gcal/gcal-sync-status.js
 ### src/memory
-- [ ] src/memory/content-regate-loop.js
-- [ ] src/memory/content-regate.js
-- [ ] src/memory/content-tags.js
-- [ ] src/memory/graph-vocab.js
-- [ ] src/memory/hippocampus.js
-- [ ] src/memory/memorization.js
-- [ ] src/memory/memory-coverage.js
-- [ ] src/memory/memory-sweep-loop.js
-- [ ] src/memory/recent-ponderings.js
+- [x] src/memory/content-regate-loop.js
+- [x] src/memory/content-regate.js
+- [x] src/memory/content-tags.js
+- [x] src/memory/graph-vocab.js
+- [x] src/memory/hippocampus.js
+- [x] src/memory/memorization.js
+- [x] src/memory/memory-coverage.js
+- [x] src/memory/memory-sweep-loop.js
+- [x] src/memory/recent-ponderings.js
 ### src/pondering
 - [ ] src/pondering/interest-picker.js
 - [x] src/pondering/ponder-research.js

@@ -99,6 +99,25 @@ in the tree; each verified by hand:
   hardcodes `l === 'open' || l === 'sensitive'` inline instead of referencing it.
   Fix: `isLevel` → `return CONTENT_LEVELS.includes(l)` (wires the constant and
   removes the duplicated literal), or delete `CONTENT_LEVELS`. **[low]**
+  *Confirmed on the full read: `CONTENT_LEVELS` appears only in its own
+  definition + two docs; `_LEVEL_RANK` (:46) also hardcodes the same two literals.
+  If keeping the constant, wire both `isLevel` and (optionally) the rank map to it.*
+- **`memory/memory-sweep-loop.js:43` hard-requires `apiKey` — same keyless gap as
+  provider-models.** `runMemorySweepTick` gates on
+  `if (!conn?.apiKey || !conn?.provider || !conn?.model) return 'no-connection'`,
+  so on a keyless local setup (ollama/lmstudio in `PROVIDER_KEYLESS`) the coverage
+  sweep never runs — yet the very enqueue it calls (`enqueueMemorization`, :1543)
+  correctly gates on `providerRequiresKey(provider)` and would accept the keyless
+  job. So the subsystem is internally inconsistent: the loop blocks a slice its own
+  worker would happily process. Fix: gate the loop on `providerRequiresKey` too
+  (same one-liner as the provider-models fix). Part of the keyless-provider cluster
+  (provider-models.js:34, this). **[med]**
+- **`memory/recent-ponderings.js:15` stale comment — "Entity-core's RAG".** The
+  header comment says *"Entity-core's RAG handles relevance search for memories."*
+  entity-core is retired (Phylactery is the canonical store now, per CLAUDE.md's
+  0.6.x milestone note). Pure comment drift — no code impact — but it names a
+  component that no longer exists, so a future reader chasing "entity-core" finds
+  nothing. Fix: "Phylactery's recall handles relevance search." **[low]**
 
 ### Silent-catch anti-pattern — CLEAN
 
