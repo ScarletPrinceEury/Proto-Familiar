@@ -542,6 +542,19 @@ writer's atomicity/merge like the reader's fixture suite.
   are UTC — exactly the confusion the local-naive migration exists to prevent.
   Fix: update lines 9-11 to say local-naive. **[low]** (stale comment contradicting
   the code)
+- **`VACUUM INTO` path escaping is inconsistent across the two peers (defensive
+  only — neither is exploitable).** Unruh's `server.py:1372` `db_snapshot` escapes
+  the destination before interpolating it into `VACUUM INTO '<path>'`
+  (`destPath.replace("'", "''")`, with a comment explaining why). Phylactery's
+  equivalents don't: `phylactery/server.py:1015` `db_snapshot` and
+  `phylactery/snapshot.py:37` / `backup.py:110` all do `f"VACUUM INTO '{path}'"`
+  raw. VACUUM INTO can't bind its target as a parameter, so string interpolation
+  is unavoidable — but every one of these paths is machine-generated (holistic-
+  backup temp files, `now_iso()`-derived snapshot names), so none can contain a
+  quote and none is a real injection. Purely a consistency/defence-in-depth nit:
+  Phylactery could adopt Unruh's one-line escape so the pattern reads the same
+  everywhere and stays safe if a future caller ever passes a less-controlled path.
+  **[low]** (defensive consistency, not a live vuln)
 
 ---
 
