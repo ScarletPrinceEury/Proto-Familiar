@@ -260,7 +260,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] phylactery/src/phylactery/graph.py
 - [x] phylactery/src/phylactery/identity.py
 - [x] phylactery/src/phylactery/memory.py
-- [ ] phylactery/src/phylactery/migrate_from_entity_core.py
+- [x] phylactery/src/phylactery/migrate_from_entity_core.py
 - [x] phylactery/src/phylactery/remember.py
 - [x] phylactery/src/phylactery/scheduler.py
 - [x] phylactery/src/phylactery/server.py
