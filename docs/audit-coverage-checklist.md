@@ -149,12 +149,12 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/village/village.js
 - [x] src/village/villager-consent.js
 ### src/vision
-- [ ] src/vision/gemini-file-api.js
-- [ ] src/vision/media-retention-loop.js
-- [ ] src/vision/media-retention.js
-- [ ] src/vision/media.js
-- [ ] src/vision/vision.js
-- [ ] src/vision/zai-vision.js
+- [x] src/vision/gemini-file-api.js
+- [x] src/vision/media-retention-loop.js
+- [x] src/vision/media-retention.js
+- [x] src/vision/media.js
+- [x] src/vision/vision.js
+- [x] src/vision/zai-vision.js
 ### src/voice
 - [ ] src/voice/audio-frame.js
 - [ ] src/voice/audio-worker-current.js

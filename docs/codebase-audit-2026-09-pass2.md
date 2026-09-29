@@ -235,6 +235,25 @@ in the tree; each verified by hand:
   rather than fixing it. Clean fix: delete line 141 and the unused helper (:27-32).
   No behaviour change. **[low]**
 
+### src/vision
+
+- **FLAG for ward — image→threat scoring uses the regex-only `scoreMessage`, not
+  the 0.12.0 ML seam `scoreThreatMessage`.** `vision.js scoreImageDescriptionThreat`
+  (ward-signed §15.1) scores an image's description with `scoreFn = scoreMessage`
+  (crisis-signals regex floor only). But `crisis-classifier.js`'s 0.12.0 header
+  says `scoreThreatMessage` is "the live seam: EVERY place a message's threat is
+  scored … routes the regex floor + the ML read through here" — and its own list
+  of sites (chat, Discord ward, both voice paths, the diagnostics tracer) omits
+  vision. So the image-description path is the one threat-scoring site that does
+  NOT get the ML classifier: distress the lexicon misses in an image description
+  won't raise the tier, where the same words typed in chat would. This MAY be
+  deliberate (CLAUDE.md's §15.1 note does say image scoring uses "the ward's own
+  `scoreMessage`", and vision predates the 0.12.0 seam), but it reads as an
+  un-migrated site against the "every site routes through `scoreThreatMessage`"
+  invariant. `scoreFn` is injectable, so the change is a one-liner — but it's a
+  ward-signed safety path, so **flag, not fix:** the ward confirms whether image
+  descriptions should also get the ML read. **[low-med — ward-signed consistency question]**
+
 ### src/village
 
 - **`village/village.js:793,927` villager ids are `randomUUID()`, but they're
