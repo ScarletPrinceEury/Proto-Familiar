@@ -252,7 +252,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] phylactery/src/phylactery/__main__.py
 - [x] phylactery/src/phylactery/audience.py
 - [x] phylactery/src/phylactery/backup.py
-- [ ] phylactery/src/phylactery/consolidate.py
+- [x] phylactery/src/phylactery/consolidate.py
 - [x] phylactery/src/phylactery/content_gate.py
 - [x] phylactery/src/phylactery/db.py
 - [x] phylactery/src/phylactery/embed.py
