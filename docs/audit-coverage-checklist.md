@@ -196,13 +196,13 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/voice/voiceprints.js
 - [ ] src/voice/voices.js
 ### src/ward
-- [ ] src/ward/ward-connections.js
-- [ ] src/ward/ward-consent-queue.js
+- [x] src/ward/ward-connections.js
+- [x] src/ward/ward-consent-queue.js
 ### src/warmth
-- [ ] src/warmth/reach-out-log.js
-- [ ] src/warmth/reachout-loop.js
-- [ ] src/warmth/reachout.js
-- [ ] src/warmth/villager-context.js
+- [x] src/warmth/reach-out-log.js
+- [x] src/warmth/reachout-loop.js
+- [x] src/warmth/reachout.js
+- [x] src/warmth/villager-context.js
 ### src/weather
 - [ ] src/weather/weather-format.js
 - [ ] src/weather/weather-mirror.js
