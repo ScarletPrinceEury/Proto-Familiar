@@ -24,13 +24,6 @@
 
 const DAY_MS = 24 * 3600 * 1000;
 
-function toMs(v) {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
-  if (typeof v === 'string') return new Date(v).getTime();
-  if (v instanceof Date) return v.getTime();
-  return NaN;
-}
-
 /**
  * Add days to a Date returning a new Date. Preserves time-of-day in
  * the local TZ so a recurring event "every Tuesday at 9am" stays at
@@ -138,8 +131,6 @@ export function localDateKey(ms) {
 export function expandOccurrences(node, fromMs, toMs) {
   const rec = node?.payload?.recurrence;
   if (!rec || typeof rec !== 'object') return [];
-  const anchorMs = toMs.toMs ? toMs.toMs(node.when) : new Date(node.when ?? '').getTime();
-  // Use our local toMs since the param name clashes with the function
   const anchor = new Date(node.when ?? '');
   if (!Number.isFinite(anchor.getTime())) return [];
 
