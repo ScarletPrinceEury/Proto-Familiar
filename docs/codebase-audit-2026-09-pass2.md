@@ -88,10 +88,12 @@ in the tree; each verified by hand:
   `list_tabs` tool, no caller. This is the "dead code that looks like care"
   case: either it's a genuine browser capability that was built but never
   surfaced as a Familiar tool (then wire it, per "every capability reachable"),
-  or it's vestigial (then remove). **Ward/design call which.** **[med]** —
-  *cross-check (tool-surfacing.js): the surfaced browser tool is `browse_tabs`
-  (module `browser`), whose executor path does not call `listTabs`; confirms the
-  export is unwired.*
+  or it's vestigial (then remove). **[med] — leans REMOVE.** *Confirmed on the
+  full read: `browse_tabs` calls `driver.tabsDetailed()` (browser-driver.js:819),
+  which supersedes `listTabs`; nothing else calls `listTabs`. It's also subtly
+  broken — it reads `pg.__pfTitle`, a field never set anywhere (only
+  `pg.__pfGeneration` exists), so it would return blank titles. Dead + stale:
+  delete it.*
 - **`memory/content-tags.js:45` `CONTENT_LEVELS = ['open','sensitive']` — dead
   constant, and a near-miss.** Never imported; meanwhile `isLevel(l)` (:54)
   hardcodes `l === 'open' || l === 'sensitive'` inline instead of referencing it.
@@ -147,6 +149,24 @@ writer's atomicity/merge like the reader's fixture suite.
   Familiar-facing prompt content — the first-person / "my human" convention holds
   tree-wide (confirms the prior pass).
 
+- **Unused `__dirname` after the `REPO_ROOT` refactor — 36 files, tree-wide.**
+  When the repo-root path was centralised into `repo-root.js`, these modules
+  switched to building paths from the imported `REPO_ROOT` but kept their old
+  `const __dirname = path.dirname(fileURLToPath(import.meta.url))` line, now dead
+  (a scripted check: `__dirname` appears exactly once in each — the declaration
+  — and nowhere else). The `fileURLToPath` import above it is dead too. Harmless
+  but it's 36 copies of a vestige. The full list (verified): `src/browser/`
+  {browser-audit, browser-grants, browser-driver, page-watch}, `src/voice/`
+  {voice-transcribe, voice-enroll, call-engine, voice-pin, voice-tagging,
+  voiceprints}, `src/safety/` {contact-baselines, spine-states, outbox,
+  threat-tracker, wait-streak}, `src/sessions/` {last-activity, session-bindings},
+  `src/village/` {knocks, village}, `src/vision/` {vision, media},
+  `src/gcal/` {gcal-sync-status, gcal-projection, gcal-google, gcal-attribution},
+  `src/pondering/` {ponder-web-budget, pondering, reflection-events},
+  `src/memory/` {content-regate, recent-ponderings, memory-coverage,
+  memorization}, `src/tomes/tome-graduation-loop`, `src/schedule/stewardship`,
+  `src/warmth/reach-out-log`. Drop the two dead lines in each. **[low]** — a
+  clean one-pass sweep, no behavioral risk.
 - **`slug-ids.js:48-58` — stranded/duplicated JSDoc.** There are two doc blocks
   stacked above `slugCore`: the first (48-53, *"Turn a human label into slug
   words… capped to the first maxWords…"*) actually describes `slugifyLabel`, but

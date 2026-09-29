@@ -32,22 +32,22 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 
 ## Node — src/ (by dir)
 ### src/backup
-- [ ] src/backup/holistic-backup.js
+- [x] src/backup/holistic-backup.js
 ### src/browser
-- [ ] src/browser/browser-audit.js
-- [ ] src/browser/browser-cdp-arm.js
-- [ ] src/browser/browser-driver.js
-- [ ] src/browser/browser-grants.js
-- [ ] src/browser/browser-lens.js
-- [ ] src/browser/browser-proxy.js
-- [ ] src/browser/browser.js
-- [ ] src/browser/cdp-launcher.js
-- [ ] src/browser/page-watch-loop.js
-- [ ] src/browser/page-watch.js
-- [ ] src/browser/reader-doctor.js
-- [ ] src/browser/reader-router.js
-- [ ] src/browser/reddit-reader.js
-- [ ] src/browser/web-fetch-util.js
+- [x] src/browser/browser-audit.js
+- [x] src/browser/browser-cdp-arm.js
+- [x] src/browser/browser-driver.js
+- [x] src/browser/browser-grants.js
+- [x] src/browser/browser-lens.js
+- [x] src/browser/browser-proxy.js
+- [x] src/browser/browser.js
+- [x] src/browser/cdp-launcher.js
+- [x] src/browser/page-watch-loop.js
+- [x] src/browser/page-watch.js
+- [x] src/browser/reader-doctor.js
+- [x] src/browser/reader-router.js
+- [x] src/browser/reddit-reader.js
+- [x] src/browser/web-fetch-util.js
 ### src/discord
 - [ ] src/discord/discord-emotes.js
 - [ ] src/discord/discord-gateway.js
