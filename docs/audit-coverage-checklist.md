@@ -22,7 +22,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] providers.js
 - [x] relative-time.js
 - [x] repo-root.js
-- [ ] server.js
+- [x] server.js
 - [x] settings-merge.js
 - [x] settings-store.js
 - [x] slug-ids.js
