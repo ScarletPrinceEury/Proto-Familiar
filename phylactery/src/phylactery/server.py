@@ -116,7 +116,8 @@ def identity_get_all() -> dict[str, Any]:
     """I use this to read my full identity — all the files that define who I am,
     in canonical order. I reach for it when I need to review or reflect on my own
     character, history, or constraints.
-    Response shape: { self: [{filename, content, promptLabel}], user: [...], ... }
+    Response shape: { self: [...], ward: [...], relationship: [...], custom: [...] },
+    each a list of {filename, content, promptLabel}.
     """
     return ident.get_all(conn=_c())
 

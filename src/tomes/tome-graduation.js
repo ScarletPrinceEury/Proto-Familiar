@@ -20,10 +20,11 @@
  *   - Writes go through thalamus's wrappers (injected here). A tome entry
  *     is tidied ONLY after its route is confirmed — a failed route leaves
  *     it intact to retry.
- *   - v1 routes to identity + memory only. Autonomous graph construction
- *     (resolve/create both endpoints + an edge from free text) is the one
- *     risky route and is deferred to v2 — a graph-worthy fact files to
- *     identity prose for now.
+ *   - Routes to identity, memory, AND the knowledge graph. Graph routing
+ *     (resolve-or-create both endpoints + an edge from free text) uses the
+ *     same exact-label reuse and edge-dedup discipline as the chat graph
+ *     tools, so a graph-worthy fact lands as a real relation, not identity
+ *     prose.
  *
  * The behavioural surface lives in pure, fully-injectable functions so the
  * loop wrapper (tome-graduation-loop.js) is a thin driver and the routing

@@ -3,7 +3,9 @@
 Reads `seed_routine.json` (shipped in the package) and writes it
 into the DB as `phase` nodes plus anchor `event` nodes connected
 via `during` edges. Times in the JSON are HH:MM in the user's
-local timezone; we stamp them to today's date in UTC at load time.
+local timezone; we stamp them to today's date LOCAL-naive at load
+time (no UTC conversion — Unruh's time model is the ward's local
+wall-clock; see `_local_today`).
 
 Idempotent enough to be safe to call without thinking: by default,
 seeding skips phases that already exist with the same label.
@@ -20,7 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .db import get_conn, now_local, to_naive_local

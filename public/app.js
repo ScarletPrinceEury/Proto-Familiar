@@ -13277,9 +13277,9 @@ async function teSaveScheduleNode() {
   const type  = $('te-sched-type').value;
   const label = $('te-sched-label').value.trim();
   // <input type="datetime-local"> hands back "YYYY-MM-DDTHH:MM" (no
-  // offset, interpreted as user's local time). Convert to ISO UTC so
-  // the server stores absolute moments and the Familiar reads the
-  // right wall-clock no matter where the server's TZ is.
+  // offset, interpreted as user's local time). Keep it LOCAL-NAIVE —
+  // teDatetimeLocalToNaive strips any offset so the server stores the
+  // ward's plain wall-clock (Unruh's time model; no toISOString here).
   const whenLocal = $('te-sched-when').value;
   const endLocal  = $('te-sched-end').value;
   const when = teDatetimeLocalToNaive(whenLocal);
@@ -13346,9 +13346,10 @@ async function teLoadRoutine() {
       if (!prev || (n.when || '') > (prev.when || '')) byLabel.set(n.label, n);
     }
     const phases = Array.from(byLabel.values()).sort((a, b) => {
-      // Sort by local time-of-day, not by raw UTC HH:MM in the
-      // ISO string (slicing the ISO returns UTC hours, which lie
-      // in any non-UTC timezone).
+      // Sort by local time-of-day via getHours() — Date parses both
+      // local-naive rows and any legacy offset-bearing row correctly.
+      // Slicing the ISO string instead would sort a legacy offset row
+      // by the wrong hour.
       const da = new Date(a.when || 0); const db = new Date(b.when || 0);
       const ta = da.getHours() * 60 + da.getMinutes();
       const tb = db.getHours() * 60 + db.getMinutes();
@@ -13380,9 +13381,10 @@ async function teLoadRoutine() {
       const recurTag = recurLabel === 'daily'
         ? ''
         : ` <span style="font-size:0.7em;opacity:0.7;padding:1px 5px;border:1px solid var(--border-subtle,#2a2a2a);border-radius:3px">${teEscapeHtml(recurLabel)}</span>`;
-      // Show time-of-day in the USER'S local TZ (storage is UTC).
-      // Slicing the raw ISO string would print UTC hours and lie to
-      // anyone not in UTC.
+      // Show time-of-day in the user's local clock via teIsoToLocalHhMm.
+      // Storage is LOCAL-NAIVE; Date also handles legacy offset-bearing
+      // rows, so this reads correctly for both. A raw ISO-string slice
+      // would print the wrong hour for a legacy offset row.
       const whenT   = teEscapeHtml(teIsoToLocalHhMm(p.when));
       const endT    = teEscapeHtml(teIsoToLocalHhMm(p.end));
       return `
@@ -13714,9 +13716,9 @@ async function teEditPhase(id, phase) {
   if (!phase) return;
   const label = prompt('Phase label:', phase.label);
   if (label == null) return;
-  // Display existing times in user's LOCAL TZ so what they see is what
-  // they're editing (the storage is UTC, but the user thinks in their
-  // own clock).
+  // Display existing times in the user's local clock so what they see is
+  // what they're editing (storage is LOCAL-NAIVE — teIsoToLocalHhMm also
+  // handles any legacy offset-bearing row).
   const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoToLocalHhMm(phase.when));
   if (whenT == null) return;
   const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoToLocalHhMm(phase.end));
