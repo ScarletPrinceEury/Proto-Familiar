@@ -257,7 +257,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] phylactery/src/phylactery/db.py
 - [x] phylactery/src/phylactery/embed.py
 - [x] phylactery/src/phylactery/graduation.py
-- [ ] phylactery/src/phylactery/graph.py
+- [x] phylactery/src/phylactery/graph.py
 - [x] phylactery/src/phylactery/identity.py
 - [x] phylactery/src/phylactery/memory.py
 - [ ] phylactery/src/phylactery/migrate_from_entity_core.py

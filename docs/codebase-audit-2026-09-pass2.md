@@ -506,6 +506,21 @@ writer's atomicity/merge like the reader's fixture suite.
   subcommand to call the real module's entry, or drop it and its help line and
   point at `import-entity`. **[low]** (stale/misleading placeholder for a shipped
   feature)
+- **`phylactery/src/phylactery/graph.py:239` `find_nodes` — dead function AND
+  audience-blind (a latent gate-gap if it's ever wired up).** `find_nodes` has NO
+  callers anywhere in the Python source (grep across `phylactery/` finds only its
+  own `def` and a stale `.pyc`) — it's orphaned. It's also the one node-lookup in
+  the file that does NOT apply `audience_in_sql`: its live siblings `search_nodes`
+  (:47) and `list_nodes` (:205) both gate on `audiences`, but `find_nodes` runs a
+  bare `label LIKE ?` with no audience clause. Harmless *today* because nothing
+  calls it — but that's exactly how the benched item #5 (`_resolve_node`
+  audience-blindness) can spread: the next person who needs a label lookup on a
+  gated (villager) path could reach for `find_nodes`, see a clean helper, and wire
+  it in without noticing its siblings gate and it doesn't. Two clean fixes:
+  delete it (dead), or add the `audiences` gate now so it can't become a leak
+  later. Worth raising alongside #5 when the ward returns to the graph
+  audience-blindness question, since it's the same class. **[low]** (orphaned +
+  latent audience gap; sibling of benched #5 — report only, NOT actioned)
 
 ---
 
