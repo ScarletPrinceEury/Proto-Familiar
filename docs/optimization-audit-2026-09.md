@@ -30,6 +30,20 @@ newcomer would genuinely stumble on · **[med]** a worthwhile tidy · **[low]** 
 
 _(appended as the audit proceeds)_
 
+### Executive summary
+
+Few optimization wins because the code is already lean and the hot paths are
+well-built (fan-out via `Promise.allSettled`, single-statement DB prunes, one
+rollup per period, cached priors, injected deps, no obvious N+1). The
+worthwhile items: **complete the settings writer as a single atomic
+`writeSettingsPatch`** (robustness — see the pass-2 headline: two copies of the
+lock dance today), a `readOwnFile` double-`stat` micro-opt, and an optional
+`readJsonFile(path, fallback)` helper for ~6 state-file readers (judgement call,
+not mandated). **Comments:** density is high (17-29%) but deliberate and mostly
+load-bearing "why" — no mass cull, targeted trims only. **Docs:** user-facing
+docs already read clearly for a layperson; dev specs are appropriately dense
+(not a layperson category). Detail below.
+
 ### Root Node utilities
 
 - **`own-files.js:106-136` `readOwnFile` — redundant second `fs.stat`.** Line 114

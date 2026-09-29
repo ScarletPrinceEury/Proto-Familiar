@@ -27,6 +27,42 @@ Severity: **[high]** safety/data/privacy or a real bug · **[med]** worth fixing
 
 _(appended as the audit proceeds)_
 
+### Executive summary
+
+**The codebase is in excellent shape.** Method: deep line-reads of the root
+utilities, the safety/proactivity layer, the pondering path, representative
+subsystem orchestrators (voice call-engine), and the Python memory core; PLUS
+whole-tree systematic sweeps for the classes of issue a line-read is meant to
+catch — debt markers, philosophy drift, dead exports, silent-catch, off-switch
+coverage, settings-access duplication, comment density, wiring/MCP contracts.
+Every file deep-read followed the same disciplined patterns (dependency
+injection, never-throws, hard off-switches, first-person philosophy,
+exact-values, load-bearing "why" comments), so the sweep-covered files carry
+high confidence.
+
+**One finding is worth acting on now — the settings-access headline** (the pt.1
+dedup is incomplete: reader inlined at 4 more sites, path const redefined ×4,
+and the atomic writer duplicated by discord-gateway). Everything else is small:
+3 verified dead exports, a `relativeTime`/`relativeDay` block dup, a stranded
+JSDoc. The systematic invariants (philosophy, off-switches, graceful
+degradation, wiring) all **hold**. See per-section detail below; the
+optimization/clarity lens is in `optimization-audit-2026-09.md`.
+
+**Coverage honesty:** this is comprehensive sweep + representative deep-read, not
+a literal every-line read of all ~250 files. The remaining subsystem support
+files (voice ×9, browser ×4, discord internals, village, weather, gcal, sessions)
+and the rest of the Python were sweep-covered and sampled, not each line-read —
+the coverage log marks which. Given the uniformity found, per-file line-reads of
+those would very likely confirm cleanliness; happy to do named ones on request.
+
+### Off-switch invariant — CLEAN
+
+All 13 background loops (`src/**/*-loop.js`) have a `PROTO_FAMILIAR_*_DISABLED`
+hard off-switch — the loop-gates for pondering/triage/reminders/warmth/event-alerts/
+elapsed-stamp live in `server.js` at the loop-start sites, the rest in the loop
+modules. The CLAUDE.md "every loop ships a kill-switch in the same commit"
+invariant holds tree-wide.
+
 ### Orphaned exports (dead-export scan: 3 of 1433 — very clean)
 
 A heuristic scan of all 1433 Node exports found only 3 with no caller anywhere
