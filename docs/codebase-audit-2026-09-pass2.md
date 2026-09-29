@@ -462,6 +462,34 @@ writer's atomicity/merge like the reader's fixture suite.
   drift goes unaudited behind a green tick. Fix: read `src['public/app.js']`
   (raw), exactly as check #6 does two blocks down. **[med]** (dead check in a
   maintenance tool — reports a pass while testing nothing)
+- **Dev demo scripts use raw provider fetches with small `max_tokens` + direct
+  `.content` reads — the exact shape RULE A flags.** `scripts/chat-with-ponderings.mjs:89`
+  (`max_tokens: 800`) and `scripts/threat-demo.mjs:145` (`max_tokens: 600`) both
+  do a bare `fetch(PROVIDER_URLS.nanogpt, …)` and read
+  `data.choices?.[0]?.message?.content ?? ''` with NO `extractContent` /
+  reasoning fallback — so on a thinking model (GLM/DeepSeek) they return empty,
+  the precise failure RULE A + the 0.9 post-mortem exist to prevent ("a new raw
+  provider fetch is a review flag; grep for `max_tokens`"). The mitigating truth:
+  these are **non-production** verification demos (they say so up top — "fast
+  verification without standing up the whole server"), their model defaults are
+  non-thinking (`gemma`), and the ponder demos correctly route through
+  `ponderOnce` (the real path). So this is not a live ward-facing gap — but they
+  are the kind of snippet that gets lifted into production, and an audit that read
+  every line should note the pattern. Cheapest correct fix if kept: read through
+  `extractContent` (import is free) and raise the cap to ≥4000, or route them
+  through `callProviderChat` like everything else. **[low]** (dev-only, but the
+  RULE-A anti-pattern verbatim)
+- **More "the user" in dev-script scaffolding (extends the existing "the user"
+  finding).** Beyond the runtime-code comments already flagged (care-check,
+  crisis-signals, pondering-cadence), the same slip appears in dev tooling:
+  `scripts/ponder-once.mjs:11` (usage comment), `scripts/seed-test-interests.mjs:24`
+  (a seed topic string `"the user's experience of building me"`), and
+  `scripts/threat-demo.mjs:116,156` (console prose). Lowest priority of the lot —
+  these are developer-facing scaffolding, not anything the Familiar reads, so the
+  entity-as-subject rule doesn't strictly bind them — but they read oddly against
+  a codebase that says "my human" everywhere else, and the seed string in
+  particular is the sort of thing that could drift into a real interest label.
+  **[low]** (voice/convention consistency, dev surfaces)
 
 ---
 

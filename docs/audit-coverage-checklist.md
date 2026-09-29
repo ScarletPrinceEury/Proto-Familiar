@@ -222,7 +222,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] scripts/audit-wiring.mjs
 - [x] scripts/build-prompt-catalog.mjs
 - [x] scripts/build-voice-catalogue.mjs
-- [ ] scripts/chat-with-ponderings.mjs
+- [x] scripts/chat-with-ponderings.mjs
 - [x] scripts/check-voice-ready.mjs
 - [x] scripts/ensure-audio-models.mjs
 - [x] scripts/ensure-node-deps.mjs
@@ -235,17 +235,17 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] scripts/lib/verify-python-peer.mjs
 - [x] scripts/migrate-domain.mjs
 - [x] scripts/pin-audio-models.mjs
-- [ ] scripts/ponder-from-interests.mjs
-- [ ] scripts/ponder-once.mjs
-- [ ] scripts/pondering-loop-demo.mjs
-- [ ] scripts/seed-test-interests.mjs
-- [ ] scripts/threat-demo.mjs
+- [x] scripts/ponder-from-interests.mjs
+- [x] scripts/ponder-once.mjs
+- [x] scripts/pondering-loop-demo.mjs
+- [x] scripts/seed-test-interests.mjs
+- [x] scripts/threat-demo.mjs
 - [x] scripts/transcript-to-markdown.mjs
 - [x] scripts/ui-walk.mjs
-- [ ] scripts/voice-bench.mjs
-- [ ] scripts/voice-chunking-probe.mjs
-- [ ] scripts/voice-clarity-probe.mjs
-- [ ] scripts/voice-temperature-probe.mjs
+- [x] scripts/voice-bench.mjs
+- [x] scripts/voice-chunking-probe.mjs
+- [x] scripts/voice-clarity-probe.mjs
+- [x] scripts/voice-temperature-probe.mjs
 
 ## Python
 - [ ] phylactery/src/phylactery/__init__.py
