@@ -10,7 +10,7 @@
  * decides audience itself.
  */
 
-import { extractContent } from '../../llm-call.js';
+import { extractTurnReply } from '../../llm-call.js';
 import { connectionReady } from '../../providers.js';
 import { stripLlmTimestamps } from '../../message-sanitize.mjs';
 
@@ -65,8 +65,11 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
           // replicate BOTH of callProviderChat's guarantees ourselves (RULE A,
           // 0.9 post-mortem): a generous max_tokens (a thinking model bills
           // reasoning against the cap — no cap = empty content = dead silence)
-          // and extractContent at the reply boundary (the answer may sit in
-          // reasoning_content, not content). runToolLoop follows the ward's
+          // and extractTurnReply at the reply boundary (the answer may sit in
+          // reasoning_content, not content — BUT a budget-exhausted turn
+          // (finish_reason 'length', empty content) is no answer at all, only
+          // raw chain-of-thought; extractTurnReply returns '' there so we go
+          // quiet instead of speaking the CoT aloud). runToolLoop follows the ward's
           // per-call setting; the server caps voiceMode tool rounds tightly so a
           // spoken "Eury?" still gets a fast "Hey?" and only a real go-look-it-up
           // request spends rounds.
@@ -79,7 +82,7 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
         }),
       });
       const data = await res.json().catch(() => null);
-      const finalReply = extractContent(data?.choices?.[0]?.message ?? {});
+      const finalReply = extractTurnReply(data?.choices?.[0] ?? {});
       // When she used tools, speak her own preamble on each round first ("let me
       // check…" — the carrier `content` runToolCallLoop records per round), then
       // the answer. Absent on a no-tool turn, so this is a no-op there. Timestamps

@@ -36,9 +36,24 @@ test('posts with the RULE-A guarantees + passes sessionAudience through', async 
   assert.deepEqual(body.messages.map(m => m.content), ['earlier', 'hi']);
 });
 
-test('extractContent: reads reasoning_content when content is empty (thinking model)', async () => {
+test('reads reasoning_content when a FINISHED answer is parked there (no length-truncation)', async () => {
+  // A proxy that legitimately puts a completed answer in reasoning_content
+  // (finish_reason is not 'length') — recover it as the reply.
   const run = createVoiceChatTurn(deps(okFetch({ content: '', reasoning_content: 'thought-through answer' })));
   assert.equal(await run({ transcript: 'hi' }), 'thought-through answer');
+});
+
+test('a length-truncated empty is SILENCE, never a spoken CoT dump', async () => {
+  // An always-thinking model that spent its whole budget reasoning: finish_reason
+  // 'length', empty content, raw chain-of-thought parked in reasoning_content.
+  // Speaking that aloud is the GLM-5.3 "thinking dump" — the turn must go quiet
+  // (null) so the call resets and my human just speaks again, never TTS the CoT.
+  const fetchFn = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'let me think… they asked… I should…' } }] }),
+  });
+  const run = createVoiceChatTurn(deps(fetchFn));
+  assert.equal(await run({ transcript: 'hi' }), null);
 });
 
 test('empty transcript → null, no fetch', async () => {
