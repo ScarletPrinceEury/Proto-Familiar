@@ -8,7 +8,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] cerebellum.js
 - [x] core-prompts.js
 - [x] entity-ref.js
-- [ ] guide-chat.js
+- [x] guide-chat.js
 - [x] injection-guard.js
 - [x] llm-call.js
 - [x] macros.js
@@ -18,7 +18,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] organs.js
 - [x] own-files.js
 - [x] phylactery-result.js
-- [ ] provider-models.js
+- [x] provider-models.js
 - [x] providers.js
 - [x] relative-time.js
 - [x] repo-root.js
@@ -27,8 +27,8 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] settings-store.js
 - [x] slug-ids.js
 - [ ] thalamus.js
-- [ ] tool-surfacing.js
-- [ ] updater.js
+- [x] tool-surfacing.js
+- [x] updater.js
 
 ## Node — src/ (by dir)
 ### src/backup

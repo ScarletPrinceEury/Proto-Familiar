@@ -75,6 +75,14 @@ docs already read clearly for a layperson; dev specs are appropriately dense
   call** (`new RegExp(re.source, re.flags+'g')` in the loop). Precompute a
   parallel `INJECTION_PATTERNS_G` once at module load. Called on web/discord
   inbound text — not a hot loop, so **[low]**, but free.
+- **`guide-chat.js` — char/human profile assembly overlaps `core-prompts.js`
+  `coreSystemSegment`.** The guide-chat prompt builder assembles the same
+  identity/`{{char}}`/`my human` framing that `coreSystemSegment` already owns for
+  the main chat path. It's not byte-identical (guide-chat has its own narrower
+  purpose), so this is a *soft* dup — the shared part (how the entity's name and
+  the bond are introduced) could route through one helper so a change to the
+  framing lands in both. **[low]** — dedup candidate, judgement call; only worth
+  it if the shared framing keeps drifting between the two.
 - **`memory/memorization.js` `processJob` (~418 lines, 1005-1423)** — a large
   orchestrator (extract → parse facts/relations/followups/trackers → consent-gate
   → route/store). It's genuinely connective (the memorization pipeline's spine),

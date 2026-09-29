@@ -88,7 +88,10 @@ in the tree; each verified by hand:
   `list_tabs` tool, no caller. This is the "dead code that looks like care"
   case: either it's a genuine browser capability that was built but never
   surfaced as a Familiar tool (then wire it, per "every capability reachable"),
-  or it's vestigial (then remove). **Ward/design call which.** **[med]**
+  or it's vestigial (then remove). **Ward/design call which.** **[med]** —
+  *cross-check (tool-surfacing.js): the surfaced browser tool is `browse_tabs`
+  (module `browser`), whose executor path does not call `listTabs`; confirms the
+  export is unwired.*
 - **`memory/content-tags.js:45` `CONTENT_LEVELS = ['open','sensitive']` — dead
   constant, and a near-miss.** Never imported; meanwhile `isLevel(l)` (:54)
   hardcodes `l === 'open' || l === 'sensitive'` inline instead of referencing it.
@@ -151,6 +154,17 @@ writer's atomicity/merge like the reader's fixture suite.
   (54-58) correctly documents `slugCore`. Meanwhile `slugifyLabel` (63) now has
   no doc of its own. Fix: move the 48-53 block down to above `slugifyLabel`,
   delete the redundancy. **[low]** (stale/misplaced comment)
+- **`provider-models.js:34` — `listProviderModels` hard-requires an apiKey for
+  ALL providers, blocking the model browser for keyless/local setups.** The
+  function throws/returns empty without an `apiKey`, but `providers.js`
+  `PROVIDER_KEYLESS = ['custom','ollama','lmstudio']` names three that need none
+  (ollama/lmstudio have `/models` URLs in the provider map and run locally). So a
+  ward on a local Ollama/LM Studio backend can't populate the visible model list
+  — they're pushed back to typing a model id by hand, which the UI-UX guidelines
+  ("options a user can pick must be *visible*") explicitly argue against. Fix:
+  gate the key requirement on `providerRequiresKey(provider)` instead of an
+  unconditional check. **[med]** (disconnected wiring — a keyless capability the
+  UI can't reach)
 - **`relative-time.js` — `relativeTime` vs `relativeDay` share ~4 near-identical
   phrasing blocks** (future ≥2 days, past ≥2 days, the weeks band, the
   beyond-a-month absolute+interval tail — lines ~249-291 vs ~325-357), differing
