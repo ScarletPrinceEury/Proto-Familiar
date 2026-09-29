@@ -285,22 +285,23 @@ for (const f of files) {
   }
 }
 
-// ── 4. Settings keys: synced but unread, or read but unsynced ──────
-{
-  const app = code['public/app.js'];
-  const serverish = ['server.js', 'thalamus.js', 'cerebellum.js', 'discord-gateway.js', 'voice-backend.js', 'voice-transcribe.js']
-    .map((f) => code[f] ?? '').join('\n');
-  if (app) {
-    const block = app.slice(app.indexOf('SERVER_SYNCED_KEYS'), app.indexOf('function extractServerSettings'));
-    const keys = [...block.matchAll(/'([A-Za-z][\w]*)'/g)].map((m) => m[1]);
-    for (const k of keys) {
-      // Read anywhere server-side, or at least present in the settings doc?
-      if (!new RegExp(`\\b${k}\\b`).test(serverish)) {
-        note('setting unread', `${k} is synced to the server but nothing server-side reads it`);
-      }
-    }
-  }
-}
+// ── 4. (removed) "settings synced but unread server-side" ──────────
+//
+// This check was dead AND ill-conceived, so it was removed rather than fixed.
+//   • Dead: it read the comment/literal-STRIPPED copy of app.js, where
+//     SERVER_SYNCED_KEYS' quoted names are blanked to "", so it always found
+//     zero keys and printed a reassuring ✓ while testing nothing.
+//   • Ill-conceived: "synced but not read server-side" is the NORMAL shape of a
+//     client-only setting synced for cross-device portability (UI prefs like
+//     uiShowAdvanced / notificationSounds / readAloudByDefault; client-side
+//     logic like maxEmptyRetries / fallbackConnectionIds / handoffEnabled).
+//     Empirically, of 160 synced keys only 11 are absent server-side and all 11
+//     are legitimately client-only — so even a correctly-scoped version would be
+//     almost pure false positives, and a noisy check is indistinguishable from
+//     no check.
+// The direction that actually causes bugs — the server reading a key nothing
+// syncs OR writes, which then reads `undefined` forever — is covered by check #6
+// below. Don't resurrect this one.
 
 // ── 5. Env off-switches referenced in code but undocumented ───────
 {
@@ -429,7 +430,7 @@ for (const f of files) {
 // ── Report ────────────────────────────────────────────────────────
 const byCheck = {};
 for (const f of findings) (byCheck[f.check] ??= []).push(f.msg);
-const order = ['import/export', 'undeclared call', 'duplicate key', 'dead lookup', 'setting unread', 'settings key drift', 'unwired control', 'undocumented switch'];
+const order = ['import/export', 'undeclared call', 'duplicate key', 'dead lookup', 'settings key drift', 'unwired control', 'undocumented switch'];
 console.log('');
 for (const c of order) {
   const list = byCheck[c] ?? [];

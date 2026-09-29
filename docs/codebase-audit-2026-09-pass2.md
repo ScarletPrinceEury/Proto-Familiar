@@ -462,6 +462,17 @@ writer's atomicity/merge like the reader's fixture suite.
   drift goes unaudited behind a green tick. Fix: read `src['public/app.js']`
   (raw), exactly as check #6 does two blocks down. **[med]** (dead check in a
   maintenance tool — reports a pass while testing nothing)
+  - **RESOLVED (removed, not fixed).** The "read `src`" fix above was the wrong
+    call — deeper analysis showed the check is also *ill-conceived*, not just
+    mis-sourced. "Synced but unread server-side" is the normal shape of a
+    client-only setting synced for cross-device portability: of 160 synced keys,
+    only 11 are absent server-side and all 11 are legitimately client-only (UI
+    prefs, client-side retry/fallback/handoff logic). So even a correctly-scoped
+    version would be almost pure false positives — a noisy check equals no check.
+    The direction that actually causes bugs (server reads a key nothing syncs or
+    writes → silent `undefined`) is already covered by check #6. Check #4 was
+    removed with a tombstone comment recording why; the phantom `setting unread`
+    entry was dropped from the summary `order` list too.
 - **Dev demo scripts use raw provider fetches with small `max_tokens` + direct
   `.content` reads — the exact shape RULE A flags.** `scripts/chat-with-ponderings.mjs:89`
   (`max_tokens: 800`) and `scripts/threat-demo.mjs:145` (`max_tokens: 600`) both
