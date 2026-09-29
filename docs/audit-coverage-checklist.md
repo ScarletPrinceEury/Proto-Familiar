@@ -251,14 +251,14 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] phylactery/src/phylactery/__init__.py
 - [x] phylactery/src/phylactery/__main__.py
 - [x] phylactery/src/phylactery/audience.py
-- [ ] phylactery/src/phylactery/backup.py
+- [x] phylactery/src/phylactery/backup.py
 - [ ] phylactery/src/phylactery/consolidate.py
 - [x] phylactery/src/phylactery/content_gate.py
 - [x] phylactery/src/phylactery/db.py
 - [x] phylactery/src/phylactery/embed.py
-- [ ] phylactery/src/phylactery/graduation.py
+- [x] phylactery/src/phylactery/graduation.py
 - [ ] phylactery/src/phylactery/graph.py
-- [ ] phylactery/src/phylactery/identity.py
+- [x] phylactery/src/phylactery/identity.py
 - [ ] phylactery/src/phylactery/memory.py
 - [ ] phylactery/src/phylactery/migrate_from_entity_core.py
 - [x] phylactery/src/phylactery/remember.py
