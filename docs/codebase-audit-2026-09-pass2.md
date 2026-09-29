@@ -59,6 +59,70 @@ _(appended as the audit proceeds)_
   this; a pipeline/integration check that asserts the real default path would.)
   **[med — leans high: misplaced, un-ignored runtime state + code/doc drift]**
 
+### ⚠️ NEW — `.gitignore` drift: newer `tomes/.*.json` runtime dotfiles aren't ignored (privacy risk)
+
+- **`.gitignore` ignores `tomes/` runtime state by a HAND-MAINTAINED per-file list
+  (~40 individual `tomes/.<name>.json(.tmp)` entries), and a cluster of newer
+  dotfiles was never added — so they are NOT ignored.** Confirmed with
+  `git check-ignore`. Not-ignored, each written to `tomes/` by code I line-read
+  this pass:
+  - `tomes/.memory-quarantine.json` — **holds suspect memory CONTENT** (memory-quarantine.js)
+  - `tomes/.hippocampus.json` — **holds verbatim recent cross-channel message text** (hippocampus.js)
+  - `tomes/.disclosure-notices.json` — **private fact briefs opened for the ward** (content-regate.js)
+  - `tomes/.content-regate-reviewed.json` — memory ids (content-regate.js)
+  - `tomes/.spine-episode.json` — open crisis-episode pointer (spine-states.js)
+  - `tomes/.pondering-consolidation-archive.json` — archived private ponderings (pondering-consolidate.js)
+  - `tomes/.ponder-web-budget.json` — daily read counter (ponder-web-budget.js)
+  - `tomes/.noticing-asked.json` — overdue-event ask ledger (noticing-outcomes.js)
+  Contrast `logs/`, ignored by a single directory glob (`.gitignore:6 logs/`) — so
+  every JSONL event log is covered; only `tomes/` carries the fragile list. **The
+  harm:** a dev/user (or an agent) running the server then `git add -A` stages
+  these; three of them contain the ward's PRIVATE conversation/memory content,
+  which would be committed into git history — the exact privacy leak the whole
+  audience-gating apparatus exists to prevent. None are tracked *today* only
+  because this is a fresh container where they don't exist yet.
+  **Robust fix (not the cheap one):** replace the per-file list with globs —
+  `tomes/.*.json`, `tomes/.*.json.tmp`, `tomes/.*.jsonl` (and keep the explicit
+  UUID/`Sample*` rules) — so a *new* runtime dotfile is ignored the day it's added.
+  This is CLAUDE.md verification post-mortem #7 exactly ("a hand-maintained list is
+  a list I forget to update — derive it"). **[med — leans high: private-data commit risk]**
+
+### "the user" in code comments — voice-consistency nit (low)
+
+- A handful of CODE COMMENTS (not prompt content) still say "the user" / "Users"
+  where the repo's convention is "my human": `safety/care-check.js:22` ("responding
+  to what the user said", "Users who want a quieter posture"),
+  `safety/crisis-signals.js` header + `scoreMessage` docblock, `pondering/
+  pondering-cadence.js:34` ("think about the user more often"). The *prompt/block
+  content* in these files is correct (care-check emits literal "my human"); only
+  the surrounding developer comments drifted. CLAUDE.md permits neutral phrasing
+  for pure infrastructure, but "the user" specifically is the word it says never to
+  use, and these comments describe the Familiar's own behaviour. Cheap to align to
+  "my human"/"they" on the next pass through each file. **[low — comments only, no
+  behavioural or model-facing impact]**
+
+### ⚠️ FLAG for ward (safety, do NOT fix) — outgoing restricted-memory filter is absent from the streaming path
+
+- **`server.js` runs `filterOutgoingReply` only on the NON-streaming branch
+  (`if (!stream)`, ~:988 → the filter at :1088-1105).** The streaming loop
+  (:1130+) ends in `tagRaisedOutcomes` but **never calls `filterOutgoingReply`**
+  (grep confirms the only two call sites are server.js:1091 non-streaming and
+  discord-gateway.js:2045). The stream-vs-not choice is the client-supplied
+  `req.body.stream` flag, and the non-streaming branch explicitly handles
+  `audienceTag !== 'ward-private'` — so the endpoint is *designed* to serve gated
+  (villager) audiences. **If a non-ward-private turn is ever served with
+  `stream:true`, the Pillar-D restricted-memory gate is bypassed** and a
+  ward-private memory could be spoken into a gated room. This is inherent to
+  streaming (you can't retry-and-replace a draft after tokens have left), so the
+  safe design is that gated turns are forced non-streaming — the question is
+  whether that's *enforced*. **This is a ward-signed safety path (outgoing-filter
+  build-spec §7); flag, not fix.** For the ward to confirm: are villager/gated web
+  turns guaranteed non-streaming (or is a gated audience simply never reachable on
+  web)? If neither, the filter needs a streaming-side equivalent (e.g. gate the
+  audience to non-stream, or buffer+filter gated streams before first flush).
+  Discord's gated turns are safe — they go through `callChatRaw` (non-streaming)
+  and filter at discord-gateway.js:2045. **[med — latent privacy gap, ward decides]**
+
 ### Executive summary
 
 **The codebase is in excellent shape.** Method: deep line-reads of the root

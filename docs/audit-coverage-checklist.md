@@ -83,21 +83,21 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/pondering/surface-context.js
 - [x] src/pondering/surface-events.js
 ### src/safety
-- [ ] src/safety/care-check.js
-- [ ] src/safety/contact-baselines.js
-- [ ] src/safety/crisis-classifier.js
-- [ ] src/safety/crisis-signals.js
-- [ ] src/safety/memory-integrity.js
-- [ ] src/safety/memory-quarantine.js
-- [ ] src/safety/noticing-loop.js
-- [ ] src/safety/noticing-outcomes.js
-- [ ] src/safety/noticing.js
-- [ ] src/safety/outbox.js
-- [ ] src/safety/outgoing-filter.js
-- [ ] src/safety/silence-triage-loop.js
-- [ ] src/safety/spine-states.js
-- [ ] src/safety/threat-tracker.js
-- [ ] src/safety/wait-streak.js
+- [x] src/safety/care-check.js
+- [x] src/safety/contact-baselines.js
+- [x] src/safety/crisis-classifier.js
+- [x] src/safety/crisis-signals.js
+- [x] src/safety/memory-integrity.js
+- [x] src/safety/memory-quarantine.js
+- [x] src/safety/noticing-loop.js
+- [x] src/safety/noticing-outcomes.js
+- [x] src/safety/noticing.js
+- [x] src/safety/outbox.js
+- [x] src/safety/outgoing-filter.js
+- [x] src/safety/silence-triage-loop.js
+- [x] src/safety/spine-states.js
+- [x] src/safety/threat-tracker.js
+- [x] src/safety/wait-streak.js
 ### src/schedule
 - [ ] src/schedule/active-hours.js
 - [ ] src/schedule/day-segments.js
