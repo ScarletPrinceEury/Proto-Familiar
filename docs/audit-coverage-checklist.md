@@ -49,11 +49,11 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/browser/reddit-reader.js
 - [x] src/browser/web-fetch-util.js
 ### src/discord
-- [ ] src/discord/discord-emotes.js
-- [ ] src/discord/discord-gateway.js
-- [ ] src/discord/discord-gif-embeds.js
-- [ ] src/discord/discord-menu-kit.js
-- [ ] src/discord/discord-write-log.js
+- [x] src/discord/discord-emotes.js
+- [x] src/discord/discord-gateway.js
+- [x] src/discord/discord-gif-embeds.js
+- [x] src/discord/discord-menu-kit.js
+- [x] src/discord/discord-write-log.js
 ### src/gcal
 - [x] src/gcal/gcal-attribution.js
 - [x] src/gcal/gcal-google.js
