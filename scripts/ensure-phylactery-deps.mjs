@@ -22,10 +22,10 @@
 
 import { existsSync, writeFileSync, readFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyOrRepair } from './lib/verify-python-peer.mjs';
+import { resolveUv } from './lib/resolve-uv.mjs';
 
 const __dirname        = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT        = path.resolve(__dirname, '..');
@@ -35,26 +35,6 @@ const PHYLACTERY_VENV  = path.join(PHYLACTERY_ROOT, '.venv');
 
 function say(msg)  { process.stdout.write(`[ensure-phylactery] ${msg}\n`); }
 function warn(msg) { process.stderr.write(`[ensure-phylactery] ${msg}\n`); }
-
-function resolveUv() {
-  if (process.env.UV_BIN && existsSync(process.env.UV_BIN)) return process.env.UV_BIN;
-  const home = os.homedir();
-  const isWin = process.platform === 'win32';
-  const candidates = isWin
-    ? [
-        path.join(home, '.local', 'bin', 'uv.exe'),
-        path.join(process.env.LOCALAPPDATA ?? '', 'uv', 'bin', 'uv.exe'),
-        path.join(home, '.cargo', 'bin', 'uv.exe'),
-      ]
-    : [
-        path.join(home, '.local', 'bin', 'uv'),
-        path.join(home, '.cargo', 'bin', 'uv'),
-        '/usr/local/bin/uv',
-        '/opt/homebrew/bin/uv',
-      ];
-  for (const c of candidates) { if (c && existsSync(c)) return c; }
-  return isWin ? 'uv.exe' : 'uv';
-}
 
 if (!existsSync(PHYLACTERY_PYPROJECT)) process.exit(0); // no Phylactery in this checkout
 const uv = resolveUv();

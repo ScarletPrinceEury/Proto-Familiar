@@ -17,9 +17,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
-import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
+import { resolveUv } from './scripts/lib/resolve-uv.mjs';
 import { readSettingsSync } from './settings-store.js';
 import { makeReconnector } from './mcp-reconnector.js';
 import { recentReachOuts, formatReachOutBlock } from './src/warmth/reach-out-log.js';
@@ -116,30 +116,11 @@ const UNRUH_CALL_TIMEOUT_MS = 2000;
 // docs/features.md.
 const IDLE_THRESHOLD_MS = 30 * 60 * 1000;
 
-// Resolve `uv` to an absolute path. GUI launchers (Proto-Familiar.command,
-// the .vbs / tray.ps1) inherit a minimal PATH that often misses ~/.local/bin
-// or %LOCALAPPDATA%\uv\bin, so a bare `command: 'uv'` to StdioClientTransport
-// silently fails with ENOENT. Probe the known install locations first and
-// fall back to PATH only if none match. UV_BIN env var overrides everything.
-function resolveUvBinary() {
-  if (process.env.UV_BIN && existsSync(process.env.UV_BIN)) return process.env.UV_BIN;
-  const home = os.homedir();
-  const isWin = process.platform === 'win32';
-  const candidates = isWin
-    ? [
-        path.join(home, '.local', 'bin', 'uv.exe'),                      // Astral's current default
-        path.join(process.env.LOCALAPPDATA ?? '', 'uv', 'bin', 'uv.exe'),// older default
-        path.join(home, '.cargo', 'bin', 'uv.exe'),
-      ]
-    : [
-        path.join(home, '.local', 'bin', 'uv'),                          // Astral's current default
-        path.join(home, '.cargo', 'bin', 'uv'),
-        '/usr/local/bin/uv',
-        '/opt/homebrew/bin/uv',
-      ];
-  for (const c of candidates) { if (c && existsSync(c)) return c; }
-  return isWin ? 'uv.exe' : 'uv'; // last-resort PATH lookup
-}
+// `uv` is resolved to an absolute path via the shared resolveUv() helper
+// (scripts/lib/resolve-uv.mjs). It matters here specifically because GUI
+// launchers (Proto-Familiar.command, the .vbs / tray.ps1) inherit a minimal
+// PATH that often misses ~/.local/bin or %LOCALAPPDATA%\uv\bin, so a bare
+// `command: 'uv'` to StdioClientTransport silently fails with ENOENT.
 
 // ── Tome / state-file coordination ─────────────────────────────────
 //
@@ -417,7 +398,7 @@ async function connectPhylactery() {
     console.warn('[thalamus] phylactery: designated connection has no model set — consolidation will fail');
   }
 
-  const uvBin = resolveUvBinary();
+  const uvBin = resolveUv();
   const transport = new StdioClientTransport({
     command: uvBin,
     args: ['run', '--no-sync', 'python', '-m', 'phylactery'],
@@ -514,7 +495,7 @@ async function connectUnruh() {
     console.warn('[thalamus] Unruh venv missing at', UNRUH_VENV, '— run `cd unruh && uv sync` to enable temporal context');
     return;
   }
-  const uvBin = resolveUvBinary();
+  const uvBin = resolveUv();
   // Pass the ward's timezone as TZ so ALL of Unruh's own datetime.now() (the
   // get_due_reminders default, now_iso for created_at / state / resolution
   // stamps) is ward-local — the comprehensive half of the cross-zone fix. The

@@ -23,10 +23,10 @@
 
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyOrRepair } from './lib/verify-python-peer.mjs';
+import { resolveUv } from './lib/resolve-uv.mjs';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT  = path.resolve(__dirname, '..');
@@ -36,32 +36,6 @@ const UNRUH_VENV = path.join(UNRUH_ROOT, '.venv');
 
 function say(msg)  { process.stdout.write(`[ensure-unruh] ${msg}\n`); }
 function warn(msg) { process.stderr.write(`[ensure-unruh] ${msg}\n`); }
-
-// Mirror thalamus.js's resolveUvBinary() — same install-location probes
-// so we find uv when the user installed it but their PATH hasn't picked
-// it up yet (common on Windows after the Astral installer, or in a
-// non-login terminal).
-function resolveUv() {
-  if (process.env.UV_BIN && existsSync(process.env.UV_BIN)) return process.env.UV_BIN;
-  const home = os.homedir();
-  const isWin = process.platform === 'win32';
-  const candidates = isWin
-    ? [
-        path.join(home, '.local', 'bin', 'uv.exe'),
-        path.join(process.env.LOCALAPPDATA ?? '', 'uv', 'bin', 'uv.exe'),
-        path.join(home, '.cargo', 'bin', 'uv.exe'),
-      ]
-    : [
-        path.join(home, '.local', 'bin', 'uv'),
-        path.join(home, '.cargo', 'bin', 'uv'),
-        '/usr/local/bin/uv',
-        '/opt/homebrew/bin/uv',
-      ];
-  for (const c of candidates) { if (c && existsSync(c)) return c; }
-  // Last-resort: rely on PATH. spawnSync below will surface ENOENT if
-  // it's not actually there.
-  return isWin ? 'uv.exe' : 'uv';
-}
 
 if (!existsSync(UNRUH_PYPROJECT)) process.exit(0); // no Unruh in this checkout
 const uv = resolveUv();
