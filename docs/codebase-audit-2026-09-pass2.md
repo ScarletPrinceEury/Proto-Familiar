@@ -27,6 +27,38 @@ Severity: **[high]** safety/data/privacy or a real bug · **[med]** worth fixing
 
 _(appended as the audit proceeds)_
 
+### ⚠️ NEW — `surface-events.js` writes its state to the WRONG directory (real bug)
+
+- **`src/pondering/surface-events.js:28` `DEFAULT_TOMES_DIR = path.resolve(__dirname,
+  'tomes')` resolves to `src/pondering/tomes/`, NOT the repo-root `tomes/`.** This
+  is the ONE module in the whole `tomes/`-writing family that computes its default
+  dir relative to `__dirname` instead of `REPO_ROOT` (every sibling — memorization,
+  hippocampus, coverage, ponder-web-budget, content-regate — uses
+  `path.join(REPO_ROOT, 'tomes')`). **Every production caller relies on the
+  default** (`thalamus.js:2592/2606/2639`, `server.js` tagRaised sites,
+  `cerebellum.js:993/4455` all call these functions with no `tomesDir` arg), so the
+  Familiar's surface-offer learning stream — `recordSurfaceOffers` → outcome tagging
+  → reflection inputs — lands in `src/pondering/tomes/.surface-events.json`. Three
+  concrete harms, all confirmed:
+  1. **Wrong location, split from all other state.** It's not the canonical `tomes/`
+     dir; the reflection loop, dedup windows, and everything else that reasons over
+     the Familiar's behavioural history is siloed in a source-tree subfolder nobody
+     else looks in.
+  2. **NOT gitignored → risks being committed.** `git check-ignore
+     src/pondering/tomes/.surface-events.json` → not ignored, whereas
+     **`.gitignore:46-47` explicitly lists `tomes/.surface-events.json`(+`.tmp`)** —
+     proof the intended home is repo-root `tomes/`. Runtime state could be
+     accidentally committed.
+  3. **Code/doc drift.** `docs/architecture.md` (≈:2656, :2699) documents the file
+     as `tomes/.surface-events.json` (repo-root). The code contradicts the doc.
+  It "works" only because every reader/writer shares the same wrong default, so the
+  round-trip is self-consistent — which is exactly why it's gone unnoticed. Fix:
+  `import { REPO_ROOT }` and `DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes')`,
+  matching every sibling. (Tests pass their own `mkdtempSync` dir, so they're
+  unaffected and would still pass — meaning the test suite structurally cannot catch
+  this; a pipeline/integration check that asserts the real default path would.)
+  **[med — leans high: misplaced, un-ignored runtime state + code/doc drift]**
+
 ### Executive summary
 
 **The codebase is in excellent shape.** Method: deep line-reads of the root

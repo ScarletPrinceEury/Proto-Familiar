@@ -72,16 +72,16 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/memory/memory-sweep-loop.js
 - [x] src/memory/recent-ponderings.js
 ### src/pondering
-- [ ] src/pondering/interest-picker.js
+- [x] src/pondering/interest-picker.js
 - [x] src/pondering/ponder-research.js
-- [ ] src/pondering/ponder-web-budget.js
-- [ ] src/pondering/pondering-cadence.js
-- [ ] src/pondering/pondering-consolidate.js
-- [ ] src/pondering/pondering-loop.js
-- [ ] src/pondering/pondering.js
-- [ ] src/pondering/reflection-events.js
+- [x] src/pondering/ponder-web-budget.js
+- [x] src/pondering/pondering-cadence.js
+- [x] src/pondering/pondering-consolidate.js
+- [x] src/pondering/pondering-loop.js
+- [x] src/pondering/pondering.js
+- [x] src/pondering/reflection-events.js
 - [x] src/pondering/surface-context.js
-- [ ] src/pondering/surface-events.js
+- [x] src/pondering/surface-events.js
 ### src/safety
 - [ ] src/safety/care-check.js
 - [ ] src/safety/contact-baselines.js
