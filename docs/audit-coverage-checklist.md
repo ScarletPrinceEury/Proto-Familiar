@@ -212,11 +212,11 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 
 ## Node — public/ + scripts/
 - [ ] public/app.js
-- [ ] public/graph-map.js
-- [ ] public/icons.js
-- [ ] public/voice-call-capture-worklet.js
-- [ ] public/voice-call.js
-- [ ] public/voice-recorder.js
+- [x] public/graph-map.js
+- [x] public/icons.js
+- [x] public/voice-call-capture-worklet.js
+- [x] public/voice-call.js
+- [x] public/voice-recorder.js
 - [x] scripts/_unruh-mcp.mjs
 - [x] scripts/audit-mcp-contracts.mjs
 - [x] scripts/audit-wiring.mjs
