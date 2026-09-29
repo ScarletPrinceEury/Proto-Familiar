@@ -27,6 +27,53 @@ const VOICE_TURN_TIMEOUT_MS = 90_000;
 const VOICE_BASE_MAX_TOKENS  = 4000;
 const VOICE_RETRY_MAX_TOKENS = 8000;
 
+// A live call can't freeze while we wait to retry — anything longer than this is
+// "not now", so we drop the turn instead of stalling the conversation.
+const RETRY_BACKOFF_CAP_MS   = 3000;
+// A 5xx/408 with no Retry-After header: a brief settle before the one retry.
+const DEFAULT_BACKOFF_MS     = 800;
+
+// Retry-After is either a whole number of seconds or an HTTP date. → ms, or null
+// when absent/unparseable.
+function parseRetryAfterMs(header) {
+  if (!header) return null;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, Math.round(secs * 1000));
+  const when = Date.parse(header);
+  if (Number.isFinite(when)) return Math.max(0, when - Date.now());
+  return null;
+}
+
+/**
+ * Decide whether an HTTP failure is worth ONE bounded retry mid-call, and how
+ * long to wait first. Pure + exported so the policy is unit-testable.
+ *
+ *   - 5xx / 408 (server overload, gateway hiccup, timeout): transient → retry
+ *     after the header's wait, or a short default.
+ *   - 429: dual-use. Providers return it for BOTH hard quota (won't refill —
+ *     don't retry) AND transient rate/concurrency limits (retry after a beat).
+ *     The Retry-After header is the honest signal: retry ONLY when it names a
+ *     wait we can afford; a bare or long 429 is treated as quota and left alone.
+ *   - any other 4xx (400/401/403/404/422): deterministic → an identical retry
+ *     fails identically, so never.
+ *
+ * Any wait longer than the cap means "not now" → no retry (drop the turn so the
+ * call stays alive).
+ */
+export function voiceHttpRetryPlan(status, retryAfterHeader) {
+  const waitMs = parseRetryAfterMs(retryAfterHeader);
+  if (status === 408 || status >= 500) {
+    const delayMs = waitMs == null ? DEFAULT_BACKOFF_MS : waitMs;
+    return delayMs <= RETRY_BACKOFF_CAP_MS ? { retry: true, delayMs } : { retry: false, delayMs: 0 };
+  }
+  if (status === 429) {
+    // Only when the provider explicitly invites a soon retry.
+    if (waitMs != null && waitMs <= RETRY_BACKOFF_CAP_MS) return { retry: true, delayMs: waitMs };
+    return { retry: false, delayMs: 0 };
+  }
+  return { retry: false, delayMs: 0 };
+}
+
 /**
  * @param {object}   deps
  * @param {number}   deps.port
@@ -36,7 +83,7 @@ const VOICE_RETRY_MAX_TOKENS = 8000;
  * @param {function} [deps.fetchFn]             injectable for tests
  * @returns {function} runVoiceTurn({ transcript, history?, sessionAudience? }) => Promise<string|null>
  */
-export function createVoiceChatTurn({ port, readSettings, connectionForFeature, log = () => {}, fetchFn = fetch } = {}) {
+export function createVoiceChatTurn({ port, readSettings, connectionForFeature, log = () => {}, fetchFn = fetch, sleep = (ms) => new Promise(r => setTimeout(r, ms)) } = {}) {
   return async function runVoiceTurn({ transcript, history = [], sessionAudience = 'ward-private', speaker = null } = {}) {
     const text = String(transcript ?? '').trim();
     if (!text) return null;
@@ -94,7 +141,7 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`);
-        return { reply: '', finishReason: null, httpOk: false };
+        return { reply: '', finishReason: null, httpOk: false, status: res.status, retryAfter: res.headers?.get?.('retry-after') ?? null };
       }
       const finalReply = extractTurnReply(data?.choices?.[0] ?? {});
       // When she used tools, speak her own preamble on each round first ("let me
@@ -115,13 +162,21 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
       // call stays responsive; the shared timer still bounds both attempts). If
       // the first empty was a length-truncation the model spent its whole budget
       // thinking, so a same-cap retry would just re-fail — give it more room
-      // instead. A truly-empty (transient) reply retries at the base cap. An HTTP
-      // error is NOT retried here (httpOk false): an immediate identical retry
-      // rarely rescues a 4xx/5xx, and the call resets faster without it.
+      // instead. A truly-empty (transient) reply retries at the base cap.
       if (out.httpOk && !out.reply) {
         const retryCap = out.finishReason === 'length' ? VOICE_RETRY_MAX_TOKENS : VOICE_BASE_MAX_TOKENS;
         log(`voice turn empty after ${Date.now() - started}ms (finish_reason=${out.finishReason}) — retrying once${retryCap !== VOICE_BASE_MAX_TOKENS ? ` with a larger cap (${retryCap})` : ''}`);
         out = await attempt(retryCap);
+      } else if (!out.httpOk) {
+        // An HTTP failure retries only when it's transient (voiceHttpRetryPlan):
+        // a 5xx/408, or a 429 whose Retry-After names a wait we can afford. A
+        // quota 429 or another 4xx is left alone — an identical retry won't help.
+        const plan = voiceHttpRetryPlan(out.status, out.retryAfter);
+        if (plan.retry) {
+          log(`voice turn HTTP ${out.status} — retrying once in ${plan.delayMs}ms`);
+          if (plan.delayMs > 0) await sleep(plan.delayMs);
+          out = await attempt(VOICE_BASE_MAX_TOKENS);
+        }
       }
       if (!out.reply) { log(`voice turn still no content after ${Date.now() - started}ms — staying silent so the call can reset`); return null; }
       return out.reply;

@@ -1,7 +1,7 @@
 // voice-chat-turn.js — the shared /api/chat spoken turn (web Pass 2 + Discord 3b).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVoiceChatTurn } from '../src/voice/voice-chat-turn.js';
+import { createVoiceChatTurn, voiceHttpRetryPlan } from '../src/voice/voice-chat-turn.js';
 
 const conn = { provider: 'p', apiKey: 'k', model: 'm' };
 const deps = (fetchFn, over = {}) => ({
@@ -96,10 +96,73 @@ test('no usable connection → null', async () => {
   assert.equal(await run({ transcript: 'hi' }), null);
 });
 
-test('HTTP error → null; empty reply → null', async () => {
-  const errFetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'boom' }) });
+test('a deterministic 4xx → null, NOT retried (an identical retry fails identically)', async () => {
+  const calls = [];
+  const errFetch = async () => { calls.push(1); return { ok: false, status: 400, json: async () => ({ error: 'bad request' }) }; };
   assert.equal(await createVoiceChatTurn(deps(errFetch))({ transcript: 'hi' }), null);
+  assert.equal(calls.length, 1, '400 is deterministic — one attempt only');
+});
+
+test('empty reply → null', async () => {
   assert.equal(await createVoiceChatTurn(deps(okFetch({ content: '' })))({ transcript: 'hi' }), null);
+});
+
+// A fetch stub that plays queued HTTP responses (status + optional retry-after
+// header), one per call, tracking how many times it was hit.
+function seqHttp(responses) {
+  const calls = [];
+  const fn = async () => {
+    const r = responses[Math.min(calls.length, responses.length - 1)];
+    calls.push(r.status ?? 200);
+    return {
+      ok: (r.status ?? 200) < 400,
+      status: r.status ?? 200,
+      headers: { get: (k) => (k.toLowerCase() === 'retry-after' ? (r.retryAfter ?? null) : null) },
+      json: async () => (r.body ?? { choices: [{ finish_reason: 'stop', message: { content: r.reply ?? '' } }] }),
+    };
+  };
+  fn.calls = calls;
+  return fn;
+}
+const noSleep = { sleep: () => Promise.resolve() };
+
+test('voiceHttpRetryPlan: transient errors retry, deterministic and quota ones do not', () => {
+  // 5xx / 408 → retry after a short default when no Retry-After.
+  assert.deepEqual(voiceHttpRetryPlan(503, null), { retry: true, delayMs: 800 });
+  assert.deepEqual(voiceHttpRetryPlan(500, null), { retry: true, delayMs: 800 });
+  assert.deepEqual(voiceHttpRetryPlan(408, null), { retry: true, delayMs: 800 });
+  // 5xx with a Retry-After we can afford → honor it; too-long → drop the turn.
+  assert.deepEqual(voiceHttpRetryPlan(503, '2'), { retry: true, delayMs: 2000 });
+  assert.equal(voiceHttpRetryPlan(503, '30').retry, false, 'a 30s wait is "not now" mid-call');
+  // 429: retry ONLY with a short Retry-After (transient rate/concurrency);
+  // a bare 429 (quota) or a long one is left alone.
+  assert.deepEqual(voiceHttpRetryPlan(429, '1'), { retry: true, delayMs: 1000 });
+  assert.equal(voiceHttpRetryPlan(429, null).retry, false, 'a bare 429 reads as quota — no retry');
+  assert.equal(voiceHttpRetryPlan(429, '120').retry, false, 'a 2-minute 429 is quota — no retry');
+  // other 4xx → never.
+  assert.equal(voiceHttpRetryPlan(400, null).retry, false);
+  assert.equal(voiceHttpRetryPlan(401, '1').retry, false);
+});
+
+test('a transient 503 is retried and the retry speaks the answer', async () => {
+  const fetchFn = seqHttp([{ status: 503 }, { reply: 'back now' }]);
+  const run = createVoiceChatTurn(deps(fetchFn, noSleep));
+  assert.equal(await run({ transcript: 'hi' }), 'back now');
+  assert.equal(fetchFn.calls.length, 2);
+});
+
+test('a quota 429 (no Retry-After) is NOT retried — the call resets fast', async () => {
+  const fetchFn = seqHttp([{ status: 429 }]);
+  const run = createVoiceChatTurn(deps(fetchFn, noSleep));
+  assert.equal(await run({ transcript: 'hi' }), null);
+  assert.equal(fetchFn.calls.length, 1, 'no wasted retry on quota exhaustion');
+});
+
+test('a concurrency 429 (short Retry-After) IS retried', async () => {
+  const fetchFn = seqHttp([{ status: 429, retryAfter: '1' }, { reply: 'ok now' }]);
+  const run = createVoiceChatTurn(deps(fetchFn, noSleep));
+  assert.equal(await run({ transcript: 'hi' }), 'ok now');
+  assert.equal(fetchFn.calls.length, 2);
 });
 
 test('sessionAudience defaults to ward-private when omitted', async () => {
