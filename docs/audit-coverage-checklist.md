@@ -266,22 +266,22 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] phylactery/src/phylactery/server.py
 - [x] phylactery/src/phylactery/snapshot.py
 - [x] phylactery/src/phylactery/village_registry.py
-- [ ] unruh/src/unruh/__init__.py
-- [ ] unruh/src/unruh/__main__.py
-- [ ] unruh/src/unruh/db.py
+- [x] unruh/src/unruh/__init__.py
+- [x] unruh/src/unruh/__main__.py
+- [x] unruh/src/unruh/db.py
 - [ ] unruh/src/unruh/gcal.py
-- [ ] unruh/src/unruh/handoff.py
+- [x] unruh/src/unruh/handoff.py
 - [ ] unruh/src/unruh/ical.py
-- [ ] unruh/src/unruh/icalwrite.py
+- [x] unruh/src/unruh/icalwrite.py
 - [ ] unruh/src/unruh/intention.py
 - [ ] unruh/src/unruh/interest.py
-- [ ] unruh/src/unruh/location.py
+- [x] unruh/src/unruh/location.py
 - [ ] unruh/src/unruh/schedule.py
-- [ ] unruh/src/unruh/seed.py
+- [x] unruh/src/unruh/seed.py
 - [ ] unruh/src/unruh/server.py
-- [ ] unruh/src/unruh/templates.py
+- [x] unruh/src/unruh/templates.py
 - [ ] unruh/src/unruh/tracker.py
-- [ ] unruh/src/unruh/tracker_projection.py
+- [x] unruh/src/unruh/tracker_projection.py
 
 ## public non-JS
 - [ ] public/index.html

@@ -530,6 +530,18 @@ writer's atomicity/merge like the reader's fixture suite.
   mismatch — but a reader wiring a new consumer from the docstring would look for
   `.user` and find nothing. Fix: say `ward:` in both docstrings. **[low]** (stale/
   misleading comment)
+- **`unruh/src/unruh/seed.py:9-11` — module docstring still says times are stamped
+  "in UTC", contradicting the local-naive model.** The header reads "Times in the
+  JSON are HH:MM in the user's local timezone; we stamp them to today's date in
+  UTC at load time." But the 0.7.84 local-naive time-model migration removed all
+  UTC conversion from this path — `_local_today` (:32) and `_phase_end_today`
+  (:42) both build LOCAL-naive ISO strings and `_local_today`'s own docstring
+  explicitly says "No UTC conversion: the seed routine is the ward's local day."
+  So the module header directly contradicts the code it heads (and the rest of
+  Unruh's time model). A reader trusting the header would believe seeded phases
+  are UTC — exactly the confusion the local-naive migration exists to prevent.
+  Fix: update lines 9-11 to say local-naive. **[low]** (stale comment contradicting
+  the code)
 
 ---
 
