@@ -74,6 +74,7 @@ _(appended as the audit proceeds)_
   - `tomes/.pondering-consolidation-archive.json` — archived private ponderings (pondering-consolidate.js)
   - `tomes/.ponder-web-budget.json` — daily read counter (ponder-web-budget.js)
   - `tomes/.noticing-asked.json` — overdue-event ask ledger (noticing-outcomes.js)
+  - `tomes/.gauge-checks.json` — open safety-check state (gauge-escalation.js, ward-signed path)
   Contrast `logs/`, ignored by a single directory glob (`.gitignore:6 logs/`) — so
   every JSONL event log is covered; only `tomes/` carries the fragile list. **The
   harm:** a dev/user (or an agent) running the server then `git add -A` stages
@@ -214,6 +215,20 @@ in the tree; each verified by hand:
   0.6.x milestone note). Pure comment drift — no code impact — but it names a
   component that no longer exists, so a future reader chasing "entity-core" finds
   nothing. Fix: "Phylactery's recall handles relevance search." **[low]**
+
+### src/schedule
+
+- **`schedule/recurrence.js:27` `toMs(v)` helper is DEAD + `:141` is a dead line.**
+  The module-level `toMs(v)` helper has no caller. `expandOccurrences(node, fromMs,
+  toMs)` names its window-end param `toMs`, shadowing the helper; line 141 —
+  `const anchorMs = toMs.toMs ? toMs.toMs(node.when) : new Date(node.when ?? '').getTime();`
+  — is a leftover of that shadowing: `toMs.toMs` is a property access on a number
+  (always undefined → always the `new Date(...)` branch), and the resulting
+  `anchorMs` is **never read** (line 143's `anchor` is what the function uses; the
+  `anchorMs` at :268 in `expandWindow` is a separate, live variable). The comment at
+  :142 ("Use our local toMs since the param name clashes") documents the confusion
+  rather than fixing it. Clean fix: delete line 141 and the unused helper (:27-32).
+  No behaviour change. **[low]**
 
 ### Silent-catch anti-pattern — CLEAN
 

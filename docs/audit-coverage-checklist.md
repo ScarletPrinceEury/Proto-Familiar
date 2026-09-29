@@ -99,20 +99,20 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/safety/threat-tracker.js
 - [x] src/safety/wait-streak.js
 ### src/schedule
-- [ ] src/schedule/active-hours.js
-- [ ] src/schedule/day-segments.js
-- [ ] src/schedule/event-alerts.js
-- [ ] src/schedule/gauge-crisis.js
-- [ ] src/schedule/gauge-escalation.js
-- [ ] src/schedule/needs-tracking-loop.js
-- [ ] src/schedule/needs-tracking.js
-- [ ] src/schedule/recurrence.js
-- [ ] src/schedule/reminders-loop.js
-- [ ] src/schedule/routine-review.js
-- [ ] src/schedule/schedule-availability.js
-- [ ] src/schedule/stewardship.js
-- [ ] src/schedule/temporal-format.js
-- [ ] src/schedule/tracker-projection-loop.js
+- [x] src/schedule/active-hours.js
+- [x] src/schedule/day-segments.js
+- [x] src/schedule/event-alerts.js
+- [x] src/schedule/gauge-crisis.js
+- [x] src/schedule/gauge-escalation.js
+- [x] src/schedule/needs-tracking-loop.js
+- [x] src/schedule/needs-tracking.js
+- [x] src/schedule/recurrence.js
+- [x] src/schedule/reminders-loop.js
+- [x] src/schedule/routine-review.js
+- [x] src/schedule/schedule-availability.js
+- [x] src/schedule/stewardship.js
+- [x] src/schedule/temporal-format.js
+- [x] src/schedule/tracker-projection-loop.js
 ### src/search
 - [ ] src/search/websearch-providers.js
 - [ ] src/search/websearch.js
