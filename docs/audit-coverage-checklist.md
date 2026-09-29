@@ -6,11 +6,11 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 
 ## Node — root
 - [ ] cerebellum.js
-- [ ] core-prompts.js
-- [ ] entity-ref.js
+- [x] core-prompts.js
+- [x] entity-ref.js
 - [ ] guide-chat.js
-- [ ] injection-guard.js
-- [ ] llm-call.js
+- [x] injection-guard.js
+- [x] llm-call.js
 - [x] macros.js
 - [x] mcp-reconnector.js
 - [x] message-sanitize.mjs
@@ -21,9 +21,9 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] provider-models.js
 - [x] providers.js
 - [x] relative-time.js
-- [ ] repo-root.js
+- [x] repo-root.js
 - [ ] server.js
-- [ ] settings-merge.js
+- [x] settings-merge.js
 - [x] settings-store.js
 - [x] slug-ids.js
 - [ ] thalamus.js
@@ -139,7 +139,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/tracker/tracker-cues.js
 - [ ] src/tracker/tracker-projections.js
 ### src/util
-- [ ] src/util/json-state.js
+- [x] src/util/json-state.js
 ### src/village
 - [x] src/village/audience.js
 - [ ] src/village/knocks.js

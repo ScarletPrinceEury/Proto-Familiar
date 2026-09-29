@@ -60,15 +60,21 @@ docs already read clearly for a layperson; dev specs are appropriately dense
 
 ### Elegance / minimalism
 
-- **A `readJsonFile(path, fallback)` helper** could absorb the repeated
-  `try { JSON.parse(readFileSync(file)) } catch { return <fallback> }` shape for
-  per-module JSON *state* files (not settings — those go to `settings-store`, see
-  the pass-2 headline). Sites: `voice-clips.js:39`, `call-engine.js:676`,
-  `browser/page-watch.js:41`, `weather-mirror.js:66`, `wait-streak.js:97`,
-  `pondering/ponder-web-budget.js:31` — ~6 near-identical readers. **[low-med]** —
-  weigh against premature abstraction: the fallbacks differ (`{}`, `null`, a typed
-  default), so a shared helper needs a `fallback` param; only worth it if it reads
-  cleaner than the 2-line inline. Judgement call, flagged not mandated.
+- **`src/util/json-state.js` already provides `readJsonState`/`writeJsonState`
+  (async, atomic) — but the ~6 SYNC readers don't use it.** (Correction to an
+  earlier note: the helper *exists* and is adopted by the cue-aging stores.) The
+  sync `try { JSON.parse(readFileSync(file)) } catch { return <fallback> }` sites
+  (`voice-clips.js:39`, `call-engine.js:676`, `browser/page-watch.js:41`,
+  `weather-mirror.js:66`, `wait-streak.js:97`, `pondering/ponder-web-budget.js:31`)
+  read *synchronously* (boot-time / per-check), so they can't use the async
+  helper as-is. Options: add a `readJsonStateSync(file, fallback)` to json-state.js
+  and adopt it at those 6 sites, or leave them (the 2-line inline is fine and sync
+  is genuinely needed). **[low]** — real dup, but the fix is a small sync sibling,
+  not a new module.
+- **`injection-guard.js:80` `sanitizeExternal` rebuilds 13 global regexes per
+  call** (`new RegExp(re.source, re.flags+'g')` in the loop). Precompute a
+  parallel `INJECTION_PATTERNS_G` once at module load. Called on web/discord
+  inbound text — not a hot loop, so **[low]**, but free.
 - **`memory/memorization.js` `processJob` (~418 lines, 1005-1423)** — a large
   orchestrator (extract → parse facts/relations/followups/trackers → consent-gate
   → route/store). It's genuinely connective (the memorization pipeline's spine),
