@@ -217,10 +217,10 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] public/voice-call-capture-worklet.js
 - [ ] public/voice-call.js
 - [ ] public/voice-recorder.js
-- [ ] scripts/_unruh-mcp.mjs
+- [x] scripts/_unruh-mcp.mjs
 - [x] scripts/audit-mcp-contracts.mjs
 - [x] scripts/audit-wiring.mjs
-- [ ] scripts/build-prompt-catalog.mjs
+- [x] scripts/build-prompt-catalog.mjs
 - [x] scripts/build-voice-catalogue.mjs
 - [ ] scripts/chat-with-ponderings.mjs
 - [x] scripts/check-voice-ready.mjs
@@ -230,18 +230,18 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] scripts/ensure-port-free.mjs
 - [x] scripts/ensure-unruh-deps.mjs
 - [x] scripts/ensure-voicebox.mjs
-- [ ] scripts/import-entity.js
-- [ ] scripts/import-tome.js
+- [x] scripts/import-entity.js
+- [x] scripts/import-tome.js
 - [x] scripts/lib/verify-python-peer.mjs
-- [ ] scripts/migrate-domain.mjs
+- [x] scripts/migrate-domain.mjs
 - [x] scripts/pin-audio-models.mjs
 - [ ] scripts/ponder-from-interests.mjs
 - [ ] scripts/ponder-once.mjs
 - [ ] scripts/pondering-loop-demo.mjs
 - [ ] scripts/seed-test-interests.mjs
 - [ ] scripts/threat-demo.mjs
-- [ ] scripts/transcript-to-markdown.mjs
-- [ ] scripts/ui-walk.mjs
+- [x] scripts/transcript-to-markdown.mjs
+- [x] scripts/ui-walk.mjs
 - [ ] scripts/voice-bench.mjs
 - [ ] scripts/voice-chunking-probe.mjs
 - [ ] scripts/voice-clarity-probe.mjs
