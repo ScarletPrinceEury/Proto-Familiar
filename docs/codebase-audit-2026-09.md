@@ -237,9 +237,13 @@ meaning-bearing helper (`slug-ids.js` / `db.slug_id`), which already exists:
   would feel intrusive… I stay steady"** — the flagged micro-hedge / un-named
   cost-of-silence, but at the lowest tiers on an *active* turn (human present, not
   silent), so materially lower-stakes than the triage one. Same theme as ↑.
-- **`cerebellum.js:1058`** — `nextCheckInMs` guidance "picking too long is much
-  cheaper than too short" biases the crisis re-check cadence toward waiting
-  (tension with Rule 5 "tune toward action"). Bounded by tier defaults.
+- **`cerebellum.js:1058` `nextCheckInMs` — FIXED (0.14.47, ward-approved).** Dropped
+  *"picking too long is much cheaper than picking too short"* (the drift toward long
+  re-check intervals) and the essay-ish closer. Rewritten plain, action-first: a
+  self-question ("When do I want to look again?"), *soon* when still uneasy, further
+  out only when nothing's likely to shift; token-thrift kept as a plain aside. Rule 5
+  (tune toward action) + Rule 4 (write like a person thinks). Prompt-voice only, no
+  cadence logic changed.
 - **`silence-triage-loop.js:168` — FIXED (0.14.45, ward-approved).** A failed
   deliberation was logged identically to a genuine `wait` and incremented the
   streak. `decideTriageViaLLM` now marks non-deliberations `failed:true` (config
