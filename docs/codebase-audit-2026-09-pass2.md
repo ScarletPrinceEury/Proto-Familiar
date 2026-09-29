@@ -27,7 +27,38 @@ Severity: **[high]** safety/data/privacy or a real bug · **[med]** worth fixing
 
 _(appended as the audit proceeds)_
 
-### Cross-cutting sweeps (whole tree)
+### Settings access — centralization is incomplete (headline finding)
+
+The pt.1 refactor (PR #500) extracted `readSettingsSync` + `SETTINGS_FILE` into
+the `settings-store.js` leaf module — but only routed **thalamus's** 8 sites
+through it. A tree-wide sweep shows the job is half-done; settings.json is still
+reached three more ways:
+
+- **Reader still inlined (4 sites).** `JSON.parse(readFileSync(SETTINGS_FILE))`
+  with a `catch → {}` — byte-identical to `readSettingsSync()` — at:
+  `src/safety/contact-baselines.js:74` and `:253`, `src/safety/wait-streak.js:90`,
+  and `server.js:4882` (which *already imports* `readSettingsSync`). All four are
+  read-only and can call the shared reader; the safety modules import it from
+  `settings-store.js` (leaf → no cycle). **[med]**
+- **Path const redefined (4 modules).** `const … = path.join(REPO_ROOT|__dirname,
+  'settings.json')` in `server.js:4853`, `discord-gateway.js:1819`
+  (`WARD_SETTINGS_FILE`), `contact-baselines.js:51`, `wait-streak.js:52` — all the
+  same path that `settings-store.js` now exports. Import it instead of
+  re-declaring. **[low]**
+- **Writer duplicated (the robustness one).** `discord-gateway.js:1819-1832`
+  rolls its own atomic settings write (`withLock` → read → merge → `.tmp` →
+  rename) — a copy of cerebellum's `writeSettingsPatch` (`cerebellum.js:122`),
+  which is **not exported**, which is *why* the gateway re-implemented it. Two
+  copies of the same read-modify-write lock dance is exactly the drift risk the
+  no-copy-paste rule targets (one gets a fix the other doesn't). **[med]**
+
+**Robust fix (completes the pt.1 campaign):** make `settings-store.js` the single
+home for settings.json access — move `writeSettingsPatch` there beside
+`readSettingsSync`/`SETTINGS_FILE` (it needs `withLock`, itself a leaf util), have
+cerebellum import+re-export it (like `readSettingsSync`), and route the four
+inline readers + the gateway's writer through the shared functions. One reader,
+one writer, one path const, tree-wide. Behavior-preserving; add a test for the
+writer's atomicity/merge like the reader's fixture suite.
 
 - **Debt markers — CLEAN.** No `TODO`/`FIXME`/`HACK`/`XXX`/`@deprecated` in
   non-test source. The only `remove after 0.12` note (the acknowledge aliases)

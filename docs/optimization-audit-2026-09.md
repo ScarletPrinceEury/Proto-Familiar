@@ -44,6 +44,18 @@ _(appended as the audit proceeds)_
   house style runs comment-heavy, which the per-file passes below weigh case by
   case rather than trimming reflexively.
 
+### Elegance / minimalism
+
+- **A `readJsonFile(path, fallback)` helper** could absorb the repeated
+  `try { JSON.parse(readFileSync(file)) } catch { return <fallback> }` shape for
+  per-module JSON *state* files (not settings — those go to `settings-store`, see
+  the pass-2 headline). Sites: `voice-clips.js:39`, `call-engine.js:676`,
+  `browser/page-watch.js:41`, `weather-mirror.js:66`, `wait-streak.js:97`,
+  `pondering/ponder-web-budget.js:31` — ~6 near-identical readers. **[low-med]** —
+  weigh against premature abstraction: the fallbacks differ (`{}`, `null`, a typed
+  default), so a shared helper needs a `fallback` param; only worth it if it reads
+  cleaner than the 2-line inline. Judgement call, flagged not mandated.
+
 ---
 
 ## Coverage log
