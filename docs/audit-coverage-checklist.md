@@ -156,35 +156,35 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/vision/vision.js
 - [x] src/vision/zai-vision.js
 ### src/voice
-- [ ] src/voice/audio-frame.js
+- [x] src/voice/audio-frame.js
 - [ ] src/voice/audio-worker-current.js
 - [ ] src/voice/audio-worker-host.js
 - [ ] src/voice/audio-worker.mjs
 - [ ] src/voice/call-engine.js
 - [ ] src/voice/offline-asr-models.js
-- [ ] src/voice/voice-audio-features.js
-- [ ] src/voice/voice-audio-tags.js
+- [x] src/voice/voice-audio-features.js
+- [x] src/voice/voice-audio-tags.js
 - [ ] src/voice/voice-backend.js
 - [ ] src/voice/voice-bench-run.js
 - [ ] src/voice/voice-bench.js
-- [ ] src/voice/voice-call-audience.js
-- [ ] src/voice/voice-call-guard.js
+- [x] src/voice/voice-call-audience.js
+- [x] src/voice/voice-call-guard.js
 - [ ] src/voice/voice-call-server.js
 - [ ] src/voice/voice-call-sfx.js
 - [ ] src/voice/voice-call-turn.js
 - [ ] src/voice/voice-catalogue.js
 - [ ] src/voice/voice-chat-turn.js
-- [ ] src/voice/voice-clips.js
-- [ ] src/voice/voice-diarize.js
+- [x] src/voice/voice-clips.js
+- [x] src/voice/voice-diarize.js
 - [ ] src/voice/voice-discord-adapter.js
 - [ ] src/voice/voice-discord-server.js
-- [ ] src/voice/voice-embedding.js
+- [x] src/voice/voice-embedding.js
 - [ ] src/voice/voice-enroll.js
 - [ ] src/voice/voice-extract.js
 - [ ] src/voice/voice-fetch.js
 - [ ] src/voice/voice-footprint.js
 - [ ] src/voice/voice-generation.js
-- [ ] src/voice/voice-guest-watchdog.js
+- [x] src/voice/voice-guest-watchdog.js
 - [ ] src/voice/voice-models.js
 - [ ] src/voice/voice-pin.js
 - [ ] src/voice/voice-presence.js
@@ -193,7 +193,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/voice/voice-tagging.js
 - [ ] src/voice/voice-transcribe.js
 - [ ] src/voice/voice-web-adapter.js
-- [ ] src/voice/voiceprints.js
+- [x] src/voice/voiceprints.js
 - [ ] src/voice/voices.js
 ### src/ward
 - [x] src/ward/ward-connections.js
