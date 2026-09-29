@@ -204,11 +204,11 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/warmth/reachout.js
 - [x] src/warmth/villager-context.js
 ### src/weather
-- [ ] src/weather/weather-format.js
-- [ ] src/weather/weather-mirror.js
-- [ ] src/weather/weather-providers.js
-- [ ] src/weather/weather-service.js
-- [ ] src/weather/weather-source.js
+- [x] src/weather/weather-format.js
+- [x] src/weather/weather-mirror.js
+- [x] src/weather/weather-providers.js
+- [x] src/weather/weather-service.js
+- [x] src/weather/weather-source.js
 
 ## Node — public/ + scripts/
 - [ ] public/app.js

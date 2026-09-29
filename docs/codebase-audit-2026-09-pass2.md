@@ -54,8 +54,13 @@ _(appended as the audit proceeds)_
   It "works" only because every reader/writer shares the same wrong default, so the
   round-trip is self-consistent — which is exactly why it's gone unnoticed. Fix:
   `import { REPO_ROOT }` and `DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes')`,
-  matching every sibling. (Tests pass their own `mkdtempSync` dir, so they're
-  unaffected and would still pass — meaning the test suite structurally cannot catch
+  matching every sibling. (Related, low: `weather/weather-mirror.js:23` computes
+  its tomes dir as `path.join(__dirname, '..', '..', 'tomes')` — the SAME
+  `__dirname`-relative idiom, but here it resolves CORRECTLY to the repo-root
+  `tomes/`. It works, but it's fragile the way surface-events shows and
+  inconsistent with the `REPO_ROOT` import every other module uses — worth
+  switching to `REPO_ROOT` while fixing surface-events.) (Tests pass their own
+  `mkdtempSync` dir, so they're unaffected and would still pass — meaning the test suite structurally cannot catch
   this; a pipeline/integration check that asserts the real default path would.)
   **[med — leans high: misplaced, un-ignored runtime state + code/doc drift]**
 
