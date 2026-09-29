@@ -159,9 +159,9 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/voice/audio-frame.js
 - [ ] src/voice/audio-worker-current.js
 - [ ] src/voice/audio-worker-host.js
-- [ ] src/voice/audio-worker.mjs
+- [x] src/voice/audio-worker.mjs
 - [ ] src/voice/call-engine.js
-- [ ] src/voice/offline-asr-models.js
+- [x] src/voice/offline-asr-models.js
 - [x] src/voice/voice-audio-features.js
 - [x] src/voice/voice-audio-tags.js
 - [ ] src/voice/voice-backend.js
@@ -172,7 +172,7 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/voice/voice-call-server.js
 - [ ] src/voice/voice-call-sfx.js
 - [ ] src/voice/voice-call-turn.js
-- [ ] src/voice/voice-catalogue.js
+- [x] src/voice/voice-catalogue.js
 - [ ] src/voice/voice-chat-turn.js
 - [x] src/voice/voice-clips.js
 - [x] src/voice/voice-diarize.js
@@ -180,17 +180,17 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [ ] src/voice/voice-discord-server.js
 - [x] src/voice/voice-embedding.js
 - [ ] src/voice/voice-enroll.js
-- [ ] src/voice/voice-extract.js
-- [ ] src/voice/voice-fetch.js
+- [x] src/voice/voice-extract.js
+- [x] src/voice/voice-fetch.js
 - [ ] src/voice/voice-footprint.js
 - [ ] src/voice/voice-generation.js
 - [x] src/voice/voice-guest-watchdog.js
 - [ ] src/voice/voice-models.js
-- [ ] src/voice/voice-pin.js
+- [x] src/voice/voice-pin.js
 - [ ] src/voice/voice-presence.js
 - [ ] src/voice/voice-speech.js
 - [ ] src/voice/voice-synthesize.js
-- [ ] src/voice/voice-tagging.js
+- [x] src/voice/voice-tagging.js
 - [ ] src/voice/voice-transcribe.js
 - [ ] src/voice/voice-web-adapter.js
 - [x] src/voice/voiceprints.js
