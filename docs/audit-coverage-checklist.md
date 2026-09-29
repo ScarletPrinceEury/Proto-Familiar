@@ -114,10 +114,10 @@ Every source file, checked off as it is genuinely line-read. Findings land in
 - [x] src/schedule/temporal-format.js
 - [x] src/schedule/tracker-projection-loop.js
 ### src/search
-- [ ] src/search/websearch-providers.js
-- [ ] src/search/websearch.js
+- [x] src/search/websearch-providers.js
+- [x] src/search/websearch.js
 ### src/server
-- [ ] src/server/pid-file.js
+- [x] src/server/pid-file.js
 ### src/sessions
 - [ ] src/sessions/last-activity.js
 - [ ] src/sessions/log-import.js
