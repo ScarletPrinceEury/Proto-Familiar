@@ -69,6 +69,13 @@ docs already read clearly for a layperson; dev specs are appropriately dense
   weigh against premature abstraction: the fallbacks differ (`{}`, `null`, a typed
   default), so a shared helper needs a `fallback` param; only worth it if it reads
   cleaner than the 2-line inline. Judgement call, flagged not mandated.
+- **`memory/memorization.js` `processJob` (~418 lines, 1005-1423)** — a large
+  orchestrator (extract → parse facts/relations/followups/trackers → consent-gate
+  → route/store). It's genuinely connective (the memorization pipeline's spine),
+  so this isn't an SRP violation to reflexively split — but it's at the size where
+  pulling the per-artifact routing (facts, relations, follow-ups, tracker-obs) into
+  named sub-steps would read more clearly and be easier to test in isolation.
+  **[low]** — decomposition candidate, not a defect.
 
 ---
 
