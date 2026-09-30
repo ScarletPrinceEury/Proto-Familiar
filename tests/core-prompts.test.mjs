@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { coreSystemSegment, postHistoryMessage, withCorePrompts } from '../core-prompts.js';
+import { coreFieldsBlock, coreSystemSegment, postHistoryMessage, withCorePrompts } from '../core-prompts.js';
 
 // The bug these guard: the ward's four authored prompts are assembled by the
 // browser on the web, so a server-initiated turn (Discord, voice) shipped
@@ -18,6 +18,21 @@ test('coreSystemSegment orders system → Character Profile → Human Profile wi
   // Same headers and the same '\n\n---\n\n' join the web client uses.
   assert.equal(seg,
     'I am the Familiar.\n\n---\n\n[Character Profile]\nSharp, warm, blunt.\n\n---\n\n[Human Profile]\nNight owl.');
+});
+
+test('coreFieldsBlock returns the same framing UN-substituted (the caller resolves macros)', () => {
+  const block = coreFieldsBlock({
+    systemPrompt: 'I am {{char}}.',
+    characterProfile: 'Sharp, warm, blunt.',
+    userProfile: 'Night owl.',
+  });
+  // Same headers/order/join as coreSystemSegment, but the macro token survives
+  // here — guide-chat.js folds this into its own assembly and substitutes once.
+  assert.equal(block,
+    'I am {{char}}.\n\n---\n\n[Character Profile]\nSharp, warm, blunt.\n\n---\n\n[Human Profile]\nNight owl.');
+  assert.equal(coreFieldsBlock({}), '', 'empty when nothing is configured');
+  assert.equal(coreFieldsBlock({ characterProfile: 'Just the character.' }),
+    '[Character Profile]\nJust the character.', 'only the fields that are set');
 });
 
 test('coreSystemSegment resolves {{user}}/{{char}} to the configured names', () => {

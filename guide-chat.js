@@ -15,6 +15,7 @@
  */
 
 import { substituteMacros } from './macros.js';
+import { coreFieldsBlock } from './core-prompts.js';
 
 export function guideChatDisabled() {
   return process.env.PROTO_FAMILIAR_GUIDE_CHAT_DISABLED === '1';
@@ -74,9 +75,11 @@ const GUIDE_NO_JARGON = `When I explain this, I keep it plain. I don't reach for
 export function buildGuideSystem(identityStatic, settings = {}) {
   const parts = [GUIDE_FRAMING];
   if (identityStatic && identityStatic.trim()) parts.push(identityStatic.trim());
-  if (settings.systemPrompt && settings.systemPrompt.trim()) parts.push(settings.systemPrompt.trim());
-  if (settings.characterProfile && settings.characterProfile.trim()) parts.push('[Character Profile]\n' + settings.characterProfile.trim());
-  if (settings.userProfile && settings.userProfile.trim()) parts.push('[Human Profile]\n' + settings.userProfile.trim());
+  // The ward's authored system/character/human fields — same framing as every
+  // other surface, from the one shared source so they can't drift (macros stay
+  // unresolved here; the join below substitutes the whole assembly once).
+  const coreFields = coreFieldsBlock(settings);
+  if (coreFields) parts.push(coreFields);
   parts.push(GUIDE_TOOLS_INFO);
   parts.push(GUIDE_NO_JARGON);
   return substituteMacros(parts.join('\n\n---\n\n'), settings);

@@ -25,13 +25,18 @@
 import { substituteMacros } from './macros.js';
 
 /**
- * The system-message segment built from the three system-level fields, in the
- * same order and with the same headers the web client uses. Empty string when
- * none are configured (so a `.filter(Boolean)` drops it cleanly).
+ * The three ward-authored system fields joined in canonical order with the web
+ * client's headers, UN-substituted — macros are resolved by the caller at its
+ * own boundary. '' when none are configured.
+ *
+ * This is the SINGLE SOURCE of the field framing (headers + order + join):
+ * `coreSystemSegment` substitutes it for the server chat path, and
+ * `guide-chat.js` folds it into its own larger assembly. Keep the framing here
+ * so those two surfaces can never drift apart — a header rename lands in both.
  * @param {object} settings
  * @returns {string}
  */
-export function coreSystemSegment(settings = {}) {
+export function coreFieldsBlock(settings = {}) {
   const sys  = String(settings?.systemPrompt      ?? '').trim();
   const char = String(settings?.characterProfile  ?? '').trim();
   const user = String(settings?.userProfile       ?? '').trim();
@@ -40,9 +45,19 @@ export function coreSystemSegment(settings = {}) {
   if (sys)  parts.push(sys);
   if (char) parts.push('[Character Profile]\n' + char);
   if (user) parts.push('[Human Profile]\n' + user);
-  if (parts.length === 0) return '';
+  return parts.join('\n\n---\n\n');
+}
 
-  return substituteMacros(parts.join('\n\n---\n\n'), settings);
+/**
+ * The system-message segment built from the three system-level fields, in the
+ * same order and with the same headers the web client uses, with macros resolved.
+ * Empty string when none are configured (so a `.filter(Boolean)` drops it cleanly).
+ * @param {object} settings
+ * @returns {string}
+ */
+export function coreSystemSegment(settings = {}) {
+  const block = coreFieldsBlock(settings);
+  return block ? substituteMacros(block, settings) : '';
 }
 
 /**
