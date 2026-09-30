@@ -110,9 +110,11 @@ export async function readOwnFile(relPath, { root = REPO_ROOT, maxBytes = MAX_RE
   if (rel === '.' || denied(rel)) return { ok: false, error: 'that file is off-limits (secrets or build noise) or not a file' };
 
   let buf;
+  let fullSize = 0;
   try {
     const st = await fs.stat(abs);
     if (st.isDirectory()) return { ok: false, error: 'that is a folder — use list_files' };
+    fullSize = st.size;
     const fh = await fs.open(abs, 'r');
     try {
       const len = Math.min(st.size, maxBytes);
@@ -127,11 +129,9 @@ export async function readOwnFile(relPath, { root = REPO_ROOT, maxBytes = MAX_RE
   // Binary guard: a NUL byte in the sampled head means "not text".
   if (buf.includes(0)) return { ok: false, error: 'that looks like a binary file — I only read text' };
 
-  let truncated = false;
-  try {
-    const fullSize = (await fs.stat(abs)).size;
-    truncated = fullSize > buf.length;
-  } catch { /* ignore */ }
+  // truncated = we didn't read the whole file. The stat above already gave the
+  // full size (it governed the read cap), so reuse it — no second syscall.
+  const truncated = fullSize > buf.length;
 
   return { ok: true, path: rel, content: buf.toString('utf8'), truncated };
 }
