@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { REPO_ROOT } from '../../repo-root.js';
+import { readJsonStateSync } from '../util/json-state.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(REPO_ROOT, 'tomes', '.ponder-web-budget.json');
 
@@ -27,10 +28,8 @@ export const PONDER_READS_PER_DAY_DEFAULT = 12;
 function today() { return new Date().toLocaleDateString('en-CA'); }
 
 function readState() {
-  try {
-    const s = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    if (s && s.date === today() && Number.isFinite(s.reads)) return { date: s.date, reads: s.reads };
-  } catch {}
+  const s = readJsonStateSync(FILE, null);
+  if (s && s.date === today() && Number.isFinite(s.reads)) return { date: s.date, reads: s.reads };
   return { date: today(), reads: 0 };            // absent / stale / malformed → fresh day
 }
 

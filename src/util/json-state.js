@@ -10,12 +10,26 @@
  */
 
 import path from 'path';
-import { promises as fsp } from 'fs';
+import { promises as fsp, readFileSync } from 'fs';
 
 export async function readJsonState(file, fallback = {}) {
   try {
     const raw = await fsp.readFile(file, 'utf8');
     const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback; // missing/corrupt → start fresh
+  }
+}
+
+/**
+ * Synchronous sibling of readJsonState, for boot-time / per-check readers that
+ * can't await. Same contract: missing/corrupt/non-object → the fallback, never
+ * throws. Each caller keeps its own post-parse validation on top.
+ */
+export function readJsonStateSync(file, fallback = {}) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
     return parsed && typeof parsed === 'object' ? parsed : fallback;
   } catch {
     return fallback; // missing/corrupt → start fresh

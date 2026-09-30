@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { meaningSlugId } from '../../slug-ids.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
+import { readJsonStateSync } from '../util/json-state.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const FILENAME = '.page-watches.json';
@@ -37,10 +38,8 @@ const MAX_FETCH_FAILS = 5;                                      // give up on a 
 function file(tomesDir) { return path.join(tomesDir, FILENAME); }
 
 export function readWatches(tomesDir = DEFAULT_TOMES_DIR) {
-  try {
-    const data = JSON.parse(fs.readFileSync(file(tomesDir), 'utf8'));
-    return Array.isArray(data?.watches) ? data.watches : [];
-  } catch { return []; }
+  const data = readJsonStateSync(file(tomesDir), {});
+  return Array.isArray(data?.watches) ? data.watches : [];
 }
 
 export function writeWatches(watches, tomesDir = DEFAULT_TOMES_DIR) {

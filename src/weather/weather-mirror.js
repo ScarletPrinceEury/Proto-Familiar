@@ -15,9 +15,10 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { promises as fsp, readFileSync, mkdirSync } from 'fs';
+import { promises as fsp, mkdirSync } from 'fs';
 
 import { buildNowWeatherLine, formatWeatherVague, WEATHER_STALE_MS } from './weather-format.js';
+import { readJsonStateSync } from '../util/json-state.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, '..', '..', 'tomes');
@@ -62,12 +63,7 @@ export async function clearWeatherMirror({ tomesDir = DEFAULT_TOMES_DIR } = {}) 
 /** Synchronous read of the mirror. null on absent/corrupt/disabled. */
 export function readWeatherMirrorSync({ tomesDir = DEFAULT_TOMES_DIR } = {}) {
   if (envDisabled()) return null;
-  try {
-    const data = JSON.parse(readFileSync(file(tomesDir), 'utf8'));
-    return (data && typeof data === 'object') ? data : null;
-  } catch {
-    return null;
-  }
+  return readJsonStateSync(file(tomesDir), null);
 }
 
 /**

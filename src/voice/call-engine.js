@@ -33,10 +33,11 @@
  * a test injects a fake. Same discipline as the push-adapter registry.
  */
 
-import { promises as fsp, mkdirSync, readFileSync } from 'node:fs';
+import { promises as fsp, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pcm16ToFloat } from './voice-audio-features.js';
+import { readJsonStateSync } from '../util/json-state.js';
 import { normalizeTranscriptCase } from './voice-speech.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -672,7 +673,5 @@ export async function isCallActiveFromFile(tomesDir = DEFAULT_TOMES_DIR) {
  * fail-safe: an absent/broken file reads as NOT active.
  */
 export function isCallActiveFromFileSync(tomesDir = DEFAULT_TOMES_DIR) {
-  try {
-    return Boolean(JSON.parse(readFileSync(callStatePath(tomesDir), 'utf8'))?.active);
-  } catch { return false; }
+  return Boolean(readJsonStateSync(callStatePath(tomesDir), {})?.active);
 }

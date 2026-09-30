@@ -21,12 +21,13 @@
  * install verifies the same hash.
  */
 
-import { promises as fs, readFileSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { measureVoiceClip, describeMeasurement } from './voice-audio-features.js';
 import { sourceByKey, SHORTLIST, shortlistKeys, DEFAULT_VOICE, preferEnhanced } from './voice-catalogue.js';
+import { readJsonStateSync } from '../util/json-state.js';
 
 const CACHE_FILE = path.join('tomes', '.voice-clip-features.json');
 
@@ -35,11 +36,10 @@ let catalogue = null;
 /** Read the generated catalogue once. Absence is a clean empty list, not a crash. */
 export function loadCatalogue(rootDir = process.cwd()) {
   if (catalogue) return catalogue;
-  try {
-    catalogue = JSON.parse(readFileSync(path.join(rootDir, 'voice-clips.json'), 'utf8'));
-  } catch {
-    catalogue = { clips: [], counts: { clips: 0, voices: 0 }, licences: {} };
-  }
+  catalogue = readJsonStateSync(
+    path.join(rootDir, 'voice-clips.json'),
+    { clips: [], counts: { clips: 0, voices: 0 }, licences: {} },
+  );
   return catalogue;
 }
 
