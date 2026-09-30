@@ -47,6 +47,7 @@ import { promises as fsp, mkdirSync, readFileSync } from 'fs';
 import { plainInterval } from '../../relative-time.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
+import { readJsonStateSync } from '../util/json-state.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const SETTINGS_FILE     = path.join(REPO_ROOT, 'settings.json');
@@ -93,19 +94,15 @@ export function isWaitStreakEnabled(settings = null) {
 }
 
 function readStateSync(tomesDir) {
-  try {
-    const data = JSON.parse(readFileSync(file(tomesDir), 'utf8'));
-    if (!data || typeof data !== 'object') return { ...ZERO_STATE, tallies: {} };
-    return {
-      count:             Number.isInteger(data.count) && data.count >= 0 ? data.count : 0,
-      lastWaitAt:        typeof data.lastWaitAt === 'string' ? data.lastWaitAt : null,
-      lastProactiveAt:   typeof data.lastProactiveAt === 'string' ? data.lastProactiveAt : null,
-      lastProactiveKind: typeof data.lastProactiveKind === 'string' ? data.lastProactiveKind : null,
-      tallies:           (data.tallies && typeof data.tallies === 'object') ? { ...data.tallies } : {},
-    };
-  } catch {
-    return { ...ZERO_STATE, tallies: {} };
-  }
+  const data = readJsonStateSync(file(tomesDir), null);
+  if (!data) return { ...ZERO_STATE, tallies: {} };
+  return {
+    count:             Number.isInteger(data.count) && data.count >= 0 ? data.count : 0,
+    lastWaitAt:        typeof data.lastWaitAt === 'string' ? data.lastWaitAt : null,
+    lastProactiveAt:   typeof data.lastProactiveAt === 'string' ? data.lastProactiveAt : null,
+    lastProactiveKind: typeof data.lastProactiveKind === 'string' ? data.lastProactiveKind : null,
+    tallies:           (data.tallies && typeof data.tallies === 'object') ? { ...data.tallies } : {},
+  };
 }
 
 async function writeState(tomesDir, state) {
