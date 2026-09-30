@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildGuideSystem, guideChatDisabled, GUIDE_TOOLS_INFO } from '../guide-chat.js';
+import { coreFieldsBlock } from '../core-prompts.js';
+import { substituteMacros } from '../macros.js';
 
 const settings = {
   userName: 'Sam', charName: 'Vex',
@@ -17,6 +19,17 @@ test('buildGuideSystem assembles identity + the four prompt fields + the two blo
   assert.match(sys, /USER_PROMPT/);
   assert.match(sys, /Marginalia/);      // tools-info (§5b)
   assert.match(sys, /keep it plain/);   // no-jargon (§5c)
+});
+
+test('buildGuideSystem folds in the shared coreFieldsBlock verbatim (single source, no drift)', () => {
+  // The whole point of the shared helper: the guide's identity-field section IS
+  // the same block coreSystemSegment uses, substituted. So a header/order change
+  // in core-prompts.js lands here too and the two surfaces can't silently diverge.
+  const sys = buildGuideSystem('id', settings);
+  const shared = substituteMacros(coreFieldsBlock(settings), settings);
+  assert.ok(shared, 'the fixture configures the fields, so the block is non-empty');
+  assert.ok(sys.includes(shared),
+    'guide chat must contain the exact shared field block, not a private copy of the framing');
 });
 
 test('buildGuideSystem resolves {{user}}/{{char}} macros', () => {
