@@ -1002,6 +1002,77 @@ export function factStorage(fact, { factDate, hasNamedSubjects = false } = {}) {
   };
 }
 
+/**
+ * name/alias → villager lookup for the remember gate. Pure; the registry is
+ * loaded once in processJob and reused for the villager legend too.
+ */
+function buildByNameLookup(registry) {
+  const byName = new Map();
+  for (const v of registry?.villagers ?? []) {
+    byName.set(v.name.toLowerCase(), v);
+    for (const a of v.aliases ?? []) {
+      if (a.handle) byName.set(a.handle.toLowerCase(), v);
+    }
+  }
+  return byName;
+}
+
+/**
+ * File any deferred follow-ups the extraction surfaced. Best-effort per item —
+ * a failure is logged, never fails the job. No-op on an empty list.
+ */
+async function createSessionFollowups(followups, createSessionFollowupDep) {
+  for (const summary of followups) {
+    try { await createSessionFollowupDep({ summary }); }
+    catch (err) { console.warn('[memorization] createSessionFollowup failed:', err?.message ?? err); }
+  }
+}
+
+/**
+ * Log passive tracker observations (§5.2) parsed from the kept facts. Each logs
+ * as source:'inferred'; a refusal (off-schema payload, entry cap) is Unruh's
+ * own visible verdict — logged, never fabricated as a success.
+ */
+async function logTrackerObservations(facts, validTrackerIds, logTrackerEntryDep) {
+  const observations = parseTrackerObservations(facts, validTrackerIds);
+  let logged = 0;
+  for (const obs of observations) {
+    try {
+      const r = await logTrackerEntryDep({ tracker_id: obs.tracker, payload: obs.payload, ts: obs.ts, source: 'inferred' });
+      if (r?.ok) logged++;
+      else console.warn(`[memorization] tracker observation not logged (${obs.tracker}): ${r?.code ?? r?.error ?? 'refused'}`);
+    } catch (err) { console.warn('[memorization] logTrackerEntry failed:', err?.message ?? err); }
+  }
+  if (observations.length) console.log(`[memorization] tracker observations: ${logged}/${observations.length} logged (inferred)`);
+}
+
+/**
+ * Route the extraction's relations into the knowledge graph. Each endpoint's
+ * audience is derived in code and the edge takes the narrower of its two, so it
+ * can't reveal a ward-private node in a wider room. Fire-and-forget per edge —
+ * a failure never fails the job. Returns how many edges were written.
+ */
+async function routeRelationsToGraph(relations, registry, graphRelateDep) {
+  const results = await Promise.allSettled(
+    relations.map(rel => {
+      const fromAudience = deriveNodeAudience({ label: rel.from, registry });
+      const toAudience   = deriveNodeAudience({ label: rel.to,   registry });
+      const edgeAudience = mostRestrictiveAudience([fromAudience, toAudience], registry);
+      return graphRelateDep({
+        fromLabel: rel.from,
+        fromType:  rel.fromType,
+        toLabel:   rel.to,
+        toType:    rel.toType,
+        type:      rel.type,
+        fromAudience, toAudience, edgeAudience,
+      });
+    })
+  );
+  const edgesRouted = results.filter(r => r.status === 'fulfilled' && r.value?.ok).length;
+  if (edgesRouted) console.log(`[memorization] routed ${edgesRouted}/${relations.length} relation(s) to the graph`);
+  return edgesRouted;
+}
+
 export async function processJob(job, deps = {}) {
   // Injectable seams — default to the real imports so production is byte-identical;
   // a pipeline test overrides them to drive the whole job (parse → per-fact loop →
@@ -1142,12 +1213,7 @@ export async function processJob(job, deps = {}) {
     for (const r of parseRelations(raw, finishReason)) relations.push(r);
     if (followupsOn) for (const fu of parseFollowups(raw, finishReason)) followups.push(fu);
   }
-  if (followups.length) {
-    for (const summary of followups) {
-      try { await createSessionFollowupDep({ summary }); }
-      catch (err) { console.warn('[memorization] createSessionFollowup failed:', err?.message ?? err); }
-    }
-  }
+  await createSessionFollowups(followups, createSessionFollowupDep);
 
   // Passive tracker observations (§5.2). Collected from ALL parsed facts —
   // independent of the per-fact consent/integrity decisions below, because a
@@ -1156,27 +1222,12 @@ export async function processJob(job, deps = {}) {
   // logs as `source:'inferred'`; a refusal (off-schema payload, entry cap) is
   // Unruh's own visible verdict, logged and never fabricated as a success.
   if (trackersOn && validTrackerIds.size) {
-    const observations = parseTrackerObservations(facts, validTrackerIds);
-    let logged = 0;
-    for (const obs of observations) {
-      try {
-        const r = await logTrackerEntryDep({ tracker_id: obs.tracker, payload: obs.payload, ts: obs.ts, source: 'inferred' });
-        if (r?.ok) logged++;
-        else console.warn(`[memorization] tracker observation not logged (${obs.tracker}): ${r?.code ?? r?.error ?? 'refused'}`);
-      } catch (err) { console.warn('[memorization] logTrackerEntry failed:', err?.message ?? err); }
-    }
-    if (observations.length) console.log(`[memorization] tracker observations: ${logged}/${observations.length} logged (inferred)`);
+    await logTrackerObservations(facts, validTrackerIds, logTrackerEntryDep);
   }
 
   // Build name → villager lookup for the remember gate (registry already loaded
   // above for the villager legend — reused here so the job reads it once).
-  const byName = new Map();
-  for (const v of registry.villagers ?? []) {
-    byName.set(v.name.toLowerCase(), v);
-    for (const a of v.aliases ?? []) {
-      if (a.handle) byName.set(a.handle.toLowerCase(), v);
-    }
-  }
+  const byName = buildByNameLookup(registry);
 
   // Ward remember map — gates facts about my human themselves (no matched
   // villager subject). The Village registry covers OTHER people; the ward is
@@ -1367,27 +1418,7 @@ export async function processJob(job, deps = {}) {
   // Phylactery being down degrades to a no-op.
   let edgesRouted = 0;
   if (created && relations.length) {
-    const results = await Promise.allSettled(
-      relations.map(rel => {
-        // Derive each endpoint's audience in code: a node matching a known
-        // villager takes their category, otherwise ward-private (fail-closed).
-        // The edge takes the narrower of its two endpoints so it can't reveal a
-        // ward-private node in a wider room.
-        const fromAudience = deriveNodeAudience({ label: rel.from, registry });
-        const toAudience   = deriveNodeAudience({ label: rel.to,   registry });
-        const edgeAudience = mostRestrictiveAudience([fromAudience, toAudience], registry);
-        return graphRelateDep({
-          fromLabel: rel.from,
-          fromType:  rel.fromType,
-          toLabel:   rel.to,
-          toType:    rel.toType,
-          type:      rel.type,
-          fromAudience, toAudience, edgeAudience,
-        });
-      })
-    );
-    edgesRouted = results.filter(r => r.status === 'fulfilled' && r.value?.ok).length;
-    if (edgesRouted) console.log(`[memorization] routed ${edgesRouted}/${relations.length} relation(s) to the graph`);
+    edgesRouted = await routeRelationsToGraph(relations, registry, graphRelateDep);
   }
 
   // Day-anchored coverage (Phase 1): record this date-slice as processed so the
