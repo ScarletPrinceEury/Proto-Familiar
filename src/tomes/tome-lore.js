@@ -233,6 +233,27 @@ export function activateLore(tomes, userInput, { messages = [], opts = {}, env =
   };
 }
 
+/**
+ * Audience gate for a SERVER turn. The web path is single-audience (the ward's
+ * own session), so it never needs this; a Discord turn can face a villager or a
+ * guild, so an entry marked `wardOnly` must not reach it. Removes `wardOnly`
+ * entries from every slot UNLESS the turn is ward-private — so the diagnosis
+ * constant ("{{user}} has <condition>") stays ward-only while the actionable
+ * symptom entries still inject for everyone (the ward's decision: the actionable
+ * guidance is neutral; the diagnosis label is the medical info to protect).
+ * Returns a new activated-shaped object; the input is not mutated.
+ */
+export function filterByAudience(activated, { wardPrivate = false } = {}) {
+  const a = activated ?? {};
+  const slots = ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth'];
+  const out = {};
+  for (const k of slots) {
+    const arr = a[k] ?? [];
+    out[k] = wardPrivate ? arr.slice() : arr.filter(e => !e?.wardOnly);
+  }
+  return out;
+}
+
 const renderEntries = (arr, resolve) =>
   (arr ?? []).map(e => resolve(String(e?.content ?? '')).trim()).filter(Boolean).join('\n\n');
 
