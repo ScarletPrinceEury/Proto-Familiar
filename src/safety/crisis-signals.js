@@ -42,6 +42,8 @@
  * matched text, so the user / debugger can see exactly what triggered.
  */
 
+import { normalizeForMatch } from '../util/text-normalize.js';
+
 export const SIGNALS = Object.freeze([
   // ── SEVERE ──────────────────────────────────────────────────────
   { id: 'suicidal_direct', tier: 'severe', weight: 8,
@@ -295,18 +297,25 @@ const NEGATION_DAMP_FACTOR = 0.2;
 export function scoreMessage(message) {
   if (!message || typeof message !== 'string') return { level: 0, signals: [] };
 
+  // Score a NORMALISED copy, never the stored message: a curly apostrophe or a
+  // "wanna" must not let a severe phrase slip past the floor ("I don’t wanna be
+  // here anymore" scored 0 before this). Normalisation only ever widens what the
+  // patterns catch — it can raise sensitivity, never lower it — and the patterns
+  // themselves are untouched. See src/util/text-normalize.js.
+  const text = normalizeForMatch(message);
+
   const fired = [];
   let level = 0;
 
   for (const signal of SIGNALS) {
     for (const pattern of signal.patterns) {
-      const m = pattern.exec(message);
+      const m = pattern.exec(text);
       if (!m) continue;
 
       // ±50 chars of context around the match for damping checks.
       const ctxStart = Math.max(0, m.index - 50);
-      const ctxEnd   = Math.min(message.length, m.index + m[0].length + 50);
-      const ctx      = message.slice(ctxStart, ctxEnd);
+      const ctxEnd   = Math.min(text.length, m.index + m[0].length + 50);
+      const ctx      = text.slice(ctxStart, ctxEnd);
       // NEGATION is checked against the context with the matched span spliced
       // OUT. Invariant: a signal's own wording can never negate-damp it; only
       // surrounding context can. Several severe/moderate patterns contain a
@@ -323,7 +332,7 @@ export function scoreMessage(message) {
       // embarrassment"), so excluding the span would break a legitimate damp
       // and let hyperbole score severe. Only negation words live inside a
       // signal's grammar, so only negation needs the span excluded.
-      const ctxNoMatch = message.slice(ctxStart, m.index) + ' ' + message.slice(m.index + m[0].length, ctxEnd);
+      const ctxNoMatch = text.slice(ctxStart, m.index) + ' ' + text.slice(m.index + m[0].length, ctxEnd);
 
       const damped = (
         NEGATION_BLOCKERS.some(b   => b.test(ctxNoMatch)) ||
