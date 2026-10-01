@@ -22,10 +22,21 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { REPO_ROOT } from '../../repo-root.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const DEFAULT_TOMES_DIR = path.resolve(__dirname, 'tomes');
+// Resolve from the repo root like every other state-owning module. Before this
+// (the 2026-09-07 refactor that moved this file into src/pondering/), it was
+// `path.resolve(__dirname, 'tomes')`, which pointed at src/pondering/tomes/ —
+// so outcomes were written to a stray, un-ignored file and the real
+// tomes/.surface-events.json froze. migrateStraySurfaceEvents() folds that
+// stray file back in at boot.
+export const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
+
+// Where the bug wrote before the fix — kept only so the boot migration can find
+// and drain it. Not exported; production never reads from here otherwise.
+const STRAY_TOMES_DIR = path.resolve(__dirname, 'tomes');
 
 function eventsPathFor(tomesDir) {
   return path.join(tomesDir, '.surface-events.json');
@@ -375,4 +386,52 @@ export async function rekeySurfaceEventIds(mapping = {}, tomesDir = DEFAULT_TOME
   }
   if (moved) await saveSurfaceEvents(store, tomesDir);
   return { moved };
+}
+
+/**
+ * One-time boot migration (§2). From 2026-09-07 until the path fix, outcomes
+ * were written to src/pondering/tomes/.surface-events.json — a stray,
+ * un-ignored file — while the canonical tomes/.surface-events.json froze. Fold
+ * the stray file back into the canonical store: merge events deduped by `id`,
+ * keep the newer `last_reflection_at`, then delete the stray so it can't merge
+ * twice. Best-effort — never throws into boot; an absent stray file is a no-op.
+ *
+ * `strayDir` is injectable for tests; production uses the real pre-fix location.
+ */
+export async function migrateStraySurfaceEvents({
+  tomesDir = DEFAULT_TOMES_DIR,
+  strayDir = STRAY_TOMES_DIR,
+} = {}) {
+  // If the stray and canonical dirs coincide (shouldn't, but guard it), there is
+  // nothing to move and deleting the file would destroy the live store.
+  if (path.resolve(strayDir) === path.resolve(tomesDir)) return { migrated: 0 };
+  const strayPath = eventsPathFor(strayDir);
+  try { await fs.access(strayPath); }
+  catch { return { migrated: 0 }; } // no stray file → nothing to do
+
+  return withLock(tomesDir, async () => {
+    let stray;
+    try { stray = JSON.parse(await fs.readFile(strayPath, 'utf8')); }
+    catch { return { migrated: 0 }; } // unreadable/corrupt → leave it, don't delete
+    const canonical = await loadSurfaceEvents(tomesDir);
+    const seen = new Set((canonical.events ?? []).map(e => e?.id).filter(Boolean));
+    let migrated = 0;
+    for (const e of (Array.isArray(stray.events) ? stray.events : [])) {
+      if (!e?.id || seen.has(e.id)) continue; // dedupe by event id
+      canonical.events.push(e);
+      seen.add(e.id);
+      migrated += 1;
+    }
+    // Keep whichever reflection watermark is newer so already-reflected stray
+    // outcomes aren't re-processed.
+    const a = typeof canonical.last_reflection_at === 'number' ? canonical.last_reflection_at : 0;
+    const b = typeof stray.last_reflection_at === 'number' ? stray.last_reflection_at : 0;
+    canonical.last_reflection_at = Math.max(a, b) || null;
+    await saveSurfaceEvents(canonical, tomesDir);
+    // Remove the stray file (and any .tmp sibling) so a later boot can't re-merge.
+    try { await fs.rm(strayPath, { force: true }); } catch { /* best-effort */ }
+    try { await fs.rm(strayPath + '.tmp', { force: true }); } catch { /* best-effort */ }
+    console.log(`[surface-events] migrated ${migrated} stray event(s) from the pre-fix location into ${eventsPathFor(tomesDir)}`);
+    return { migrated };
+  });
 }
