@@ -59,7 +59,7 @@ import {
 import { findVillagerByAlias } from '../village/village.js';
 import { mergeSettings } from '../../settings-merge.js';
 import { readAllTomes } from '../tomes/tome-store.js';
-import { activateLore, foldLoreForPrompt } from '../tomes/tome-lore.js';
+import { activateLore, foldLoreForPrompt, filterByAudience } from '../tomes/tome-lore.js';
 import { resolveTomeMacros } from '../tomes/tome-macros.js';
 import {
   isQueueCommand, QUEUE_CID,
@@ -1281,7 +1281,7 @@ function discordTomesOff() {
 // run the same engine (tome-lore.js) here. Returns injectable strings by slot
 // ({ lead, tail, atDepth }) — empty when off, when there are no tomes, or when
 // nothing matched. NEVER throws into the turn; a bad tome degrades to no lore.
-async function activeDiscordLore({ content, session, settings, locationKey }) {
+async function activeDiscordLore({ content, session, settings, locationKey, wardPrivate = false }) {
   const none = { lead: '', tail: '', atDepth: '' };
   if (discordTomesOff()) return none;
   try {
@@ -1301,12 +1301,17 @@ async function activeDiscordLore({ content, session, settings, locationKey }) {
       // not persisted across Discord turns yet (v1) — a documented follow-up.
       env: { turnCount: priorTurns.length, charName: settings.charName, generationMode: 'normal' },
     });
+    // Audience gate: on a non-ward-private turn (a villager DM, a guild channel)
+    // drop `wardOnly` entries — the "{{user}} has <condition>" diagnosis
+    // constants — so the ward's medical info never reaches a third party. The
+    // actionable symptom entries are unmarked and still inject for everyone.
+    const gated = filterByAudience(activated, { wardPrivate });
     const n = ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth']
-      .reduce((s, k) => s + (activated[k]?.length || 0), 0);
-    if (n) console.log(`[discord] tomes: ${n} lore entr${n === 1 ? 'y' : 'ies'} activated in ${locationKey}`);
+      .reduce((s, k) => s + (gated[k]?.length || 0), 0);
+    if (n) console.log(`[discord] tomes: ${n} lore entr${n === 1 ? 'y' : 'ies'} activated in ${locationKey}${wardPrivate ? '' : ' (ward-only entries gated)'}`);
     // Resolve live macros ({{visionActive}}, {{char}}, …) against current
     // settings so the self-documenting manual tome always reads true.
-    return foldLoreForPrompt(activated, (t) => resolveTomeMacros(t, settings));
+    return foldLoreForPrompt(gated, (t) => resolveTomeMacros(t, settings));
   } catch (err) {
     console.error('[discord] tome lore activation failed (skipping):', err?.message ?? err);
     return none;
@@ -2708,7 +2713,7 @@ async function handleTurn(gw, msg, decision) {
   // (after_char + sys_bottom) BELOW the system block; at-depth rides near the
   // turn (added to apiMessages below). session.messages here is prior history —
   // the current message (`content`) is scanned as the live input, not yet in it.
-  const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey });
+  const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey, wardPrivate: audienceTag === 'ward-private' });
   const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
   const history = buildHistoryForPrompt(session);
 
