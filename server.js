@@ -86,6 +86,7 @@ import {
   getNewOutcomesSinceLastReflection,
   markReflected,
   tagRaisedOutcomes,
+  migrateStraySurfaceEvents,
 } from './src/pondering/surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './src/memory/recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './src/schedule/reminders-loop.js';
@@ -5934,6 +5935,11 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // enable write-through, so a provider that 400'd on the field stays bare across
   // restarts until its model changes. Optimistic until something is learned.
   hydrateNameFieldCache();
+  // One-time: fold any surface-events written to the pre-fix stray location
+  // (src/pondering/tomes/) back into the canonical store, then remove it.
+  // Best-effort; never blocks boot.
+  migrateStraySurfaceEvents({ tomesDir: TOMES_DIR })
+    .catch(err => console.error('[surface-events] stray migration failed (skipping):', err?.message ?? err));
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();

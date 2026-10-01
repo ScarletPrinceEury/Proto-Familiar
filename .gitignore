@@ -45,6 +45,9 @@ tomes/.session-bindings.json.tmp
 # Surface-events stream (slice 2) — per-embodiment record of offers + outcomes.
 tomes/.surface-events.json
 tomes/.surface-events.json.tmp
+# Safety net: any runtime tomes/ dir that a mis-resolved __dirname path creates
+# under src/ (e.g. the pre-fix src/pondering/tomes/ stray — §2). Never a source dir.
+src/**/tomes/
 # Discord gateway runtime state — conversation map, rate-limit buckets, revisit queue.
 tomes/.discord-map.json
 tomes/.discord-map.json.tmp
