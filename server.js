@@ -345,7 +345,7 @@ import { shortSlug } from './slug-ids.js';
 // each other's edits. The locking primitive (withLock) and the
 // atomic .tmp+rename pattern live in thalamus.js.
 import { withLock, writeTomeFile, modifyTomeFile, findOrCreateTomeByName, createMemoryFull } from './thalamus.js';
-import { readAllTomes, buildTomeEntry, listTomesSummary } from './src/tomes/tome-store.js';
+import { readAllTomes, buildTomeEntry, listTomesSummary, isTomeFile } from './src/tomes/tome-store.js';
 import { listQuarantine, releaseQuarantine, discardQuarantine } from './src/safety/memory-quarantine.js';
 import { recordEvent as hippoRecord } from './src/memory/hippocampus.js';
 
@@ -3535,11 +3535,9 @@ const TOMES_DIR = path.join(__dirname, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });
 
 
-// True for filenames that look like a tome file (i.e. not the memorization
-// queue dotfile or any other hidden bookkeeping file we drop in TOMES_DIR).
-function isTomeFile(f) {
-  return f.endsWith('.json') && !f.startsWith('.');
-}
+// `isTomeFile` is imported from tome-store.js (one source of truth — it used to
+// be duplicated here and the two could drift; the Sample-exclusion fix is the
+// kind of change that must land in exactly one place).
 
 // Returns the absolute path for a tome file, falling back to a directory scan
 // so that pre-existing tomes with non-UUID filenames (e.g. "ADHD-Tome.json") are found.

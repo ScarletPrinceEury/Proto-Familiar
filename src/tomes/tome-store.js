@@ -15,7 +15,12 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 export function isTomeFile(f) {
-  return f.endsWith('.json') && !f.startsWith('.');
+  // A real, injectable tome is a non-dotfile `.json`. Dotfiles
+  // (.consent-pending.json, .memorization-queue.json, …) are bookkeeping, never
+  // lore. `Sample*.json` are dev/reference lorebooks (see .gitignore's
+  // "Sample/test lorebook files" entry) — a reference to read on disk, NOT a
+  // live tome, so they must never reach an injection site.
+  return f.endsWith('.json') && !f.startsWith('.') && !f.startsWith('Sample');
 }
 
 // One SillyTavern-shaped tome entry, built in ONE place so the default-tome and
