@@ -547,7 +547,7 @@ function scheduleAmbientBatch(gw, d, decision) {
   batch.timer = setTimeout(() => {
     ambientBatches.delete(key);
     markAmbientTurn(key); // cooldown starts when the batch actually fires
-    enqueueTurn(key, () => handleTurn(gw, batch.msg, batch.decision))
+    enqueueTurn(key, (turn) => handleTurn(gw, batch.msg, batch.decision, turn))
       .catch(err => console.error('[discord] batched ambient turn failed:', err?.message ?? err));
   }, waitMs);
   batch.timer.unref?.();
@@ -1220,12 +1220,40 @@ export function discordReplyMaxTokens(settings) {
 // on my human's own direct turn.
 const LLM_EMPTY_NOTE = "(The LLM didn't return anything this time. Nudge me and I'll try again.)";
 const LLM_USAGE_NOTE = "(The provider says your usage ran out, so nothing came back — worth checking your account or switching connection.)";
+const LLM_TIMEOUT_NOTE = "(The LLM took too long to answer, so I stopped waiting. Nudge me and I'll try again.)";
+
+// ── Turn deadlines ────────────────────────────────────────────────
+// A Discord turn has nobody to hang up on it: the web chat aborts when the tab
+// closes, a voice turn carries its own 90s budget, but a Discord provider call
+// used to be an unbounded await — and turns are serialized per location. So ONE
+// provider response that never finished (a proxy that sends headers, then holds
+// the socket open with keep-alive bytes and no answer; undici's 300s idle
+// timeouts never fire on a trickle) wedged the whole DM: every later message
+// queued behind it and was never even read. Two wall-clock bounds:
+//   • DISCORD_CALL_TIMEOUT_MS — one provider round-trip (callChatRaw `timeoutMs`).
+//   • DISCORD_TURN_TIMEOUT_MS — the whole turn, every tool round + fallbacks
+//     (enqueueTurn's turn signal, threaded into every call and the tool loop).
+// RULE B: on expiry my human gets LLM_TIMEOUT_NOTE on their own turn (never
+// silence), that note is what lands in my session as my reply, and the log says
+// which bound fired. If a turn ignores its aborted signal anyway (stuck in work
+// that can't be cancelled), enqueueTurn releases the location's queue
+// TURN_RELEASE_GRACE_MS later so the next message still gets read.
+export const DISCORD_CALL_TIMEOUT_MS = 180_000;
+export const DISCORD_TURN_TIMEOUT_MS = 600_000;
+const TURN_RELEASE_GRACE_MS = 20_000;
+
+/** True for a deadline expiry — AbortSignal.timeout() and the turn deadline both
+ *  reject with a DOMException named 'TimeoutError'. */
+export function isTimeoutError(err) {
+  return err?.name === 'TimeoutError';
+}
 
 // Pick the honest note from the failure. Conservative: only a CLEAR quota/balance/
 // payment signal (or HTTP 402) gets the usage note; a transient 429 or anything
 // vague falls to the plain "returned nothing" so we never mislead about billing.
 // `err` is null when the reply was simply empty (no throw).
 export function providerFailureNote(err) {
+  if (isTimeoutError(err)) return LLM_TIMEOUT_NOTE;
   const msg = String(err?.message ?? err ?? '').toLowerCase();
   if (/\b402\b|quota|insufficient|\bbalance\b|billing|payment required|\bcredits?\b|out of (credits|tokens)|usage limit/.test(msg)) {
     return LLM_USAGE_NOTE;
@@ -1233,10 +1261,20 @@ export function providerFailureNote(err) {
   return LLM_EMPTY_NOTE;
 }
 
-export async function callChatRaw({ conn, messages, settings, tools }) {
+// `timeoutMs` bounds each provider round-trip (headers AND body); `signal` is the
+// caller's own abort (a Discord turn's deadline). Both optional — with neither,
+// the call is unbounded, as it always was for callers that pass none.
+export async function callChatRaw({ conn, messages, settings, tools, signal, timeoutMs }) {
   const url = resolveProviderUrl(conn);
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const effort = resolveReasoningEffort(conn);
+  const bounded = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  // A fresh per-call deadline for every fetch (sendWithNames may retry once).
+  const fetchSignal = () => {
+    if (!bounded) return signal;
+    const deadline = AbortSignal.timeout(timeoutMs);
+    return signal ? AbortSignal.any([deadline, signal]) : deadline;
+  };
   // Name the human on their own turns + label villagers (entity-as-subject rule,
   // across every user-role surface). Every callChatRaw caller here is a real turn
   // (deliberations use callProviderChat), so the shared sendWithNames seam is safe
@@ -1246,24 +1284,38 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
   const job = { provider: conn.provider, model: conn.model, baseUrl: conn.baseUrl ?? null };
   const wardName = (settings?.userName || '').trim() || 'my human';
   const send = async (msgs) => {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        // Keyless local/custom endpoints carry no Authorization (empty Bearer 400s).
-        ...authHeader(conn.apiKey),
-      },
-      body: JSON.stringify({
-        model:       conn.model.trim(),
-        messages:    msgs,
-        stream:      false,
-        temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
-        max_tokens:  discordReplyMaxTokens(settings),
-        ...(effort ? { reasoning_effort: effort } : {}),
-        ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
-      }),
-    });
-    const text = await resp.text();
+    const t0 = Date.now();
+    let resp, text;
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          // Keyless local/custom endpoints carry no Authorization (empty Bearer 400s).
+          ...authHeader(conn.apiKey),
+        },
+        body: JSON.stringify({
+          model:       conn.model.trim(),
+          messages:    msgs,
+          stream:      false,
+          temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
+          max_tokens:  discordReplyMaxTokens(settings),
+          ...(effort ? { reasoning_effort: effort } : {}),
+          ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
+        }),
+        signal: fetchSignal(),
+      });
+      text = await resp.text();
+    } catch (err) {
+      // A deadline expiry is a failure that matters — say so loudly, and on the
+      // status the Village panel shows, so a hung provider never reads as calm.
+      if (isTimeoutError(err)) {
+        const why = `${conn.provider}/${conn.model} gave no answer within ${((Date.now() - t0) / 1000).toFixed(1)}s (${err.message})`;
+        console.warn(`[discord] provider call timed out — ${why}`);
+        gw.status.lastError = `provider call timed out: ${why}`;
+      }
+      throw err;
+    }
     if (!resp.ok) throw new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`);
     const data = JSON.parse(text);
     if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
@@ -1313,8 +1365,10 @@ async function activeDiscordLore({ content, session, settings, locationKey }) {
   }
 }
 
-async function callChat({ conn, messages, settings }) {
-  const data = await callChatRaw({ conn, messages, settings });
+// Every Discord-turn call is bounded per round-trip; `signal` adds the turn's
+// own deadline when the caller runs inside one (enqueueTurn).
+async function callChat({ conn, messages, settings, signal }) {
+  const data = await callChatRaw({ conn, messages, settings, signal, timeoutMs: DISCORD_CALL_TIMEOUT_MS });
   // extractTurnReply recovers an answer a proxy parked in reasoning_content, but
   // will NOT surface raw chain-of-thought when a thinking model ran out of budget
   // mid-thought (finish_reason=length, empty content) — that's the GLM-5.3
@@ -1327,6 +1381,11 @@ async function callChat({ conn, messages, settings }) {
 
 // ── Discord REST ──────────────────────────────────────────────────
 
+// Discord's REST API answers in well under a second; a call that hasn't in
+// DISCORD_REST_TIMEOUT_MS is stuck, and an unbounded send would wedge the
+// room's serialized turn queue exactly like a hung provider call.
+const DISCORD_REST_TIMEOUT_MS = 30_000;
+
 async function discordRest(token, route, { method = 'GET', body } = {}) {
   const resp = await fetch(`${API_BASE}${route}`, {
     method,
@@ -1335,6 +1394,7 @@ async function discordRest(token, route, { method = 'GET', body } = {}) {
       'Content-Type':  'application/json',
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(DISCORD_REST_TIMEOUT_MS),
   });
   const text = await resp.text();
   if (!resp.ok) {
@@ -2037,7 +2097,7 @@ async function handleConnectionInteraction(gw, d) {
   }
 }
 
-async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [] }) {
+async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [], signal }) {
   // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
   // fast-paths; every other room is filtered before I say anything.
   let reply = rawReply;
@@ -2045,7 +2105,9 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
     const filtered = await filterOutgoingReply({
       draftText:    rawReply,
       audienceTag,
-      callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings }),
+      // Bounded like every turn call; a timed-out rewrite fails CLOSED to the
+      // filter's safe refusal, never through to the unfiltered draft.
+      callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings, signal }),
       baseMessages: apiMessages,
     }).catch(err => {
       console.error('[discord] outgoing filter failed (passing through):', err?.message ?? err);
@@ -2166,12 +2228,20 @@ export async function relayToDiscord({ channelId, recipientUserId, message } = {
 // ── Turn handler ──────────────────────────────────────────────────
 
 // Serialize turns per location so concurrent messages can't interleave
-// session-log writes.
+// session-log writes. Every link runs under a deadline (see "Turn deadlines"):
+// `fn` receives `turn = { signal, abandoned }` — the signal aborts at
+// `deadlineMs` (thread it into every provider call), and if `fn` STILL hasn't
+// settled `graceMs` later the link is released anyway with `turn.abandoned`
+// set, so one wedged turn can never hold every later message in this room
+// hostage. The abandoned turn keeps running in the background; it checks
+// `turn.abandoned` before it delivers anything, so a late answer never lands
+// out of order. Exported for tests (deadline/grace are injectable there).
 const turnChains = new Map();
 
-function enqueueTurn(locationKey, fn) {
+export function enqueueTurn(locationKey, fn, { deadlineMs = DISCORD_TURN_TIMEOUT_MS, graceMs = TURN_RELEASE_GRACE_MS } = {}) {
   const prev = turnChains.get(locationKey) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
+  const run = () => runTurnWithDeadline(locationKey, fn, { deadlineMs, graceMs });
+  const next = prev.then(run, run);
   // The stored link swallows rejections — the caller of enqueueTurn gets
   // the real `next` and handles the error; the chain must never become
   // an unhandled rejection.
@@ -2180,6 +2250,39 @@ function enqueueTurn(locationKey, fn) {
   });
   turnChains.set(locationKey, stored);
   return next;
+}
+
+function runTurnWithDeadline(locationKey, fn, { deadlineMs, graceMs }) {
+  const ac = new AbortController();
+  const turn = { signal: ac.signal, abandoned: false };
+  let deadlineTimer = null;
+  let releaseTimer = null;
+  const work = Promise.resolve().then(() => fn(turn));
+  const release = new Promise((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      console.warn(`[discord] turn in ${locationKey} hit its ${Math.round(deadlineMs / 1000)}s deadline — aborting its provider calls`);
+      ac.abort(new DOMException(`Discord turn exceeded its ${Math.round(deadlineMs / 1000)}s deadline`, 'TimeoutError'));
+      releaseTimer = setTimeout(() => {
+        turn.abandoned = true;
+        gw.status.failures += 1;
+        gw.status.lastError = `a turn in ${locationKey} hung past its deadline and was abandoned`;
+        console.error(`[discord] turn in ${locationKey} still hadn't finished ${Math.round(graceMs / 1000)}s after its deadline — abandoning it and releasing the queue so later messages here are read`);
+        // The turn's own "say why" hook (handleTurn sets it on my human's direct
+        // turns) — abandoning must not mean silence. Best-effort, never blocks.
+        if (typeof turn.onAbandon === 'function') {
+          Promise.resolve().then(() => turn.onAbandon())
+            .catch(err => console.error(`[discord] abandoned-turn note failed in ${locationKey}:`, err?.message ?? err));
+        }
+        resolve();
+      }, graceMs);
+    }, deadlineMs);
+  });
+  // Clear BOTH timers whichever side wins — an uncleared race timer holds the
+  // event loop open (the 25s test-suite hang lesson from ensureDescribed).
+  return Promise.race([work, release]).finally(() => {
+    clearTimeout(deadlineTimer);
+    clearTimeout(releaseTimer);
+  });
 }
 
 // Presence without speaking (V8 lurk, and active turns I choose to sit
@@ -2460,7 +2563,10 @@ async function observeMessage(gw, msg, decision) {
   gw.status.observed = (gw.status.observed ?? 0) + 1;
 }
 
-async function handleTurn(gw, msg, decision) {
+// `turn` is enqueueTurn's deadline handle ({ signal, abandoned }); null when a
+// caller runs a turn outside the queue (tests), which leaves only the per-call bound.
+async function handleTurn(gw, msg, decision, turn = null) {
+  const turnSignal = turn?.signal;
   const settings = readSettingsSync();
   const registry = await getRegistry();
   await loadRateLimits();
@@ -2876,6 +2982,17 @@ async function handleTurn(gw, msg, decision) {
     }
   }
 
+  // If this turn hangs past even its deadline (stuck in work no signal can
+  // cancel) and enqueueTurn abandons it, my human still hears why instead of
+  // silence (RULE B), and the note lands as my reply in the session, so I know
+  // next turn that this one never got answered.
+  if (turn && decision.isWard && !decision.ambient) {
+    turn.onAbandon = () => deliverReply(gw, {
+      rawReply: LLM_TIMEOUT_NOTE, audienceTag, apiMessages, conn, settings,
+      channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
+    });
+  }
+
   let rawReply;
   if (discordTools.length) {
     // The result gate rides in toolCtx: a non-ward turn is wardPrivate:false and
@@ -2968,6 +3085,7 @@ async function handleTurn(gw, msg, decision) {
         callUpstream: (msgs, roundTools, opts) => callChatRaw({
           conn, messages: msgs, settings,
           tools: opts?.forceText ? undefined : (roundTools ?? discordTools),
+          signal: turnSignal, timeoutMs: DISCORD_CALL_TIMEOUT_MS,
         }),
         baseMessages: apiMessages,
         timeAnchor:   discordTimeAnchor,   // re-appended last every round (web parity)
@@ -2978,15 +3096,33 @@ async function handleTurn(gw, msg, decision) {
         // these six files" needs six-plus reaches); villager/ambient turns
         // keep the tight background default.
         maxRounds: decision.isWard ? toolRoundsPerTurn(settings) : undefined,
+        // The turn deadline stops the loop between rounds, not just mid-call.
+        signal: turnSignal,
       });
-      rawReply = extractTurnReply(data?.choices?.[0]);
+      const finalChoice = data?.choices?.[0];
+      if (turnSignal?.aborted && finalChoice?.finish_reason === 'tool_calls') {
+        // The deadline cut the loop off between tool rounds, with calls still
+        // pending — whatever preamble rode that response isn't an answer.
+        closingErr = turnSignal.reason;
+        rawReply = '';
+      } else {
+        rawReply = extractTurnReply(finalChoice);
+      }
       turnRounds = Array.isArray(toolRounds) ? toolRounds : [];
     } catch (err) {
-      // A whole-loop failure (e.g. provider error) must never cost the person a
-      // reply — fall back to a plain no-tools call.
-      console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
       closingErr = err;
-      rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(e => { closingErr = e; return ''; });
+      if (isTimeoutError(err)) {
+        // The provider never answered in time. Retrying with a plain call would
+        // make my human wait another full deadline for the same stuck provider —
+        // go straight to the honest note instead.
+        console.warn(`[discord] tool loop timed out in ${decision.locationKey} — not retrying:`, err?.message ?? err);
+        rawReply = '';
+      } else {
+        // A whole-loop failure (e.g. provider error) must never cost the person a
+        // reply — fall back to a plain no-tools call.
+        console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
+        rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings, signal: turnSignal }).catch(e => { closingErr = e; return ''; });
+      }
     }
     // Persist this turn's modules to sticky AFTER the loop — the modules used
     // AND any pulled via request_tools — so a recovered module stays available
@@ -3010,10 +3146,11 @@ async function handleTurn(gw, msg, decision) {
     // text round — replaying the tool rounds so the model sees what it actually
     // did, then a plain no-tools call so it MUST answer in words. Only if that
     // is still empty do we fall through to the quiet path.
-    if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient && turnRounds.length) {
+    // (Not once the turn deadline has fired — that round could only fail.)
+    if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient && turnRounds.length && !turnSignal?.aborted) {
       try {
         const replay = wardClosingReplayMessages(apiMessages, turnRounds);
-        rawReply = await callChat({ conn, messages: withAnchor(replay), settings }).catch(err => { closingErr = err; return ''; });
+        rawReply = await callChat({ conn, messages: withAnchor(replay), settings, signal: turnSignal }).catch(err => { closingErr = err; return ''; });
         if (rawReply && rawReply.trim()) console.log(`[discord] ward tool turn had no closing text — forced a closing text round in ${decision.locationKey}`);
       } catch (err) {
         closingErr = err;
@@ -3042,7 +3179,7 @@ async function handleTurn(gw, msg, decision) {
     // shared empty-handling below decide (honest note for my human, quiet flow
     // otherwise). The user's message is already persisted.
     let plainErr = null;
-    rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(err => {
+    rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings, signal: turnSignal }).catch(err => {
       plainErr = err;
       console.warn('[discord] plain reply failed/empty:', err?.message ?? err);
       return '';
@@ -3050,6 +3187,14 @@ async function handleTurn(gw, msg, decision) {
     if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient) {
       rawReply = providerFailureNote(plainErr);
     }
+  }
+
+  // Abandoned: this turn hung so long that enqueueTurn already released the
+  // room's queue and later messages have been answered since. Speaking now would
+  // land an old answer out of order — drop it (my human's message stays saved).
+  if (turn?.abandoned) {
+    console.warn(`[discord] abandoned turn in ${decision.locationKey} finished late — dropping its reply rather than answering out of order`);
+    return;
   }
 
   // Ambient 'llm' turn where I chose to stay quiet: accumulate the
@@ -3095,6 +3240,7 @@ async function handleTurn(gw, msg, decision) {
   await deliverReply(gw, {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
+    signal: turnSignal,
   });
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
 }
@@ -3531,7 +3677,7 @@ function onDispatch(t, d) {
           }
           if (process.env.PROTO_FAMILIAR_DISCORD_BATCH_DISABLED === '1') {
             markAmbientTurn(decision.locationKey);
-            await enqueueTurn(decision.locationKey, () => handleTurn(gw, d, decision));
+            await enqueueTurn(decision.locationKey, (turn) => handleTurn(gw, d, decision, turn));
             return;
           }
           // Batch: hold this as the burst's trigger and let it settle into one
@@ -3544,7 +3690,7 @@ function onDispatch(t, d) {
         // batch for this room first so the burst doesn't ALSO draw a delayed
         // second reply — its held message is folded into history instead.
         cancelAmbientBatch(gw, decision.locationKey);
-        await enqueueTurn(decision.locationKey, () => handleTurn(gw, d, decision));
+        await enqueueTurn(decision.locationKey, (turn) => handleTurn(gw, d, decision, turn));
       } catch (err) {
         gw.status.failures += 1;
         gw.status.lastError = err?.message ?? String(err);
