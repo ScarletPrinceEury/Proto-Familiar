@@ -352,6 +352,67 @@ export function clampNoticingCooldown(ms) {
   return Math.max(MIN_NOTICING_RECHECK_MS, Math.min(MAX_NOTICING_RECHECK_MS, ms));
 }
 
+// ── Deadlines (ward-signed 0.14.64) ─────────────────────────────────
+// The loop's in-flight guard only clears when a tick settles, so one provider
+// call that never finished (headers, then keep-alive bytes and no answer)
+// stopped noticing for good. Two wall-clock bounds, matching a Discord turn:
+// each provider round-trip, and the whole deliberation (every round, every tool
+// call). On expiry the turn ends where it is and whatever already ran still
+// counts — a reach-out that went out is acted on, not a failure.
+export const NOTICING_CALL_TIMEOUT_MS         = 180_000;
+export const NOTICING_DELIBERATION_TIMEOUT_MS = 600_000;
+
+const isTimeout = (err) => err?.name === 'TimeoutError';
+
+/**
+ * Run the noticing tool loop under both deadlines. `runLoop` (cerebellum's
+ * runToolCallLoop) and `callRaw` (the shared provider call) are injected so this
+ * module stays import-free. Resolves { timedOut: false } on a normal finish, or
+ * { timedOut: true, error } when a deadline cut it short — the caller keeps the
+ * tools that already ran (its own executeTool tally). Any other failure throws,
+ * exactly as before (deliberation_failed upstream).
+ */
+export async function runNoticingToolLoop({
+  runLoop, callRaw, conn, settings, messages, tools, executeTool, toolCtx,
+  callTimeoutMs  = NOTICING_CALL_TIMEOUT_MS,
+  totalTimeoutMs = NOTICING_DELIBERATION_TIMEOUT_MS,
+}) {
+  const overall = AbortSignal.timeout(totalTimeoutMs);
+  // The signal stops the loop between rounds and aborts an in-flight provider
+  // call; the race also covers a tool call that never returns. A turn left
+  // running past the race only finishes the tool it is in — its next provider
+  // call sees the aborted signal and ends.
+  const expired = new Promise((_, reject) => {
+    overall.addEventListener('abort', () => reject(overall.reason), { once: true });
+  });
+  expired.catch(() => {});
+  const secs = (ms) => `${Math.round(ms / 100) / 10}s`;
+  try {
+    await Promise.race([
+      runLoop({
+        callUpstream: (msgs, roundTools) => callRaw({
+          conn, messages: msgs, settings, tools: roundTools ?? tools,
+          signal: overall, timeoutMs: callTimeoutMs, surface: 'noticing',
+        }),
+        baseMessages: messages,
+        getTools:     () => tools,
+        executeTool,
+        toolCtx,
+        signal:       overall,
+      }),
+      expired,
+    ]);
+  } catch (err) {
+    if (overall.aborted) return { timedOut: true, error: `the deliberation reached its ${secs(totalTimeoutMs)} deadline` };
+    if (isTimeout(err))  return { timedOut: true, error: `a provider call gave no answer within ${secs(callTimeoutMs)}` };
+    throw err;
+  }
+  // Ended between rounds because the deadline passed (the loop breaks, it
+  // doesn't throw) — still a cut-short turn.
+  if (overall.aborted) return { timedOut: true, error: `the deliberation reached its ${secs(totalTimeoutMs)} deadline` };
+  return { timedOut: false };
+}
+
 // ── The tick (injectable; all I/O passed in) ─────────────────────────
 
 /**
@@ -366,8 +427,10 @@ export function clampNoticingCooldown(ms) {
  *   'stood_down'    — deliberated but took no proactive action → wait streak
  *                     incremented (ward decision: a noticing 'nothing' is a
  *                     deliberated choice-to-not-act).
- *   'deliberation_failed' — the tool-loop threw; degrade quietly, no streak
- *                     change (no decision was actually made).
+ *   'deliberation_failed' — the tool-loop threw, or a deadline cut it short
+ *                     before anything proactive ran; degrade quietly, no streak
+ *                     change (no decision was actually made). A cut-short turn
+ *                     that DID act is 'acted', flagged `timedOut`.
  *
  * Deliberately NO crisis stand-down: noticing runs at every tier (ward-
  * signed). The threat tier is passed to `deliberate` so the prompt shifts
@@ -425,6 +488,17 @@ export async function runOneNoticingTick({
   }
 
   const { acted } = classifyNoticingOutcome(out?.toolNamesCalled);
+  // A deadline cut the turn short (runNoticingToolLoop). If a proactive tool
+  // already ran, I did act — that counts. If nothing proactive ran, no decision
+  // was made: a failure, not a choice to wait, so no streak change and no
+  // cool-down (the next tick looks again).
+  if (out?.timedOut && !acted) {
+    return {
+      acted: false, reason: 'deliberation_failed', conditions: gather.conditions,
+      toolNamesCalled: out.toolNamesCalled ?? [], timedOut: true, error: out.error ?? 'timed out',
+      threat, at: nowMs,
+    };
+  }
   // Ward decision: a noticing 'nothing' counts as a wait (source 'noticing');
   // a proactive act resets. Fire-and-forget — recording never changes outcome.
   if (acted) Promise.resolve(recordProactiveFn('noticing')).catch(() => {});
@@ -438,6 +512,7 @@ export async function runOneNoticingTick({
     reason: acted ? 'acted' : 'stood_down',
     conditions: gather.conditions,
     toolNamesCalled: out?.toolNamesCalled ?? [],
+    ...(out?.timedOut ? { timedOut: true, error: out.error ?? 'timed out' } : {}),
     streakAtDecision,
     nextCheckInMs,
     threat,

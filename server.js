@@ -69,7 +69,7 @@ import { consolidatePonderings, consolidateYearlyPonderings, restorePonderingCon
 import { createHolisticBackup, extractBackup, layDownFileStores } from './src/backup/holistic-backup.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
-import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
+import { buildNoticingPrompt, noticingMessages, runNoticingToolLoop, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
 import { readAskedMap, writeAskedMap, filterRecentlyAsked, stampAsked, pruneAsked } from './src/safety/noticing-outcomes.js';
 import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './src/safety/wait-streak.js';
@@ -7399,17 +7399,16 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
     return executeToolCall(name, argsJson, ctx);
   };
 
-  try {
-    await runToolCallLoop({
-      callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings: s, tools: roundTools ?? tools }),
-      baseMessages: messages,
-      getTools:     () => tools,
-      executeTool,
-      toolCtx: { noticing: true, wardPrivate: true, apiKey: conn.apiKey },
-    });
-  } catch (err) {
-    // A whole-loop failure surfaces as deliberation_failed upstream.
-    throw err;
+  // Bounded per call and as a whole (ward-signed 0.14.64). A deadline ends the
+  // turn where it is; what already ran (effectiveNames) still counts. Any other
+  // whole-loop failure throws → deliberation_failed upstream.
+  const loop = await runNoticingToolLoop({
+    runLoop: runToolCallLoop, callRaw: callChatRaw,
+    conn, settings: s, messages, tools, executeTool,
+    toolCtx: { noticing: true, wardPrivate: true, apiKey: conn.apiKey },
+  });
+  if (loop.timedOut) {
+    console.warn(`[noticing] deliberation cut short — ${loop.error}; already ran: ${effectiveNames.join(', ') || 'nothing'}`);
   }
 
   // Enforcement + the no-nag ledger. An event the turn RESOLVED is closed (it
@@ -7431,7 +7430,7 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
     }
   }
 
-  return { toolNamesCalled: effectiveNames, nextCheckInMs };
+  return { toolNamesCalled: effectiveNames, nextCheckInMs, ...(loop.timedOut ? { timedOut: true, error: loop.error } : {}) };
 }
 
 function startNoticing() {
@@ -7469,9 +7468,11 @@ function startNoticing() {
         streakAtDecision: r.streakAtDecision ?? null,
         nextCheckInMs:    r.nextCheckInMs ?? null,
         error:            r.error ?? null,
+        timedOut:         r.timedOut ?? false,
       }).catch(() => {});
-      if (r.reason === 'acted')      console.log(`[noticing] acted (${(r.toolNamesCalled || []).join(', ')})`);
+      if (r.reason === 'acted')      console.log(`[noticing] acted (${(r.toolNamesCalled || []).join(', ')})${r.timedOut ? ` before ${r.error}` : ''}`);
       else if (r.reason === 'stood_down') console.log(`[noticing] looked (${(r.conditions || []).map(c => c.kind).join(', ')}), stood down`);
+      else if (r.reason === 'deliberation_failed') console.warn(`[noticing] deliberation failed — ${r.error ?? 'unknown error'}; the next tick looks again`);
     },
     onError: (err) => console.error('[noticing]', err?.message ?? err),
   });

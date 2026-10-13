@@ -48,7 +48,7 @@ import { materializeAttachments, resolveVisionCapable, ensureDescribed, describe
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
 import { parseGifEmbeds, labelFromGifPage, mediaFilename, gifEmbedsDisabled } from './discord-gif-embeds.js';
 import { hearVoiceNotes } from '../voice/voice-transcribe.js';
-import { extractTurnReply } from '../../llm-call.js';
+import { extractTurnReply, deadlineSignal, isTimeoutError } from '../../llm-call.js';
 import { sendWithNames } from '../../name-field.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from '../memory/memorization.js';
@@ -1242,11 +1242,9 @@ export const DISCORD_CALL_TIMEOUT_MS = 180_000;
 export const DISCORD_TURN_TIMEOUT_MS = 600_000;
 const TURN_RELEASE_GRACE_MS = 20_000;
 
-/** True for a deadline expiry — AbortSignal.timeout() and the turn deadline both
- *  reject with a DOMException named 'TimeoutError'. */
-export function isTimeoutError(err) {
-  return err?.name === 'TimeoutError';
-}
+// AbortSignal.timeout() and the turn deadline both reject with a DOMException
+// named 'TimeoutError'. One shared definition (llm-call.js) for every surface.
+export { isTimeoutError };
 
 // Pick the honest note from the failure. Conservative: only a CLEAR quota/balance/
 // payment signal (or HTTP 402) gets the usage note; a transient 429 or anything
@@ -1263,18 +1261,16 @@ export function providerFailureNote(err) {
 
 // `timeoutMs` bounds each provider round-trip (headers AND body); `signal` is the
 // caller's own abort (a Discord turn's deadline). Both optional — with neither,
-// the call is unbounded, as it always was for callers that pass none.
-export async function callChatRaw({ conn, messages, settings, tools, signal, timeoutMs }) {
+// the call is unbounded, as it always was for callers that pass none. `surface`
+// names the caller in the timeout log line; only a Discord turn's timeout is
+// recorded on the gateway status the Village panel shows (noticing also uses
+// this call, and its timeouts are not a Discord problem).
+export async function callChatRaw({ conn, messages, settings, tools, signal, timeoutMs, surface = 'discord' }) {
   const url = resolveProviderUrl(conn);
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const effort = resolveReasoningEffort(conn);
-  const bounded = Number.isFinite(timeoutMs) && timeoutMs > 0;
   // A fresh per-call deadline for every fetch (sendWithNames may retry once).
-  const fetchSignal = () => {
-    if (!bounded) return signal;
-    const deadline = AbortSignal.timeout(timeoutMs);
-    return signal ? AbortSignal.any([deadline, signal]) : deadline;
-  };
+  const fetchSignal = () => deadlineSignal({ signal, timeoutMs });
   // Name the human on their own turns + label villagers (entity-as-subject rule,
   // across every user-role surface). Every callChatRaw caller here is a real turn
   // (deliberations use callProviderChat), so the shared sendWithNames seam is safe
@@ -1311,8 +1307,8 @@ export async function callChatRaw({ conn, messages, settings, tools, signal, tim
       // status the Village panel shows, so a hung provider never reads as calm.
       if (isTimeoutError(err)) {
         const why = `${conn.provider}/${conn.model} gave no answer within ${((Date.now() - t0) / 1000).toFixed(1)}s (${err.message})`;
-        console.warn(`[discord] provider call timed out — ${why}`);
-        gw.status.lastError = `provider call timed out: ${why}`;
+        console.warn(`[${surface}] provider call timed out — ${why}`);
+        if (surface === 'discord') gw.status.lastError = `provider call timed out: ${why}`;
       }
       throw err;
     }
