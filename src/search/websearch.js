@@ -232,7 +232,10 @@ export async function guardedFetch(rawUrl, {
 
 const DDG_HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
 
-export async function searchWeb(query, settings = {}, deps = {}) {
+// `openWith` names the tool I open a result with this turn (browse_open when my
+// browser reads pages, read_webpage otherwise) so the footer never points me at
+// a tool I'm not offered.
+export async function searchWeb(query, settings = {}, deps = {}, { openWith = 'read_webpage' } = {}) {
   const q = String(query ?? '').trim();
   if (!q) return 'I need something to search for.';
   const maxResults = clampInt(settings.webSearchMaxResults, DEFAULT_MAX_RESULTS, 1, 20);
@@ -242,7 +245,7 @@ export async function searchWeb(query, settings = {}, deps = {}) {
     // Observability: which backend actually answered (so a silent fallback
     // doesn't look identical to the chosen backend working).
     console.log(`[websearch] "${q}" — served via ${label}`);
-    return formatResults(q, primary.rows, maxResults);
+    return formatResults(q, primary.rows, maxResults, openWith);
   }
 
   // The chosen backend errored. If it wasn't already the keyless floor, try
@@ -254,7 +257,7 @@ export async function searchWeb(query, settings = {}, deps = {}) {
       // Include the chosen backend's actual error so a misconfigured engine
       // is diagnosable (HTTP code / parse failure) rather than just "fell back".
       console.log(`[websearch] "${q}" — ${label} failed [${primary.error}]; fell back to built-in keyless search`);
-      return formatResults(q, fallback.rows, maxResults);
+      return formatResults(q, fallback.rows, maxResults, openWith);
     }
   }
   console.log(`[websearch] "${q}" — search failed (${label}) [${primary.error}]`);
@@ -278,20 +281,23 @@ async function runChosenBackend(q, settings, deps) {
   return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true, label: 'built-in keyless search' };
 }
 
-function formatResults(q, rows, maxResults) {
+function formatResults(q, rows, maxResults, openWith = 'read_webpage') {
   const picked = (Array.isArray(rows) ? rows : []).slice(0, maxResults);
   if (picked.length === 0) return `I searched for "${q}" but nothing came back.`;
   const lines = picked.map((r, i) => {
     // Third-party text (titles/snippets a site author controls) passes the
     // injection guard before it can reach a prompt. The URL is deliberately
-    // NOT sanitized — mangling it would break the read_webpage follow-up,
+    // NOT sanitized — mangling it would break opening the page next,
     // and the guard's phrase patterns don't occur in URLs.
     const title   = sanitizeExternal((r?.title || '(untitled)').trim(), { source: 'web search', context: 'websearch/results' });
     const link    = (r?.url || '(no link)').trim();
     const snippet = sanitizeExternal((r?.content || '').trim(), { source: 'web search', context: 'websearch/results' });
     return `${i + 1}. ${title}\n   ${link}${snippet ? `\n   ${snippet}` : ''}`;
   });
-  return `Results for "${q}":\n${lines.join('\n')}\n\n(I can open any of these with read_webpage by passing its link.)`;
+  const how = openWith === 'browse_open'
+    ? 'in my browser with browse_open — level "text" when I just want to read it'
+    : 'with read_webpage by passing its link';
+  return `Results for "${q}":\n${lines.join('\n')}\n\n(I can open any of these ${how}.)`;
 }
 
 // In-box default: keyless DuckDuckGo HTML scrape. Goes through the public

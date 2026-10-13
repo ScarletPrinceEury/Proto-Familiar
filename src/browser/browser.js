@@ -24,16 +24,17 @@ import { sanitizeExternal } from '../../injection-guard.js';
 import { logBrowserAction, readBrowserActions } from './browser-audit.js';
 import { saveAsset } from '../vision/media.js';
 import { readGrants, readVaultEntry, hasAnyGrant } from './browser-grants.js';
+import { browseEnabled, browserReadsPages } from './browse-gate.js';
+import { readerSiteFor } from './reader-router.js';
 
 // The engine, swappable for tests (a stubbed browser drives the same
 // orchestration — framing, sanitisation, audit, degrade — with no Chromium).
 let driver = realDriver;
 export function _setDriverForTest(d) { driver = d || realDriver; }
 
-export function browseEnabled(settings) {
-  if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return false;
-  return settings?.browseEnabled === true; // default OFF
-}
+// One answer to "is browsing on / is my browser how I read?" (browse-gate.js,
+// import-free so the tool composer can ask without loading this engine).
+export { browseEnabled, browserReadsPages };
 
 /** The engine mode ({mode:'cdp',domain} | {mode:'owned'}) for the audit stamp. */
 function engineMode() { try { return driver.engineMode?.() || { mode: 'owned' }; } catch { return { mode: 'owned' }; } }
@@ -115,11 +116,35 @@ const opts = (settings) => ({
   siteGuard: (u) => siteModeAllows(u, settings),
 });
 
-export async function browseOpen({ url, reader = false } = {}, { settings, sessionId } = {}) {
+// browse_open's detail levels — the same ones browse_see takes, so opening a
+// page to READ it (level 'text') is one call, not open-then-see.
+export const OPEN_LEVELS = Object.freeze(['outline', 'actions', 'text', 'full']);
+
+// The page's own HTTP answer when it means "this site turned my browser away"
+// (auth wall, anti-bot 403, rate limit, server error). A 404 is not on the list:
+// the plain reader would only find the same missing page.
+function turnedAway(status) {
+  return status === 401 || status === 403 || status === 429 || (status >= 500 && status < 600);
+}
+
+// Reading never depends on the browser being up: when it can't open a page,
+// `fallbackRead` (the executor's plain reader — page-read.js with the live read
+// skipped) reads it instead. `why` is the honest reason; the note says plainly
+// that no live page is open, so I don't go on to click at one that isn't there.
+async function readPlainCopy(why, url, fallbackRead, sessionId) {
+  let text;
+  try { text = await fallbackRead(url); }
+  catch (err) { text = `I couldn't read a plain copy either: ${String(err?.message ?? err).split('\n')[0]}.`; }
+  logBrowserAction({ tool: 'browse_open', target: url, verdict: 'fell back to a plain read', sessionId });
+  return `${why}\nSo I tried a plain copy of the page instead — there's no live page open for me to click on:\n\n${text}`;
+}
+
+export async function browseOpen({ url, reader = false, level = 'outline' } = {}, { settings, sessionId, fallbackRead = null } = {}) {
   if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
   { const hb = handbackPending(); if (hb) return hb; }
   const asked = String(url ?? '').trim();
   if (!asked) return 'I need a URL to open.';
+  const lvl = OPEN_LEVELS.includes(level) ? level : 'outline';
   // Per-browse reader opt-in: swap to a lighter mirror when one exists (Reddit →
   // old.reddit.com). Silent no-op when no mirror applies, so `reader:true` is
   // always safe to pass.
@@ -132,9 +157,24 @@ export async function browseOpen({ url, reader = false } = {}, { settings, sessi
       ? `That site isn't on my human's allow-list, so I won't open it. They can add it in Settings if they want me there.`
       : `My human has blocked that site, so I won't open it.`;
   }
+  // Reading a site that turns automated browsers away before anything renders
+  // (the reader-router registry — Reddit today): navigating would only meet the
+  // wall, so a read goes straight to the site's own reader.
+  const gated = readerSiteFor(asked);
+  if (lvl === 'text' && gated && fallbackRead) {
+    let text;
+    try { text = await fallbackRead(asked); }
+    catch (err) { text = `I couldn't read it: ${String(err?.message ?? err).split('\n')[0]}.`; }
+    logBrowserAction({ tool: 'browse_open', target: asked, verdict: `read via ${gated.label}'s own reader`, sessionId });
+    return `${gated.label} turns automated browsers away, so I read this through its own reader instead — there's no live page open for me to click on.\n\n${text}`;
+  }
   try {
     const { pageData } = await driver.navigate(target, opts(settings));
-    const { text } = renderSnapshot(pageData, { level: 'outline' });
+    if (fallbackRead && turnedAway(pageData?.httpStatus)) {
+      logBrowserAction({ tool: 'browse_open', target, verdict: `turned away (HTTP ${pageData.httpStatus})`, sessionId });
+      return withDropNote(await readPlainCopy(`${target} turned my browser away (HTTP ${pageData.httpStatus}).`, asked, fallbackRead, sessionId));
+    }
+    const { text } = renderSnapshot(pageData, { level: lvl });
     const note = mirror ? 'I opened the lighter old.reddit.com reader mirror for this.\n\n' : '';
     const out = withDropNote(note + frame(text));
     const em = engineMode();
@@ -142,7 +182,11 @@ export async function browseOpen({ url, reader = false } = {}, { settings, sessi
     return out;
   } catch (err) {
     logBrowserAction({ tool: 'browse_open', target, verdict: `failed: ${err.message}`, sessionId });
-    return degrade(err, `I couldn't open ${target}`);
+    const why = degrade(err, `I couldn't open ${target}`);
+    // A hand-back means my human is mid-task in the window — theirs to finish,
+    // not something to read around.
+    if (!fallbackRead || /awaiting handback/i.test(String(err?.message ?? err))) return why;
+    return readPlainCopy(why, asked, fallbackRead, sessionId);
   }
 }
 
@@ -323,8 +367,7 @@ export async function browseRead({ url } = {}, { settings, sessionId } = {}) {
 
 /** Should read_webpage use the browser this turn? (auto + enabled + a browser exists.) */
 export function shouldBrowserRead(settings) {
-  if (!browseEnabled(settings)) return false;
-  if ((settings?.webReadBackend ?? 'auto') === 'static') return false;
+  if (!browserReadsPages(settings)) return false;
   try { return !!driver.findChromium(); } catch { return false; }
 }
 

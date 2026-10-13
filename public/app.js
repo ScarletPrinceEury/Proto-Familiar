@@ -376,9 +376,10 @@ const state = {
   browseEnabled:           false,
   browseIdleMin:           5,
   browseMaxTabs:           3,
-  // read_webpage backend: 'auto' reads the live JS-rendered DOM through the
-  // browser when it's available (falls back to static), 'static' pins the old
-  // fetch+readability extractor. Inert until browsing is enabled.
+  // How pages are read once browsing is on: 'auto' makes the browser the
+  // reader (browse_open; read_webpage isn't offered and only serves as its
+  // fallback), 'static' keeps read_webpage on the plain fetch+readability
+  // extractor and offers it beside the browser. Inert until browsing is enabled.
   webReadBackend:          'auto',
   // Where my Familiar's browser may go (§5.2): 'open' (any public site) /
   // 'blocklist' (open minus the list) / 'allowlist' (the list only).

@@ -8,7 +8,9 @@ logs/
 media/
 # Browser (browser build spec §2) — the Familiar's own profile (cookies/logins)
 # and any auto-fetched Chromium binary. Local per machine, never committed.
-browser/
+# Anchored to the repo root: an unanchored `browser/` also matched src/browser/
+# and silently kept new source files there out of every commit.
+/browser/
 # Runtime voice-model pins (voice-pin.js) — a ward installing an optional model
 # in-UI records its trust-on-first-install pin here, NOT in the git-tracked
 # voice-model-pins.json. Keeping it out of the tree means an in-UI install never
