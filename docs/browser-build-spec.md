@@ -78,6 +78,14 @@ whole new surface. All three rules bind here, not as afterthoughts:
   read, no interaction) → **`browse_*` (this spec — only when a page must be
   *interacted with*)**. Interaction, not rendering, is now the line the
   expensive tier sits behind.
+  **Superseded 0.14.65 (ward decision):** in practice the Familiar stayed on
+  `read_webpage` even when it needed the browser, because the tool
+  descriptions told it to try the reader first. With browsing on (and
+  `webReadBackend` not pinned 'static') `browse_open` is now the reader —
+  `level: 'text'` reads a page in one call — and `read_webpage` is not
+  offered; the plain reader serves only as `browse_open`'s in-code fallback
+  when the browser can't open a page. With browsing off, `read_webpage`
+  remains the reader. See docs/architecture.md, "Web tools".
 - The SSRF guard (scheme allow-list, resolved-IP block of
   loopback/private/link-local/metadata, redirect re-validation) is the
   reusable safety floor — §5.1 applies it at the browser's network layer.

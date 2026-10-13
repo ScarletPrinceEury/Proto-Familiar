@@ -112,9 +112,11 @@ export const TOOL_MODULES = {
   // to a graph node. Surfaced whenever an image stand-in is in context.
   view_image: 'media', link_image_to_node: 'media', unlink_image_from_node: 'media',
 
-  // browser (browser build spec §4) — the Familiar's own hands on the web.
-  // Surfaced by URLs + browse-ish verbs; ward-only executors, so a villager
-  // turn never reaches them even if the module is advertised.
+  // browser (browser build spec §4) — the Familiar's own hands on the web, and
+  // since 0.14.65 how it reads pages when browsing is on (composeActiveTools
+  // pulls this module in with `web` then). Surfaced by URLs + browse-ish verbs;
+  // ward-only executors, so a villager turn never reaches them even if the
+  // module is advertised.
   browse_open: 'browser', browse_see: 'browser', browse_act: 'browser', browse_close: 'browser',
   browse_screenshot: 'browser', browse_tabs: 'browser', browse_history: 'browser', browse_handoff: 'browser',
   watch_page: 'browser', list_page_watches: 'browser', unwatch_page: 'browser',
@@ -140,7 +142,7 @@ export const MODULE_INDEX =
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'media (look again at an image shared earlier, tie an image to someone/something in my graph), ' +
   'trackers (my human\'s private ledgers: mood, sleep, the pantry, laundry, upkeep gauges — list/create/log/read/adjust), ' +
-  'browser (open a web page in my own browser and use it — click, fill, scroll, follow a flow — when reading isn\'t enough)';
+  'browser (open a web page in my own browser to read it or use it — click, fill, scroll, follow a flow)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +

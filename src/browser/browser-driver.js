@@ -585,9 +585,14 @@ export async function navigate(url, opts) {
   await ensureContext(opts);
   const pg = currentPage();
   pg.__pfGeneration = (pg.__pfGeneration || 0) + 1;
-  await pg.goto(url, { waitUntil: 'domcontentloaded' });
+  const resp = await pg.goto(url, { waitUntil: 'domcontentloaded' });
   await settlePage(pg);            // wait for JS to render + wire before the first read
-  return snapshot();
+  const snap = await snapshot();
+  // The main document's HTTP status (null for a same-document navigation), so
+  // browse_open can tell a site that turned my browser away (403/429/5xx) from
+  // the page itself.
+  if (snap?.pageData) snap.pageData.httpStatus = resp?.status?.() ?? null;
+  return snap;
 }
 
 /**
