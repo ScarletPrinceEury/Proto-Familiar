@@ -1273,6 +1273,25 @@ turn on the unified web+Discord session can't collide with a simultaneous
 web turn. Memorization of Discord sessions is deferred until
 memories carry audience tags (see village-support-design.md).
 
+*Turn deadlines (0.14.63).* Turns are serialized per location
+(`enqueueTurn`), so an unbounded await anywhere in a turn wedges the whole
+room — the reported "the Familiar stopped receiving Discord messages": a provider
+sent headers, then held the socket open with keep-alive bytes (undici's 300s
+idle timeouts never fire on a trickle), and every later DM queued behind it
+unread. Now every provider round-trip carries `DISCORD_CALL_TIMEOUT_MS`
+(180s, `callChatRaw` `timeoutMs`), every turn runs under
+`DISCORD_TURN_TIMEOUT_MS` (10 min — enqueueTurn's `turn.signal`, threaded
+into every call, the tool loop, and the outgoing-filter rewrite), and Discord
+REST calls are bounded at 30s. A timed-out turn skips the plain-call retry
+and tells my human `LLM_TIMEOUT_NOTE` on their own direct turn (quiet on
+villager/ambient turns); a timed-out filter rewrite fails CLOSED to the safe
+refusal. A turn that ignores its aborted signal (stuck in non-cancellable
+work, e.g. a tool) is abandoned 20s past its deadline: the queue is released,
+`turn.onAbandon` delivers the timeout note, and the late finisher drops its
+reply rather than answering out of order. Expiries log loudly and set
+`status.lastError`. The noticing loop's own `callChatRaw` use passes no bound
+(unchanged — a ward-sign-off path).
+
 *Villager consent self-service (0.8.106, `villager-consent.js`).*
 `!consent` in a REGISTERED villager's own DM is a pure-code surface (no
 LLM): a menu of what the Familiar holds about them (`memory_list_by_subject`
