@@ -16,15 +16,58 @@
  *     (some proxies leave the answer only there), so a JSON-emitting caller can
  *     still find its object,
  *   - an error that names `finish_reason` so a genuine empty is DIAGNOSABLE
- *     ("finish_reason=length" = raise the cap) instead of a bare mystery.
+ *     ("finish_reason=length" = raise the cap) instead of a bare mystery,
+ *   - a wall-clock deadline on the whole round-trip (see PROVIDER_CALL_TIMEOUT_MS).
  *
- * NOT used by the safety-critical triage path (cerebellum) — that call is
- * ward-signed and stays where it is; migrating it needs the ward's sign-off.
+ * The safety-critical triage deliberation (cerebellum `decideTriageViaLLM`)
+ * also routes through here since the ward-signed 0.8.82 fix; anything that
+ * changes how it behaves on a failure needs the ward's sign-off.
  */
 
 import { resolveProviderUrl, authHeader } from './providers.js';
 
 const DEFAULT_MAX_TOKENS = 4000;
+
+// ── Deadlines ─────────────────────────────────────────────────────
+// A provider can send response headers and then hold the socket open with
+// keep-alive bytes and no answer. Node's fetch (undici) only has IDLE timeouts
+// (300s for headers / between body chunks), and a trickle resets them forever,
+// so an unbounded call never settles. Every background loop guards its tick
+// with an in-flight flag that clears only when the tick settles — one such call
+// used to wedge the loop for good. So every call here is bounded by default.
+//
+// 300s because undici's own headersTimeout already kills any non-trickling
+// non-stream call at 300s: this bound never cuts an answer that would have
+// arrived today, only a socket that was never going to deliver. Interactive
+// surfaces pass something tighter (the Discord turn path uses 180s).
+// PROTO_FAMILIAR_LLM_CALL_TIMEOUT_MS overrides the default (e.g. a very slow
+// self-hosted model that trickles while it generates).
+export const PROVIDER_CALL_TIMEOUT_MS = 300_000;
+
+function defaultCallTimeoutMs() {
+  const env = Number(process.env.PROTO_FAMILIAR_LLM_CALL_TIMEOUT_MS);
+  return Number.isFinite(env) && env > 0 ? env : PROVIDER_CALL_TIMEOUT_MS;
+}
+
+/** True for a deadline expiry — AbortSignal.timeout() rejects with a
+ *  DOMException named 'TimeoutError', and the errors below keep that name. */
+export function isTimeoutError(err) {
+  return err?.name === 'TimeoutError';
+}
+
+/**
+ * The signal one fetch should carry: a fresh `timeoutMs` deadline, combined with
+ * the caller's own `signal` (an outer turn deadline, a client disconnect) when
+ * there is one. `timeoutMs` 0/absent means no deadline of our own — only the
+ * caller's signal, or undefined (unbounded) when there is none. Call it once per
+ * fetch: a retry needs a fresh deadline.
+ */
+export function deadlineSignal({ signal, timeoutMs } = {}) {
+  const bounded = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  if (!bounded) return signal ?? undefined;
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([deadline, signal]) : deadline;
+}
 
 /**
  * Pull the assistant text out of a completion's `message`, tolerating thinking
@@ -103,38 +146,60 @@ export function familiarDeliberationMessages({ identity = '', body = '', cue = '
  * Call the provider's chat-completions endpoint and return the assistant text.
  * Throws on a transport/HTTP/parse error or a genuinely empty completion (with
  * a diagnostic message). `fetchFn` is injectable for tests.
+ *
+ * Bounded by default: `timeoutMs` (default PROVIDER_CALL_TIMEOUT_MS, 0 = no
+ * deadline of its own) covers headers AND body; `signal` is the caller's own
+ * abort. On our deadline it throws an error named 'TimeoutError' that says which
+ * provider/model and how long; on the caller's abort it rethrows the caller's
+ * reason untouched.
  */
 export async function callProviderChat({
   provider, apiKey, model, prompt, messages,
   baseUrl = null,
   maxTokens = DEFAULT_MAX_TOKENS, temperature = 0.7, fetchFn = fetch,
   reasoningEffort = null,
+  timeoutMs = null, signal = null,
 }) {
   const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
   const msgs = Array.isArray(messages) ? messages : [{ role: 'user', content: prompt }];
-  const resp = await fetchFn(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      // Omitted for a keyless local/custom endpoint (a Bearer with an empty
-      // key 400s on some servers); required cloud providers always carry one.
-      ...authHeader(apiKey),
-    },
-    body: JSON.stringify({
-      model:       String(model ?? '').trim(),
-      messages:    msgs,
-      stream:      false,
-      temperature,
-      max_tokens:  maxTokens,
-      // Opt-in only: callers that want it pass a resolved value. The ward-signed
-      // triage call does NOT pass it, so its request stays byte-identical.
-      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-    }),
-  });
-
-  const text = await resp.text();
+  // null/undefined → the default bound; only an explicit 0 opts out.
+  const fetchSignal = deadlineSignal({ signal, timeoutMs: timeoutMs ?? defaultCallTimeoutMs() });
+  const t0 = Date.now();
+  let resp, text;
+  try {
+    resp = await fetchFn(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        // Omitted for a keyless local/custom endpoint (a Bearer with an empty
+        // key 400s on some servers); required cloud providers always carry one.
+        ...authHeader(apiKey),
+      },
+      body: JSON.stringify({
+        model:       String(model ?? '').trim(),
+        messages:    msgs,
+        stream:      false,
+        temperature,
+        max_tokens:  maxTokens,
+        // Opt-in only: callers that want it pass a resolved value. The ward-signed
+        // triage call does NOT pass it, so its request stays byte-identical.
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      }),
+      ...(fetchSignal ? { signal: fetchSignal } : {}),
+    });
+    // The body read is under the same signal — a trickle after the headers is
+    // exactly the case the deadline exists for.
+    text = await resp.text();
+  } catch (err) {
+    if (isTimeoutError(err) && !signal?.aborted) {
+      const e = new Error(`Provider ${provider} (${String(model ?? '').trim()}) gave no complete answer within ${((Date.now() - t0) / 1000).toFixed(1)}s — stopped waiting`, { cause: err });
+      e.name = 'TimeoutError';
+      throw e;
+    }
+    throw err;
+  }
   if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
   let data;
   try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }

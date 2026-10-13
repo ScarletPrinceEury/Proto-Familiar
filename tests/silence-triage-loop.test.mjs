@@ -339,3 +339,46 @@ test('resetTriageCooldown: clears the wait so the next tick will call the LLM', 
   await runOneTriageTick(args);
   assert.equal(calls, 2, 'reset re-enables immediate deliberation');
 });
+
+// Ward-signed (0.14.64): a FAILED deliberation (timeout, HTTP error,
+// unparseable reply, no model) is not a decision, so it doesn't earn the tier's
+// full cool-down — the very next tick looks again. A provider hiccup at severe
+// used to cost 15 minutes of silence before the next look.
+test('cool-down: a FAILED deliberation re-checks on the next tick, not after the tier cool-down', async () => {
+  freshLoop();
+  let t = Date.parse('2026-01-01T12:00:00Z');
+  let calls = 0;
+  const tick = (decision) => runOneTriageTick({
+    getThreat:       async () => ({ tier: 'severe', weight: 9 }),
+    getLastActivity: async () => ({ ts: '...', ms: t - 60 * 60_000 }),
+    decideTriage:    async () => { calls++; return decision; },
+    recordWaitFn:    async () => {},
+    enqueueOutboxFn: makeEnq().fn,
+    now:             () => t,
+  });
+  const first = await tick({ action: 'wait', failed: true });
+  assert.equal(first.reason, 'deliberation_failed');
+  t += 5 * 60_000;   // one silence-triage tick later
+  const second = await tick({ action: 'wait' });
+  assert.equal(calls, 2, 'the next tick deliberated again');
+  assert.equal(second.reason, 'llm_said_wait');
+});
+
+test('cool-down: a GENUINE wait still holds the tier cool-down across the next tick', async () => {
+  freshLoop();
+  let t = Date.parse('2026-01-01T12:00:00Z');
+  let calls = 0;
+  const tick = () => runOneTriageTick({
+    getThreat:       async () => ({ tier: 'severe', weight: 9 }),
+    getLastActivity: async () => ({ ts: '...', ms: t - 60 * 60_000 }),
+    decideTriage:    async () => { calls++; return { action: 'wait' }; },
+    recordWaitFn:    async () => {},
+    enqueueOutboxFn: makeEnq().fn,
+    now:             () => t,
+  });
+  await tick();
+  t += 5 * 60_000;
+  const second = await tick();
+  assert.equal(calls, 1);
+  assert.equal(second.reason, 'in_cooldown');
+});

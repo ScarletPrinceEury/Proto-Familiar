@@ -837,6 +837,46 @@ export async function checkAndFirePendingContacts({
 
 // ── Triage deliberation ──────────────────────────────────────────
 
+// Wall-clock bound on the triage provider call (ward-signed 0.14.64). The loop
+// guards its tick with an in-flight flag, so an unbounded call that never
+// settled (a provider sending headers, then keep-alive bytes and no answer)
+// stopped silence triage for good — on exactly the ward it exists for — and
+// held trusted-contact escalation, which runs after the tick, with it. 180s
+// matches one Discord round-trip: generous for a thinking model, short enough
+// that a stuck call at severe doesn't hold the next look for long.
+export const TRIAGE_CALL_TIMEOUT_MS = 180_000;
+
+/**
+ * The triage provider call and its failure mapping, on their own so the bound is
+ * testable without a full deliberation. Returns { ok: true, text } or
+ * { ok: false, decision } where decision is the safe default — action 'wait',
+ * marked `failed` (not a genuine wait; the loop re-checks on its next tick) with
+ * the reason, which the triage event log records.
+ *
+ * Ward-signed fix (thinking-model empty-content): route through the shared call
+ * so a reasoning model has room past its chain-of-thought (cap raised 600→4000)
+ * and content is recovered from reasoning_content when a proxy misplaces it.
+ * WITHOUT this, a thinking model returned empty content → no JSON match →
+ * action:'wait' EVERY tick — silence-triage silently doing nothing on a
+ * distressed ward. A genuine transient failure (now including a timeout) still
+ * degrades to the safe action:'wait', never a false reach-out and never a
+ * fabricated decision.
+ */
+export async function callTriageDeliberation({ conn, messages, timeoutMs = TRIAGE_CALL_TIMEOUT_MS, fetchFn }) {
+  try {
+    const text = await callProviderChat({
+      provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+      messages, temperature: 0.7, maxTokens: 4000, timeoutMs,
+      ...(fetchFn ? { fetchFn } : {}),
+    });
+    return { ok: true, text };
+  } catch (err) {
+    const error = err?.message ?? String(err);
+    console.warn('[triage] deliberation call failed (safe default: wait):', error);
+    return { ok: false, decision: { action: 'wait', failed: true, error } };
+  }
+}
+
 export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const s = readSettingsSync();
   // Ward-assignable per-feature connection (the ward's explicit, recorded choice
@@ -1079,24 +1119,9 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
   });
 
   try {
-    // Ward-signed fix (thinking-model empty-content): route through the shared
-    // call so a reasoning model has room past its chain-of-thought (cap raised
-    // 600→4000) and content is recovered from reasoning_content when a proxy
-    // misplaces it. WITHOUT this, a thinking model returned empty content →
-    // no JSON match → action:'wait' EVERY tick — silence-triage silently doing
-    // nothing on a distressed ward. The decision logic below is UNCHANGED: a
-    // genuine transient failure still degrades to the safe action:'wait', never
-    // a false reach-out and never a fabricated decision.
-    let text;
-    try {
-      text = await callProviderChat({
-        provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-        messages: llmMessages, temperature: 0.7, maxTokens: 4000,
-      });
-    } catch (err) {
-      console.warn('[triage] deliberation call failed (safe default: wait):', err?.message ?? err);
-      return { action: 'wait', failed: true };
-    }
+    const call = await callTriageDeliberation({ conn, messages: llmMessages });
+    if (!call.ok) return call.decision;
+    const text = call.text;
     const m = text.match(/\{[\s\S]+\}/);
     if (!m) { console.warn('[triage] deliberation returned no parseable JSON (safe default: wait)'); return { action: 'wait', failed: true }; }
     const parsed = JSON.parse(m[0]);

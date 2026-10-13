@@ -73,6 +73,13 @@ export const DEFAULT_RECHECK_MS = Object.freeze({
   moderate: 60 * 60_000,
 });
 
+// After a FAILED deliberation (call error, timeout, unparseable reply, no model)
+// nothing was decided, so it doesn't earn the tier cool-down: only the pile-up
+// floor applies, and the very next tick (5 min) looks again. Ward-signed 0.14.64
+// — before, a provider hiccup at severe cost a full 15 minutes before the next
+// look. A down provider fails fast, so the extra attempts are cheap.
+export const FAILED_RECHECK_MS = MIN_RECHECK_MS;
+
 let _started           = false;
 let _interval          = null;
 let _activeTick        = null;
@@ -155,25 +162,27 @@ export async function runOneTriageTick({
 
   const decision = await decideTriage({ threat, silenceMs, signals });
 
+  // Distinguish a genuine "I looked and decided" from a FAILED deliberation
+  // (no model configured / call error / timeout / unparseable — marked
+  // `failed`, or a null decision).
+  const failed = !decision || decision.failed === true;
+
   // Set the cool-down regardless of action — wait OR reach_out both
   // mean "the LLM has spoken; don't ask again until it asked us to."
   // Floor at MIN_RECHECK_MS so a missing / zero / negative
-  // nextCheckInMs can't cause request pile-up.
+  // nextCheckInMs can't cause request pile-up. A failure hasn't spoken:
+  // it gets only the floor, so the next tick looks again.
   const llmNextMs   = clampCooldown(decision?.nextCheckInMs);
   const fallbackMs  = DEFAULT_RECHECK_MS[threat.tier] ?? 60 * 60_000;
-  const cooldownMs  = llmNextMs ?? fallbackMs;
+  const cooldownMs  = failed ? FAILED_RECHECK_MS : (llmNextMs ?? fallbackMs);
   _nextAllowedTickTs = nowMs + cooldownMs;
   _lastDecisionTier  = threat.tier;
 
   if (!decision || decision.action !== 'reach_out' || !decision.message) {
-    // Distinguish a genuine "I looked and chose to wait" from a FAILED
-    // deliberation (no model configured / call error / unparseable — marked
-    // `failed`, or a null decision). Only a genuine wait increments the streak;
-    // a failure must not read as a legitimate wait (it would inflate the streak
-    // and hide that the model never actually decided). The re-check cool-down is
-    // already set above, so severe still re-checks on schedule regardless — this
-    // is observability, not passivity.
-    const failed = !decision || decision.failed === true;
+    // Only a genuine wait increments the streak; a failure must not read as a
+    // legitimate wait (it would inflate the streak and hide that the model
+    // never actually decided). The re-check is already scheduled above (the
+    // next tick, for a failure) — this is observability, not passivity.
     if (failed) {
       console.warn('[triage] deliberation failed — recorded as a failure, not a wait');
     } else {

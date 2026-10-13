@@ -189,7 +189,7 @@ ponderings injection, care-check framing) and as background loops
 ├── session-log.js           Shared `writeSessionLog(data,{logsDir,merge})` — **per-session in-process lock + atomic tmp+rename**, and with `merge:true` reads the on-disk log first and **unions messages by id** (`mergeMessages`, timestamp-ordered, id-less legacy = earliest prefix) preserving set-once `location`/`startedAt`, so the ward's UNIFIED web+Discord session never loses a turn one surface appended while the other was writing. Plus `stampMessages` (id/timestamp safety net), and `turnMessages(user,assistant,{speaker})` (the one place a call's turn pair is built — id + real accumulation-time timestamp + a `speaker` on the user turn when known). The one place a conversation lands in `logs/` as a reviewable session. Used by the Discord gateway AND both voice-call servers: a voice call (web + Discord) lands as a reviewable session log the ward can open in the Sessions tab, not only as extracted facts — web at `ward-private`, each Discord segment stamped with ITS audience tag (a villager's segment never ward-private), written on hang-up before memorization, each half independent. Each voice log carries a real `location` (web: `{platform:'voice'}`; Discord: `{platform:'voice',kind:'discord',label:'Discord voice call'}`) so the Sessions tab labels + types it as a voice call rather than "Web chat" — and `sessionLocationLabel` re-labels legacy Discord voice logs (origin `voice-call-discord`, no location) too (0.11.82). GROUP calls: the room session attributes each turn to the villager who spoke (`speaker`, matching Discord text) so memorization and the reviewer both read who-said-what; `createMessageEl` renders the speaker's initial + name. Off-switch `PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED=1`
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js) + `resolveReasoningEffort(conn)` (0.11.20): always-on-thinking models (GLM-5.3 made thinking mandatory, `reasoning_effort` defaulting to `max`) spend their whole token budget reasoning and return empty content — surfacing as a raw "thinking dump" and, on the empty/throw paths, dropping the user's own message. Per-connection `reasoningEffort` (`low`/`high`/`max`/`off`): explicit values sent for any provider; UNSET → auto-`low` ONLY for the z.ai family (zai/zai-coding), nothing elsewhere (so a Gemini or non-reasoning NanoGPT model can't get an unknown-param 400 from a default). Applied in the Discord turn (callChatRaw) + the web `/api/chat` payload; the client sends the active connection's `reasoningEffort` (rides the existing connections sync)
-├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision. **`extractTurnReply(choice)` (0.11.20)** is the INTERACTIVE-turn counterpart to `extractContent`: content wins, but an empty content at `finish_reason='length'` returns `''` (budget exhausted mid-thought — NOT an answer) so a caller never surfaces raw chain-of-thought as the reply (the GLM-5.3 thinking-dump); only a non-length empty falls back to `reasoning_content` (the legitimate proxy-parking case). `callProviderChat` gained an opt-in `reasoningEffort` param — passed by chat callers, NOT by the ward-signed triage call (its request stays byte-identical)
+├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision. **`extractTurnReply(choice)` (0.11.20)** is the INTERACTIVE-turn counterpart to `extractContent`: content wins, but an empty content at `finish_reason='length'` returns `''` (budget exhausted mid-thought — NOT an answer) so a caller never surfaces raw chain-of-thought as the reply (the GLM-5.3 thinking-dump); only a non-length empty falls back to `reasoning_content` (the legitimate proxy-parking case). `callProviderChat` gained an opt-in `reasoningEffort` param — passed by chat callers, NOT by the ward-signed triage call (its request stays byte-identical). **Bounded by default (0.14.64):** every call carries a wall-clock deadline over headers AND body (`timeoutMs`, default `PROVIDER_CALL_TIMEOUT_MS` = 300s, override `PROTO_FAMILIAR_LLM_CALL_TIMEOUT_MS`; only an explicit `0` opts out) plus an optional caller `signal`; expiry throws an error named `TimeoutError` naming provider/model + seconds. `deadlineSignal` / `isTimeoutError` are the one shared implementation (the Discord turn path uses them too) — see *Provider-call deadlines*
 ├── (quiet success)          Write-tool success results collapse at the `executeToolCall` boundary (0.8.13): a WRITE executor's success branch returns `quietOk(fullText, {id})` and the model sees `ok` (+ the new id when chaining needs it) instead of confirmation prose — success confirmations recur every turn the transcript survives, and carry nothing the model didn't imply by making the call. The safety contract: ONLY genuine success branches opt in (the boundary never classifies text, so a failure can never read as success); READ tools never opt in (the result IS the payload); load-bearing successes stay loud (contact_trusted_person, show_crisis_resources, schedule_push_to_google, schedule_export, memorize_now, village_upsert, convert_ids_to_slugs). Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 restores full prose
 ├── schedule-availability.js Coarse availability (stewardship Pass 4, 0.8.24) — LABEL-FREE-by-construction free/busy per day-part (morning/afternoon/evening) for coordinating with a villager the ward permitted. computeAvailability(nodes,{nowMs,days}) marks a part busy when an event or `hold` overlaps it (tasks/reminders don't block time); formatAvailabilityLines renders coarse rows; buildAvailabilityBlock is the villager-DM block, gated on the `schedule` grant ('coarse'|'full'). The derivation NEVER emits a label — structural privacy, not model discretion; 'full' additionally names items (ward's choice). Pure. Permission tier = the EXISTING audience.js `schedule` grant (category-level, V3 model); injected on villager-DM turns in discord-gateway (availabilityBlockFor) as context, and — since the clearance-gated Discord tools (V10, below) — also reachable as the `schedule_availability` tool when the speaker's grant authorises it. Familiar-facing: schedule_availability (own free/busy check) + schedule_add_hold (a 'hold' node — new SCHEDULE_NODE_TYPES member, keep-a-time-free, counted busy)
 ├── routine-review.js        Routine review (stewardship Pass 3, 0.8.21) — pure ledger + due-check + the pivot-menu prompt section. buildNeedsLedger counts met/missed per tracked need over the week (from each need anchor's payload.resolutions); isRoutineReviewDue is true only when the cadence (routineReviewDays) has elapsed AND ≥1 routine actually slipped (a good week manufactures nothing); buildRoutineReviewSection is the first-person pivot-menu text (keep/shrink/move/make-enjoyable/swap/shelve — "not ready yet" a finding, both costs named). RIDES one reflection tick, no new LLM call: server.js's shouldReflect lets a due review claim the tick, getReflectionInput attaches the section, the reflection prompt (pondering.js buildReflectionPrompt) emits a first-person `routine_review` finding, and runPonder's follow-through stamps the cadence + stashes the finding via stewardship.recordRoutineReview. Off-switch routineReviewEnabled + PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED=1; borrows the reflection slot without colonizing the pondering loop
@@ -1076,7 +1076,15 @@ or `CONTACT_ESCALATION_DELAY_MS` elapses — counted from confirmed push
 delivery; see cerebellum's `contactDeadlineFor`). The deliberation
 prompt includes the Familiar's still-unacknowledged check-ins with
 their delivery state, so a failed push reads as "they may never have
-seen me," not as silence.
+seen me," not as silence. **Deadline + failed re-check (ward-signed
+0.14.64):** the deliberation call (`callTriageDeliberation`) is bounded at
+`TRIAGE_CALL_TIMEOUT_MS` (180s); on expiry it returns the unchanged safe
+default — `wait`, marked `failed`, with the reason (recorded in the triage
+event log, never counted as a wait). A failed deliberation of any kind gets
+only the 30s pile-up floor (`FAILED_RECHECK_MS`), not the tier cool-down, so
+the next 5-min tick looks again. Trusted-contact escalation still runs in the
+tick's `onTick`, after the deliberation (ward decision) — the deadline is what
+keeps it from being held indefinitely.
 
 **`reachout-loop.js`** + **`reachout.js`** — autonomous singleton, the
 companionship counterpart to silence-triage. Every 10min, `runOneReachoutTick`
@@ -1179,7 +1187,14 @@ and when the answer scrolled out of the look-back window it digs with
 window reads back keyword-free).
 `noticing-loop.js` is the singleton that drives it, self-paced (`set_next_check`,
 clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
-in `server.js`'s `noticingDeliberate`. It assembles the same recent context a live
+in `server.js`'s `noticingDeliberate`, through `runNoticingToolLoop` (ward-signed
+0.14.64): each provider call is bounded at `NOTICING_CALL_TIMEOUT_MS` (180s) and
+the whole deliberation — every round and every tool call — at
+`NOTICING_DELIBERATION_TIMEOUT_MS` (600s). A deadline ends the turn where it is
+and keeps what already ran: a reach-out that went out makes the tick `acted`
+(flagged `timedOut`); a cut-short turn with nothing proactive is
+`deliberation_failed` (no streak change, next tick looks again). Both land in
+`logs/noticing-events.jsonl` with `error` + `timedOut`. It assembles the same recent context a live
 chat turn / warm reach-out gets — identity (static block), the time anchor,
 recent conversation and recent memories (`getRecentMemoryLines`, today+yesterday)
 — so it doesn't decide blind to what was just said. **When an outcome is open,
@@ -1289,8 +1304,10 @@ refusal. A turn that ignores its aborted signal (stuck in non-cancellable
 work, e.g. a tool) is abandoned 20s past its deadline: the queue is released,
 `turn.onAbandon` delivers the timeout note, and the late finisher drops its
 reply rather than answering out of order. Expiries log loudly and set
-`status.lastError`. The noticing loop's own `callChatRaw` use passes no bound
-(unchanged — a ward-sign-off path).
+`status.lastError` (Discord turns only — `callChatRaw`'s `surface` tag keeps a
+noticing timeout off the gateway status). The same class of hang on the
+background loops is covered by *Provider-call deadlines* (0.14.64) under
+"Autonomous loops"; noticing's own `callChatRaw` use is bounded there.
 
 *Villager consent self-service (0.8.106, `villager-consent.js`).*
 `!consent` in a REGISTERED villager's own DM is a pure-code surface (no
@@ -2918,6 +2935,35 @@ that is the contract talking — update all seams together or stop.
 
 The autonomous loops do not run during shutdown — server.js's SIGTERM
 handler awaits each loop's `stop*()` before closing the MCP children.
+
+### Provider-call deadlines (0.14.64)
+
+Every loop above guards its tick with an in-flight flag (`_activeTick` /
+`_active`) that clears only when the tick settles. A provider can send response
+headers and then hold the socket open with keep-alive bytes and no answer;
+Node's fetch (undici) has only idle timeouts (300s), which a trickle resets
+forever, so an unbounded call never settles and the loop stops for good —
+silently. Before this, that applied to pondering, warm reach-out, tome
+graduation, content re-tag, media retention, page watches, silence triage
+(which also held trusted-contact escalation, run from the same tick), noticing,
+and memorization (its extraction was bounded, but the image describe it awaits
+first was not).
+
+| Path | Bound | On expiry |
+|---|---|---|
+| `callProviderChat` default (pondering, reach-out, tome graduation, content re-tag, media retention, page watch, vision describe, guide chat, voice greeting) | 300s per call (`PROVIDER_CALL_TIMEOUT_MS`; `PROTO_FAMILIAR_LLM_CALL_TIMEOUT_MS` overrides) | Throws `TimeoutError` naming provider/model; each caller's existing failure path runs (the tick errors and logs; the guard clears; the next tick runs) |
+| Silence triage (ward-signed) | 180s (`TRIAGE_CALL_TIMEOUT_MS`) | Safe default `wait` + `failed` + reason → triage event log; next tick re-checks (`FAILED_RECHECK_MS`) |
+| Noticing (ward-signed) | 180s per call, 600s per deliberation | Partial result kept: acted if a proactive tool already ran, else `deliberation_failed`; logged with `timedOut` |
+| Memorization extraction | 120s default, ward-tunable (`phylacteryLlmTimeoutS`) | Unchanged (pre-existing) |
+| Discord turn | 180s per call, 10 min per turn | See *Turn deadlines (0.14.63)* |
+
+300s is deliberate for the background default: undici's own `headersTimeout`
+already kills any non-trickling non-stream call at 300s, so this bound never
+cuts an answer that would have arrived — only a socket that was never going to
+deliver. Not covered here (interactive, bounded by the human closing the
+request rather than a wedge): the web `/api/chat` raw non-stream path and its
+filter-retry fetch don't abort on client disconnect, and the isolated
+`/api/video-understand` Gemini call is unbounded.
 
 ## Voice — Pass 0 (the bench tool and its supply chain)
 
