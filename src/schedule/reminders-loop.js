@@ -23,13 +23,18 @@
  */
 
 import { enqueueOutbox } from '../safety/outbox.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 30_000;  // 30s — sub-minute precision without
                                   // the constant churn of every-second.
+// A healthy tick takes seconds. A stuck one means NO reminder fires at all, so
+// this loop is released sooner than the others; a late duplicate from the
+// released tick is absorbed by the outbox's originId dedup.
+const WATCHDOG_MS = 5 * 60_000;
 
 let _started      = false;
 let _interval     = null;
-let _activeTick   = null;
+let _guard        = null;
 let _lastOverdue  = null;
 let _consecutiveOverdueGrowth = 0;
 
@@ -151,44 +156,40 @@ export function startRemindersLoop({
   onTick    = () => {},
   onError   = () => {},
   isEnabled = async () => true,
+  watchdogMs = WATCHDOG_MS,
 }) {
   if (_started) throw new Error('reminders loop already running');
   _started = true;
   _lastOverdue = null;
   _consecutiveOverdueGrowth = 0;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
-        const result = await runOneReminderTick({ getDueReminders, fireReminder, getDueEventAlerts, markEventAlerted, getDueWeatherAlerts, enqueueOutboxFn });
-        // Health check (best-effort; never blocks delivery).
-        if (typeof getHealth === 'function') {
-          try {
-            const h = await getHealth();
-            if (h?.ok !== false && Number.isFinite(h?.overdue)) {
-              if (_lastOverdue != null && h.overdue > _lastOverdue) {
-                _consecutiveOverdueGrowth += 1;
-                if (_consecutiveOverdueGrowth >= 3) {
-                  console.warn(`[reminders] overdue keeps growing (${_lastOverdue} → ${h.overdue}); scheduler may be stuck`);
-                }
-              } else {
-                _consecutiveOverdueGrowth = 0;
+  _guard = createTickGuard({ name: 'reminders', watchdogMs });
+  const fire = () => _guard.run(async () => {
+    try {
+      if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
+      const result = await runOneReminderTick({ getDueReminders, fireReminder, getDueEventAlerts, markEventAlerted, getDueWeatherAlerts, enqueueOutboxFn });
+      // Health check (best-effort; never blocks delivery).
+      if (typeof getHealth === 'function') {
+        try {
+          const h = await getHealth();
+          if (h?.ok !== false && Number.isFinite(h?.overdue)) {
+            if (_lastOverdue != null && h.overdue > _lastOverdue) {
+              _consecutiveOverdueGrowth += 1;
+              if (_consecutiveOverdueGrowth >= 3) {
+                console.warn(`[reminders] overdue keeps growing (${_lastOverdue} → ${h.overdue}); scheduler may be stuck`);
               }
-              _lastOverdue = h.overdue;
+            } else {
+              _consecutiveOverdueGrowth = 0;
             }
-          } catch { /* health is observability, not blocking */ }
-        }
-        onTick(result);
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
+            _lastOverdue = h.overdue;
+          }
+        } catch { /* health is observability, not blocking */ }
       }
-    })();
-    return _activeTick;
-  };
+      onTick(result);
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, tickMs);
   _interval.unref?.();
@@ -202,9 +203,9 @@ export function startRemindersLoop({
 export async function stopRemindersLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started = false;
   _lastOverdue = null;
   _consecutiveOverdueGrowth = 0;
-  if (pending) { try { await pending; } catch {} }
+  if (guard) await guard.settle();
 }

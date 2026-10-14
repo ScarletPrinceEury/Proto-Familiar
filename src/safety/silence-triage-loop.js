@@ -42,6 +42,7 @@
  */
 
 import { getWaitStreak, recordWait, recordProactive, isWaitStreakEnabled } from './wait-streak.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 5 * 60_000;          // 5 min
 
@@ -80,9 +81,19 @@ export const DEFAULT_RECHECK_MS = Object.freeze({
 // look. A down provider fails fast, so the extra attempts are cheap.
 export const FAILED_RECHECK_MS = MIN_RECHECK_MS;
 
+// Watchdog on the tick guard (ward-signed 0.14.67). A healthy tick is well under
+// 4 min (the deliberation call itself is capped at 180s), but a tick that hung
+// on anything else — a threat/activity read, a push delivery — used to stop
+// triage for good, and the trusted-contact escalation check with it (it runs in
+// onTick, after the tick). Released after this long: the release is reported
+// through onTick (reason 'tick_released' → the triage event log, and the
+// escalation check runs then), and the next tick deliberates normally. A late
+// banner from the abandoned tick is absorbed by the 4h same-tier dedup bucket.
+export const TRIAGE_WATCHDOG_MS = 10 * 60_000;
+
 let _started           = false;
 let _interval          = null;
-let _activeTick        = null;
+let _guard             = null;
 let _nextAllowedTickTs = 0;     // ms; gate for the next LLM deliberation
 let _lastDecisionTier  = null;  // remember the tier the cooldown was set under,
                                 // so a tier rise can preempt the wait
@@ -250,30 +261,33 @@ export function resetTriageCooldown() {
 // ── Singleton lifecycle ──────────────────────────────────────────
 
 export function startSilenceTriageLoop({
-  tickMs    = DEFAULT_TICK_MS,
-  onTick    = () => {},
-  onError   = () => {},
-  isEnabled = async () => true,
+  tickMs     = DEFAULT_TICK_MS,
+  watchdogMs = TRIAGE_WATCHDOG_MS,
+  onTick     = () => {},
+  onError    = () => {},
+  isEnabled  = async () => true,
   ...tickConfig
 }) {
   if (_started) throw new Error('silence-triage loop already running');
   _started = true;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
-        const r = await runOneTriageTick(tickConfig);
-        try { onTick(r); } catch (err) { onError(err); }
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
-      }
-    })();
-    return _activeTick;
-  };
+  _guard = createTickGuard({
+    name: 'silence-triage', watchdogMs,
+    // A released tick is a reportable outcome, not silence: it lands in the
+    // triage event log, and onTick's escalation check runs now.
+    onRelease: () => {
+      try { onTick({ acted: false, reason: 'tick_released', at: Date.now() }); } catch (err) { onError(err); }
+    },
+  });
+  const fire = () => _guard.run(async () => {
+    try {
+      if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
+      const r = await runOneTriageTick(tickConfig);
+      try { onTick(r); } catch (err) { onError(err); }
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, tickMs);
   _interval.unref?.();
@@ -284,9 +298,9 @@ export function startSilenceTriageLoop({
 export async function stopSilenceTriageLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started           = false;
   _nextAllowedTickTs = 0;
   _lastDecisionTier  = null;
-  if (pending) { try { await pending; } catch {} }
+  if (guard) await guard.settle();
 }

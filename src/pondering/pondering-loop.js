@@ -33,6 +33,7 @@
 import { pickInterest }            from './interest-picker.js';
 import { isCallActiveFromFile }    from '../voice/call-engine.js';
 import { computeRequiredInterval } from './pondering-cadence.js';
+import { createTickGuard }         from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
 // How often a ponder hops one related_to edge instead of staying on the weighted pick.
@@ -146,8 +147,12 @@ export async function runOneTick({
 
 let _started     = false;
 let _interval    = null;
-let _activeTick  = null;
+let _guard       = null;
 let _lastPonderAt = 0;
+// A ponder can do bounded web research and a few provider calls (each ≤300s),
+// so this loop gets the roomiest watchdog: releasing a slow-but-healthy ponder
+// would let a second one overlap it.
+const WATCHDOG_MS = 30 * 60_000;
 
 /**
  * Start the loop. Wraps runOneTick with a setInterval at `tickMs`
@@ -165,32 +170,28 @@ export function startPonderingLoop({
   onTick   = () => {},
   onError  = () => {},
   immediate = true,    // run one tick on start so demos don't wait a full tickMs
+  watchdogMs = WATCHDOG_MS,
   ...tickConfig
 }) {
   if (_started) throw new Error('pondering loop already running');
   _started      = true;
   _lastPonderAt = 0;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        // Governor (§4.3): defer while a live voice call is up — pondering is
-        // minutes-scale and nothing is lost by running a tick later, but its LLM
-        // work would contend with the call my human is in right now. The finally
-        // still clears _activeTick, so the next tick runs normally once the call ends.
-        if (await isCallActiveFromFile()) return;
-        const r = await runOneTick({ ...tickConfig, lastPonderAt: _lastPonderAt });
-        if (r.acted) _lastPonderAt = r.at;
-        try { onTick(r); } catch (err) { onError(err); }
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
-      }
-    })();
-    return _activeTick;
-  };
+  _guard = createTickGuard({ name: 'pondering', watchdogMs });
+  const fire = () => _guard.run(async () => {
+    try {
+      // Governor (§4.3): defer while a live voice call is up — pondering is
+      // minutes-scale and nothing is lost by running a tick later, but its LLM
+      // work would contend with the call my human is in right now. The guard
+      // clears when this returns, so the next tick runs normally once the call ends.
+      if (await isCallActiveFromFile()) return;
+      const r = await runOneTick({ ...tickConfig, lastPonderAt: _lastPonderAt });
+      if (r.acted) _lastPonderAt = r.at;
+      try { onTick(r); } catch (err) { onError(err); }
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, tickMs);
   _interval.unref?.();
@@ -207,10 +208,10 @@ export function startPonderingLoop({
 export async function stopPonderingLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started      = false;
   _lastPonderAt = 0;
-  if (pending) { try { await pending; } catch { /* surfaced through onError already */ } }
+  if (guard) await guard.settle();
 }
 
 export function isRunning() { return _started; }

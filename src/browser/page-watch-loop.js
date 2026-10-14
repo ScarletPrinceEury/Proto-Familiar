@@ -20,12 +20,16 @@
 
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { runOnePageWatchTick } from './page-watch.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const BASE_TICK_MS = 5 * 60_000;   // wake every 5 min; per-watch intervalMs gates actual reads
+// A tick reads the due pages and, only on a change, makes one judgment call
+// (provider calls bounded at 300s) — 15 min is far past a healthy tick.
+const WATCHDOG_MS  = 15 * 60_000;
 
-let _started    = false;
-let _interval   = null;
-let _activeTick = null;
+let _started  = false;
+let _interval = null;
+let _guard    = null;
 
 /**
  * Start the loop.
@@ -37,6 +41,7 @@ let _activeTick = null;
  */
 export function startPageWatchLoop({
   baseTickMs = BASE_TICK_MS,
+  watchdogMs = WATCHDOG_MS,
   isEnabled  = async () => true,
   onTick     = () => {},
   onError    = () => {},
@@ -45,22 +50,17 @@ export function startPageWatchLoop({
   if (_started) throw new Error('page watch loop already running');
   _started = true;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        if (await isCallActiveFromFile()) return;                 // governor: not during a live call
-        if (!(await isEnabled())) { onTick({ ran: false, reason: 'disabled' }); return; }
-        const r = await runOnePageWatchTick(tickConfig);
-        try { onTick({ ran: true, ...r }); } catch (err) { onError(err); }
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
-      }
-    })();
-    return _activeTick;
-  };
+  _guard = createTickGuard({ name: 'page-watch', watchdogMs });
+  const fire = () => _guard.run(async () => {
+    try {
+      if (await isCallActiveFromFile()) return;                 // governor: not during a live call
+      if (!(await isEnabled())) { onTick({ ran: false, reason: 'disabled' }); return; }
+      const r = await runOnePageWatchTick(tickConfig);
+      try { onTick({ ran: true, ...r }); } catch (err) { onError(err); }
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, baseTickMs);
   _interval.unref?.();
@@ -71,9 +71,9 @@ export function startPageWatchLoop({
 export async function stopPageWatchLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started = false;
-  if (pending) { try { await pending; } catch { /* surfaced via onError */ } }
+  if (guard) await guard.settle();
 }
 
 export function isRunning() { return _started; }

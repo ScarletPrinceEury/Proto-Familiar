@@ -18,6 +18,7 @@
 import { incompleteDates, collectDateSlices } from './memory-coverage.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { enqueueMemorization } from './memorization.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000; // 10 min — coverage doesn't need a fast pulse
 
@@ -70,35 +71,33 @@ export async function runMemorySweepTick({
 
 let _started = false;
 let _interval = null;
-let _activeTick = null;
+let _guard = null;
+// A sweep only scans coverage and enqueues jobs (no LLM call of its own).
+const WATCHDOG_MS = 10 * 60_000;
 
 export function startMemorySweepLoop({
   tickMs = DEFAULT_TICK_MS,
   isEnabled = async () => true,
   getConnection,
+  watchdogMs = WATCHDOG_MS,
   onTick = () => {},
   onError = () => {},
 } = {}) {
   if (_started) throw new Error('memory sweep loop already running');
   _started = true;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        // Governor (§4.3): defer the coverage sweep during a live call.
-        if (await isCallActiveFromFile()) return;
-        if (!(await isEnabled())) { onTick({ acted: false, reason: 'disabled' }); return; }
-        const r = await runMemorySweepTick({ getConnection });
-        try { onTick(r); } catch (err) { onError(err); }
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
-      }
-    })();
-    return _activeTick;
-  };
+  _guard = createTickGuard({ name: 'memory-sweep', watchdogMs });
+  const fire = () => _guard.run(async () => {
+    try {
+      // Governor (§4.3): defer the coverage sweep during a live call.
+      if (await isCallActiveFromFile()) return;
+      if (!(await isEnabled())) { onTick({ acted: false, reason: 'disabled' }); return; }
+      const r = await runMemorySweepTick({ getConnection });
+      try { onTick(r); } catch (err) { onError(err); }
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, tickMs);
   _interval.unref?.();
@@ -109,9 +108,9 @@ export function startMemorySweepLoop({
 export async function stopMemorySweepLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started = false;
-  if (pending) { try { await pending; } catch { /* surfaced via onError */ } }
+  if (guard) await guard.settle();
 }
 
 export function isRunning() { return _started; }

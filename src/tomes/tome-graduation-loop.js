@@ -15,6 +15,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { createTickGuard } from '../util/tick-guard.js';
 import { promises as fsp } from 'fs';
 
 import {
@@ -32,10 +33,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — draining a backlog wants no urgency
+// One batched judgment (≤300s) + a run of routed writes.
+const WATCHDOG_MS     = 30 * 60_000;
 
 let _started  = false;
 let _interval = null;
-let _active   = null;
+let _guard    = null;
 
 function tomeGraduationHardDisabled() {
   return process.env.PROTO_FAMILIAR_TOME_GRADUATION_DISABLED === '1';
@@ -158,7 +161,7 @@ async function runTick() {
   return summary;
 }
 
-export function startTomeGraduationLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
+export function startTomeGraduationLoop({ tickMs = DEFAULT_TICK_MS, watchdogMs = WATCHDOG_MS } = {}) {
   if (_started) return { stop: stopTomeGraduationLoop };
   if (tomeGraduationHardDisabled()) {
     console.log('[grad] tome→Phylactery graduation hard-disabled via PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1');
@@ -166,11 +169,10 @@ export function startTomeGraduationLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[grad] tome→Phylactery graduation loop armed (opt-in; idles until "Graduate tome knowledge" is enabled in Settings)');
+  _guard = createTickGuard({ name: 'tome-graduation', watchdogMs });
   _interval = setInterval(() => {
-    if (_active) return;                 // never overlap ticks
-    _active = runTick()
-      .catch(err => console.warn('[grad] tick error:', err?.message ?? err))
-      .finally(() => { _active = null; });
+    // The guard never overlaps ticks, and releases one that hangs.
+    _guard.run(() => runTick().catch(err => console.warn('[grad] tick error:', err?.message ?? err)));
   }, tickMs);
   _interval.unref?.();
   return { stop: stopTomeGraduationLoop };
@@ -178,6 +180,6 @@ export function startTomeGraduationLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
 
 export async function stopTomeGraduationLoop() {
   if (_interval) { clearInterval(_interval); _interval = null; }
-  if (_active) { try { await _active; } catch { /* already logged */ } }
+  if (_guard) await _guard.settle();
   _started = false;
 }
