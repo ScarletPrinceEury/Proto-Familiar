@@ -232,6 +232,7 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
 export function buildNoticingPrompt({
   nowBlock = '', openEvents = [], otherItems = [], spanText = '',
   threatTier = 'calm', hasFlagDistress = false, recentConversation = '', recentMemories = '',
+  careFacts = '',
   closeTools = 'schedule_calibrate_link and schedule_resolve',
 }) {
   const hasOpen = Array.isArray(openEvents) && openEvents.length > 0;
@@ -258,9 +259,12 @@ export function buildNoticingPrompt({
   // What was actually said — this turn's conversation and what I hold from the
   // last day or two. Information only: I read it and use my own judgment; it is
   // NOT a reason to go quiet, least of all when concern is elevated.
+  // careFacts (ward-signed 0.14.70): my human's care-critical standing facts,
+  // already formatted (care-facts.js) — they no longer ride in my identity.
   const contextSection =
     (recentConversation ? `\n\nOur current conversation:\n${recentConversation}` : '') +
-    (recentMemories     ? `\n\nWhat I remember from today and yesterday:\n${recentMemories}` : '');
+    (recentMemories     ? `\n\nWhat I remember from today and yesterday:\n${recentMemories}` : '') +
+    (careFacts          ? `\n\n${careFacts}` : '');
 
   const elevated = threatTier === 'moderate' || threatTier === 'high' || threatTier === 'severe';
   const flagClause = hasFlagDistress

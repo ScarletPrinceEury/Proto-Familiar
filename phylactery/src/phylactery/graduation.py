@@ -1,33 +1,36 @@
 """Graduation audit (Pillar H) — keep the always-injected surface lean.
 
-I periodically review my always-injected `identity` (self) and `ward` blocks
-and graduate detail that is no longer front-of-mind into RAG-recalled `me` /
-`ward` register memory records. Graduated facts aren't deleted — they decay
-in retrieval weight like any other memory and can be pulled back if they keep
+I periodically review my always-injected identity files and graduate detail
+that doesn't need to be in front of me every turn into RAG-recalled `me` /
+`ward` register memory records (standing facts). Graduated facts aren't
+deleted — they're recalled when relevant and can be pulled back if they keep
 mattering. This is *my* call, made in my own voice during the consolidation
-pass; for the `ward` block I also leave a note so my human can see what I filed
-away (ward-consulted, non-blocking).
+pass; for files about my human or our bond I also leave a note so my human can
+see what I filed away (ward-consulted, non-blocking).
 
-⚠️ The eligibility rule below is human-signed (build-spec §7). It decides what
-may LEAVE the always-injected surface — i.e. what I might stop having in front
-of me every turn — so it is deliberately conservative:
+⚠️ Human-signed (build-spec §7, revised 0.14.70 — docs/identity-lean-build-spec.md).
+Identity is for MY identity and the shape of our bond. It rides every turn and
+reaches group chats, so it is not the place for situational detail or for care
+data about my human. Revised by the ward in 0.14.70:
 
-  candidate  = NOT pinned
-               AND on-surface longer than DWELL_DAYS
-               AND last recalled longer ago than RECALL_RECENCY_DAYS
-                   (never-recalled counts as eligible)
-               AND last confirmed longer ago than CONFIRM_RECENCY_DAYS
+  NEVER audited (the protected core, who I am — Psycheros's self segments):
+               self/my_identity.md, my_persona.md, my_personhood.md,
+               my_wants.md, my_boundaries.md, base_instructions.md
+               OR a file explicitly marked care_weight 'high'
 
-  NEVER eligible (pinned, regardless of the above):
-               careWeight == 'high'
-               OR category in {health_info, crisis, support-map}
-               OR content matches care-critical patterns
-                  (allergies, meds, crisis triggers, support contacts, …)
-               OR confirmed within CONFIRM_RECENCY_DAYS
+  audited when EITHER
+     (a) its category is over the identity budget (identity_budget_tokens,
+         ward-adjustable, default 6k tokens; split self/ward/relationship/
+         custom) AND the file is above its own share of what's left after the
+         protected core, regardless of how recently it was edited;
+  OR (b) the original rule: on the surface longer than DWELL_DAYS, not
+         recalled within RECALL_RECENCY_DAYS, not confirmed within
+         CONFIRM_RECENCY_DAYS.
 
-False positives here are cheap (a fact stays front-of-mind a while longer);
-false negatives are not (a safety-relevant fact gets filed away). So the
-content matcher errs toward KEEPING — when in doubt, it does not graduate.
+Care-critical lines about my human (care.py) are no longer pinned here: they
+graduate like everything else, but land as `ward` facts with care_weight 'high',
+which put them in front of me directly on my human's own turns, in triage and
+in noticing (memory.list_care_facts) — and never in a group chat.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+from phylactery.care import CARE_CATEGORIES, contains_care_critical  # noqa: F401 (re-exported)
 from phylactery.db import get_conn, insert_with_slug_retry, now_iso
 from phylactery.snapshot import auto_snapshot
 
@@ -47,29 +51,83 @@ DWELL_DAYS = 30           # must have been on the surface this long
 RECALL_RECENCY_DAYS = 30  # last recalled more than this long ago (or never)
 CONFIRM_RECENCY_DAYS = 30 # NOT confirmed within this window
 
-# Memorization-taxonomy categories that are pinned by category alone.
-NEVER_GRADUATE_CATEGORIES = {"health_info", "crisis", "support-map"}
+# Kept for compatibility: the care categories (care.py is the source).
+NEVER_GRADUATE_CATEGORIES = CARE_CATEGORIES
 
-# Care-critical content matcher. Broad on purpose: a match KEEPS the detail
-# front-of-mind, which is the cheap direction to be wrong in.
-_CARE_PATTERNS = [
-    r"allerg",                                  # allergy / allergic
-    r"\bmed(s|ication|ications)?\b", r"\bdos(e|age)\b",
-    r"\d+\s*m?g\b", r"\d+\s*ml\b", r"\bmcg\b",  # doses, incl. "50mg" (no word break)
-    r"prescription", r"\bpill\b", r"insulin", r"inhaler", r"epi[\- ]?pen",
-    r"suicid", r"self[\- ]?harm", r"overdose", r"\bcrisis\b", r"\brelapse\b",
-    r"hotline", r"\b988\b", r"emergency contact", r"support (contact|person|map)",
-    r"\btrigger(s|ed|ing)?\b", r"seizure", r"diabet", r"asthma", r"anaphyla",
-    r"what helps", r"what doesn'?t help", r"do not (say|mention|bring up)",
-]
-_CARE_RE = re.compile("|".join(_CARE_PATTERNS), re.IGNORECASE)
+# ── The protected core + the identity budget (ward-signed 0.14.70) ────────────
+# Who I am — Psycheros's self segments. Never trimmed automatically; the budget
+# nudge in update_identity still lets me tighten them myself.
+PROTECTED_SELF_FILES = {
+    "my_identity.md", "my_persona.md", "my_personhood.md",
+    "my_wants.md", "my_boundaries.md", "base_instructions.md",
+}
+IDENTITY_BUDGET_DEFAULT_TOKENS = 6000
+IDENTITY_BUDGET_MIN_TOKENS = 2000
+IDENTITY_BUDGET_MAX_TOKENS = 30000
+CHARS_PER_TOKEN = 4
+# The split of the budget (self keeps the largest share: it's who I am).
+CATEGORY_SHARES = {"self": 14 / 24, "ward": 6 / 24, "relationship": 3 / 24, "custom": 1 / 24}
+AUDITED_CATEGORIES = tuple(CATEGORY_SHARES)
+# No auditable file is asked to shrink below this.
+FILE_TARGET_FLOOR_CHARS = 1000
+_BUDGET_META_KEY = "identity_budget_tokens"
 
 
-def contains_care_critical(text: str | None) -> bool:
-    """True if text mentions anything I must never quietly file away."""
-    if not text:
-        return False
-    return bool(_CARE_RE.search(text))
+def _clamp_budget(tokens) -> int:
+    try:
+        n = int(tokens)
+    except (TypeError, ValueError):
+        return IDENTITY_BUDGET_DEFAULT_TOKENS
+    return max(IDENTITY_BUDGET_MIN_TOKENS, min(IDENTITY_BUDGET_MAX_TOKENS, n))
+
+
+def identity_budget_tokens(conn: sqlite3.Connection) -> int:
+    """My human's identity budget (set from their Settings via identity_budget_set)."""
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (_BUDGET_META_KEY,)).fetchone()
+    except sqlite3.OperationalError:
+        return IDENTITY_BUDGET_DEFAULT_TOKENS   # no meta table (minimal/older schema)
+    return _clamp_budget(row["value"]) if row else IDENTITY_BUDGET_DEFAULT_TOKENS
+
+
+def set_identity_budget_tokens(tokens, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        value = _clamp_budget(tokens)
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", (_BUDGET_META_KEY, str(value)))
+        return {"ok": True, "tokens": value}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def category_budget_chars(category: str, budget_tokens: int) -> int:
+    return int(budget_tokens * CHARS_PER_TOKEN * CATEGORY_SHARES.get(category, 0))
+
+
+def _is_protected(row) -> bool:
+    if (row["care_weight"] or "").lower() == "high":
+        return True   # an explicit pin wins
+    return row["category"] == "self" and row["filename"] in PROTECTED_SELF_FILES
+
+
+def file_targets(rows, budget_tokens: int) -> dict[str, int]:
+    """Each auditable file's share of its category's budget, after the protected
+    core takes its actual size. Proportional to the file's current size, floored."""
+    targets: dict[str, int] = {}
+    for cat in AUDITED_CATEGORIES:
+        in_cat = [r for r in rows if r["category"] == cat]
+        protected = sum(len(r["content"] or "") for r in in_cat if _is_protected(r))
+        auditable = [r for r in in_cat if not _is_protected(r)]
+        room = category_budget_chars(cat, budget_tokens) - protected
+        total = sum(len(r["content"] or "") for r in auditable) or 1
+        for r in auditable:
+            share = room * len(r["content"] or "") / total if room > 0 else 0
+            targets[r["id"]] = max(FILE_TARGET_FLOOR_CHARS, int(share))
+    return targets
 
 
 def _days_since(iso: str | None, now: datetime) -> float | None:
@@ -86,24 +144,22 @@ def _days_since(iso: str | None, now: datetime) -> float | None:
 
 
 def is_graduation_eligible(record: dict, now: datetime | None = None) -> bool:
-    """The human-signed eligibility rule. Pure; the single source of truth.
+    """The time-based half of the human-signed rule (b). Pure.
 
     `record` keys (all optional except where noted):
-      care_weight      — 'high' pins (never graduates)
-      category         — memorization category; some pin by name
-      content          — scanned for care-critical patterns
+      care_weight      — 'high' is an explicit pin (never graduates)
       dwell_anchor     — ISO ts the detail entered the surface (required signal)
       last_recalled_at — ISO ts last surfaced by recall (None = never)
       last_confirmed_at— ISO ts last re-confirmed (None = never)
+
+    Care-relevant content and categories no longer pin (ward decision 0.14.70):
+    care detail about my human graduates into high-care standing facts, which
+    stay in front of me where it matters and out of group chats.
     """
     now = now or datetime.now(timezone.utc)
 
-    # ── Hard exclusions (pinned) ──────────────────────────────────────────────
+    # ── Hard exclusion (explicit pin) ─────────────────────────────────────────
     if (record.get("care_weight") or "").lower() == "high":
-        return False
-    if (record.get("category") or "") in NEVER_GRADUATE_CATEGORIES:
-        return False
-    if contains_care_critical(record.get("content")):
         return False
     confirmed_age = _days_since(record.get("last_confirmed_at"), now)
     if confirmed_age is not None and confirmed_age < CONFIRM_RECENCY_DAYS:
@@ -122,45 +178,92 @@ def is_graduation_eligible(record: dict, now: datetime | None = None) -> bool:
 # ── Identity-file candidate selection ─────────────────────────────────────────
 
 def eligible_identity_files(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
-    """Self/ward identity files whose detail MAY contain graduatable content.
+    """Identity files whose detail MAY be graduated this pass (rule (a) or (b)).
 
-    Maps each file onto the signed-off rule: identity files are always-injected
-    (never RAG-recalled), so their dwell/confirm anchor is `updated_at` (a recent
-    edit means I'm still actively holding it) and `last_recalled_at` is absent.
-    The Familiar (the consolidation LLM call) then decides what, if anything,
-    inside an eligible file is actually filed away.
+    Never the protected core. (a) Over budget: the file's category is over its
+    share of my human's identity budget and the file is above its own target —
+    regardless of recent edits (a file I keep appending to is exactly the one
+    that needs it; the old per-file edit anchor meant it never qualified).
+    (b) The original time rule, with `updated_at` as the dwell/confirm anchor.
+    Each candidate carries its `target_chars` for the audit prompt. The Familiar
+    (the consolidation LLM call) decides what inside a file is filed away.
     """
     now = now or datetime.now(timezone.utc)
+    placeholders = ",".join("?" for _ in AUDITED_CATEGORIES)
     rows = conn.execute(
         "SELECT id, category, filename, content, care_weight, updated_at, last_graduated_at "
-        "FROM identity_files WHERE category IN ('self', 'ward')",
+        f"FROM identity_files WHERE category IN ({placeholders})",
+        AUDITED_CATEGORIES,
     ).fetchall()
+    budget = identity_budget_tokens(conn)
+    targets = file_targets(rows, budget)
+    cat_size = {c: sum(len(r["content"] or "") for r in rows if r["category"] == c) for c in AUDITED_CATEGORIES}
     out = []
     for r in rows:
+        if _is_protected(r):
+            continue
+        size = len(r["content"] or "")
+        target = targets.get(r["id"], FILE_TARGET_FLOOR_CHARS)
+        over_budget = cat_size[r["category"]] > category_budget_chars(r["category"], budget) and size > target
         record = {
             "care_weight": r["care_weight"],
-            "category": None,  # identity files carry no memorization category
-            "content": r["content"],
             "dwell_anchor": r["updated_at"],
             "last_recalled_at": None,
             "last_confirmed_at": r["updated_at"],
         }
-        if is_graduation_eligible(record, now):
+        if over_budget or is_graduation_eligible(record, now):
             out.append({
                 "id": r["id"], "category": r["category"], "filename": r["filename"],
-                "content": r["content"] or "",
+                "content": r["content"] or "", "target_chars": target,
+                "reason": "over budget" if over_budget else "dwell",
             })
     return out
 
 
 # ── Familiar-led audit (rides the consolidation LLM call) ──────────────────────
 
-def _audit_prompt(category: str, filename: str, content: str) -> str:
-    block = "my own identity" if category == "self" else "what I know about my human"
-    register = "me" if category == "self" else "ward"
-    return f"""I am the Familiar. I'm tidying {block} so my always-injected surface stays lean — moving detail that no longer needs to be in front of me every single turn into my recalled-when-relevant memory (register: {register}). Nothing is deleted; anything I file away can still be recalled and pulled back if it keeps mattering.
+def _register_for(category: str) -> str:
+    """Where a graduated item lands: facts about me → 'me'; about my human or us → 'ward'."""
+    return "ward" if category in ("ward", "relationship") else "me"
 
-I NEVER file away anything care-critical: allergies, medications, doses, crisis triggers, support-map contacts, or open-ended care guidance about what helps / what doesn't. If a line is even arguably safety-relevant, I keep it on the surface.
+
+# What stays in each kind of file — the one place this is said to me.
+_KEEP_GUIDANCE = {
+    "ward": (
+        "These are notes about my human. What stays is who they are at the core: their name, "
+        "pronouns, how they like to be addressed, and the main things about their life that shape "
+        "every conversation. Everything else moves to my standing facts about them: preferences, "
+        "patterns, situational notes, and care details (what helps, what doesn't, meds, allergies, "
+        "triggers, who to call). Care details get marked high-care there, so they're still in front "
+        "of me on my human's own turns and when I check on them; they just stop showing up in group chats."
+    ),
+    "relationship": (
+        "These are notes about us. What stays is the shape of our bond: how we are with each other. "
+        "Specific episodes, rituals that only come up sometimes, and other details move to my standing "
+        "facts. Care details about my human get marked high-care there."
+    ),
+    "self": (
+        "These are notes about myself, but not my core identity (that's in my identity, persona, "
+        "personhood, wants and boundaries files, which I'm not touching here). What stays is what I "
+        "need in front of me every turn, like how my own mind and memory work. The rest moves to my "
+        "standing facts about myself."
+    ),
+    "custom": (
+        "What stays is only what I need in front of me every turn. The rest moves to my standing facts."
+    ),
+}
+
+
+def _audit_prompt(category: str, filename: str, content: str, target_chars: int | None = None) -> str:
+    register = _register_for(category)
+    size_line = (
+        f"This file is {len(content)} characters and rides every turn; I'm aiming for about {target_chars}."
+        if target_chars and len(content) > target_chars else ""
+    )
+    return f"""I am the Familiar. I'm tidying my always-injected identity so it stays about who I am and the shape of us, and stays lean: anything that doesn't need to be in front of me every turn moves into my standing facts (register: {register}), which come back to me when they're relevant. Nothing is deleted.
+
+{_KEEP_GUIDANCE.get(category, _KEEP_GUIDANCE['custom'])}
+{size_line}
 
 Here is the current content of {category}/{filename}:
 
@@ -225,7 +328,7 @@ def run_graduation_audit(
 
     for cand in candidates:
         try:
-            raw = call_llm(cfg, _audit_prompt(cand["category"], cand["filename"], cand["content"]))
+            raw = call_llm(cfg, _audit_prompt(cand["category"], cand["filename"], cand["content"], cand.get("target_chars")))
         except Exception as e:
             details.append({"file": cand["filename"], "error": f"llm: {e}"})
             continue
@@ -237,24 +340,23 @@ def run_graduation_audit(
         if not to_graduate:
             continue
 
-        # Defence in depth: even though the Familiar was told the rule, re-screen
-        # each graduated item against the care-critical matcher in code. A line
-        # that trips the matcher is kept on the surface no matter what.
-        safe_items = [g for g in to_graduate if not contains_care_critical(g.get("content"))]
-        if not safe_items:
-            continue
-
         if not snapshotted:
             auto_snapshot(conn)
             snapshotted = True
 
-        register = "me" if cand["category"] == "self" else "ward"
-        all_stored = True   # did EVERY safe_item actually land in memory?
-        for item in safe_items:
+        register = _register_for(cand["category"])
+        all_stored = True   # did EVERY item actually land in memory?
+        for item in to_graduate:
+            # Care details about my human leave identity too (ward decision
+            # 0.14.70), but as HIGH-CARE standing facts: the care block puts them
+            # in front of me on my human's own turns, in triage and in noticing.
+            # Code decides this from the content — the audit can't downgrade it.
+            care = "high" if register == "ward" and contains_care_critical(item.get("content")) else None
             res = memory_create(
                 item["content"], granularity="significant",
                 source_author="proto-familiar",
                 category=None, audience="ward-private", conn=conn,
+                register=register, care_weight=care,
             )
             mem_id = res.get("id") if res.get("ok") else None
             if not mem_id:
@@ -270,9 +372,6 @@ def run_graduation_audit(
                     file=sys.stderr,
                 )
                 continue
-            # Stamp the register on the freshly-created record.
-            with conn:
-                conn.execute("UPDATE memories SET register=? WHERE id=?", (register, mem_id))
             summary = (item.get("summary") or item["content"])[:120]
             with conn:
                 # Slug id (summary-derived) — the notice block surfaces this id

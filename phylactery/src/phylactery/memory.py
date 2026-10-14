@@ -20,6 +20,7 @@ from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
 from phylactery.content_gate import memory_visible_to_grants
+from phylactery.care import CARE_CATEGORIES, contains_care_critical
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
@@ -685,6 +686,12 @@ def create(
         return {"ok": False, "error": f"invalid granularity: {granularity!r}"}
     if register not in VALID_REGISTERS:
         return {"ok": False, "error": f"invalid register: {register!r}"}
+    # A standing fact about my human that's care-critical is HIGH-CARE, whoever
+    # writes it (memorization, save_memory, graduation): that's what puts it in
+    # front of me on my human's own turns, in triage and in noticing
+    # (list_care_facts). An explicit care_weight from the caller wins.
+    if register == "ward" and care_weight is None and contains_care_critical(content):
+        care_weight = "high"
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
@@ -817,6 +824,51 @@ def list_memories(
             (*params, limit, offset),
         ).fetchall()
         return [_row_to_list_item(r) for r in rows]
+    finally:
+        if own_conn:
+            conn.close()
+
+
+_CARE_ORDER = {"crisis": 0, "support-map": 0, "health_info": 1}
+
+
+def list_care_facts(
+    limit: int = 40,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict]:
+    """My human's care-critical standing facts — what helps, what doesn't, meds,
+    allergies, triggers, who to call — for the care block that puts them in front
+    of me directly (0.14.70, ward-signed): on my human's own turns, in triage, in
+    noticing. NEVER for a gated room: the callers only use this in ward-private
+    contexts.
+
+    A fact counts if it's a `ward`-register narrative marked care_weight 'high',
+    or unmarked and matching the care patterns (care.py) — decided at read time,
+    so facts saved before the flag existed count too. An explicit lower
+    care_weight is respected. Pending-consent facts are left out. Crisis and
+    support-map first, then health, then the rest; newest first within each.
+    """
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, category, care_weight, "
+            "COALESCE(last_confirmed_at, updated_at) AS fresh "
+            "FROM memories WHERE register='ward' AND kind='narrative' "
+            "AND COALESCE(consent_pending, 0)=0",
+        ).fetchall()
+        picked = [
+            r for r in rows
+            if (r["care_weight"] or "").lower() == "high"
+            or (r["care_weight"] is None and contains_care_critical(r["content"]))
+        ]
+        picked.sort(key=lambda r: r["fresh"] or "", reverse=True)
+        picked.sort(key=lambda r: _CARE_ORDER.get(r["category"] or "", 2))
+        return [
+            {"id": r["id"], "content": r["content"], "category": r["category"]}
+            for r in picked[: max(0, int(limit))]
+        ]
     finally:
         if own_conn:
             conn.close()

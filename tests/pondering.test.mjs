@@ -538,8 +538,10 @@ test('buildPonderPrompt: forbids fact-card output + invites wants_to_save', () =
   assert.doesNotMatch(prompt, /structured set of notes/i);
   // Explicit don't-write-these guidance is present.
   assert.match(prompt, /do\/don't/i);
-  assert.match(prompt, /factual claims/i);
-  assert.match(prompt, /update_identity/i);
+  // 0.14.70: lasting facts about my human are standing facts (save_memory);
+  // identity (update_identity) is only for what changes who I am.
+  assert.match(prompt, /lasting facts about my human[^\n]*save_memory as a standing fact/i);
+  assert.match(prompt, /changes who I am goes to my identity \(update_identity\)/i);
   assert.match(prompt, /save_memory/i);
   assert.match(prompt, /save_to_tome/i);
   // The new schema field is documented.

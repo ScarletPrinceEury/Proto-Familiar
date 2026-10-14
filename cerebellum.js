@@ -62,13 +62,15 @@ import {
   setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
   createTracker, createTrackerFromTemplate, logTrackerEntry, readTracker, listTrackers, adjustTracker,
   confirmConsentMemories, dropPendingMemories,
-  acknowledgeGraduations,
+  acknowledgeGraduations, listCareFacts, getIdentityAll,
   searchMemoryRestricted, searchMemory, memByTimerange,
   setCurrentLocation, listLocations, deleteLocation,
   withLock,
   probeOrgans,
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
+import { formatCareFactsBlock } from './src/safety/care-facts.js';
+import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './src/vision/media.js';
@@ -950,7 +952,7 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
 
   // Pull identity context (who the Familiar is, who the user is) and the
   // recent conversation log in parallel. Both degrade gracefully to empty.
-  const [{ static: identityContext }, recentMessages, liveSlice] = await Promise.all([
+  const [{ static: identityContext }, recentMessages, liveSlice, careFacts] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
     getRecentSessionMessages({ limit: 8, prefer: 'ward' }),
     // "Both" (ward decision): also the most recent ward-READABLE room right now,
@@ -958,7 +960,11 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     // me too. prefer:'readable' gates out villager 1:1 DMs; it's rendered as a
     // second, clearly-labelled block only when it's a DIFFERENT session.
     getRecentSessionMessages({ limit: 8, prefer: 'readable' }).catch(() => []),
+    // My human's care-critical standing facts, the whole set (ward-signed
+    // 0.14.70): they no longer ride in my identity, so triage reads them here.
+    listCareFacts().catch(() => []),
   ]);
+  const careFactsBlock = formatCareFactsBlock(careFacts);
 
   // [Now] wall-clock anchor — same shape the chat-turn gets, so the
   // Familiar deliberating about silence has a real "now" to reason from
@@ -1101,7 +1107,7 @@ What I know:
 - my human has been silent for ${silencePhrase} (this has passed the threshold for this tier, but the threshold is 0 at moderate+ — so a "silence" of less than a minute is still flagged for my judgement, not because it's actually long). I check the conversation below for context: did they say what they're doing (cooking, in the shower, heading out), or did they just go quiet mid-thread? Asking "is X done yet?" 30 seconds after they said they were starting it would be obviously off — the relative-time markers on each message let me see that.${waitStreakLine ? `\n${waitStreakLine}` : ''}
 ${signalsBlock}
 ${sessionBlock}
-${contactsBlock}
+${careFactsBlock ? `\n${careFactsBlock}\n` : ''}${contactsBlock}
 ${pendingBlock}
 ${candidateTasksBlock}
 
@@ -1378,7 +1384,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save keyword-triggered context into my Tome knowledge base — background or lore I want to resurface when a particular topic or phrase comes up again. I keep this lane narrow: durable facts about who {{user}} is belong in my identity files (update_identity); people, places, and how they connect belong in my graph (create_graph_node / create_graph_edge); moments and events with a \'when\' belong in my memory (save_memory). A tome is for what should surface on a trigger and fits none of those. Before I add one I recall so I don\'t duplicate what I already hold, and I tie it to the keywords {{user}} would actually say when the subject returns. By default the entry goes in my general tome; if it belongs in a themed collection of my own I can name that tome and it lands there (creating it if it\'s new — I check list_tomes first so I reuse one I already keep instead of making a near-duplicate).',
+      description: 'I save keyword-triggered context into my Tome knowledge base — background or lore I want to resurface when a particular topic or phrase comes up again. I keep this lane narrow: lasting facts about {{user}} belong in my memory as standing facts (save_memory, register ward); people, places, and how they connect belong in my graph (create_graph_node / create_graph_edge); moments and events with a \'when\' belong in my memory (save_memory). A tome is for what should surface on a trigger and fits none of those. Before I add one I recall so I don\'t duplicate what I already hold, and I tie it to the keywords {{user}} would actually say when the subject returns. By default the entry goes in my general tome; if it belongs in a themed collection of my own I can name that tome and it lands there (creating it if it\'s new — I check list_tomes first so I reuse one I already keep instead of making a near-duplicate).',
       parameters: {
         type: 'object',
         properties: {
@@ -1418,14 +1424,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a memory entry to my long-term store — a moment, event, or anything with a \'when\' worth keeping. "daily" is for routine events, appending today\'s bullets (multiple saves a day are normal, nothing overwrites); "significant" is a named standalone milestone, needing a short `title` for its own file. Register is separate: most saves are "episodic" (default, a lived moment), but a STANDING TRUTH about myself ("me") or {{user}} ("ward") gets that register instead — an identity-grade fact recalled when relevant. That\'s update_identity\'s lighter sibling: identity stays in front of me every turn; a me/ward memory is recalled-when-relevant so my always-on surface stays lean. Entities and relationships go to my graph. Before saving I recall to avoid repeating myself: wrong before → update_memory corrects it; changed since → a fresh dated entry supersedes without erasing history.',
+      description: 'I write a memory entry to my long-term store. "daily" is for routine events, appending today\'s bullets (multiple saves a day are normal, nothing overwrites); "significant" is a named standalone milestone, needing a short `title` for its own file. Register is separate: most saves are "episodic" (default, a lived moment). A fact that stays true gets "ward" (about {{user}}) or "me" (about myself) — a standing fact that comes back to me whenever it\'s relevant. That\'s where most lasting facts belong: preferences, patterns, how {{user}} likes things, and care details (what helps, what doesn\'t, meds, allergies, triggers, who to call — those get marked high-care and stay in front of me in our own conversations). My identity files are only for who I am and the shape of us (update_identity), because they ride every turn, group chats included. Entities and relationships go to my graph. Before saving I recall to avoid repeating myself: wrong before → update_memory corrects it; changed since → a fresh dated entry supersedes without erasing history.',
       parameters: {
         type: 'object',
         properties: {
           content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier (the rollup axis). For a "me"/"ward" standing truth this is ignored — those are filed as standalone significant facts.' },
           title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity and for any "me"/"ward" standing truth, ignored for plain daily/weekly/etc. A few words that name it (e.g. "first meeting", "{{user}}\'s grandmother", "what calms {{user}} down"). Used to generate the file slug so each lives in its own file.' },
-          register:    { type: 'string', enum: ['episodic', 'me', 'ward'], description: 'The register axis (separate from granularity). "episodic" (default) is a lived moment. "me" is a standing truth about myself; "ward" is a standing truth about {{user}}. I reach for me/ward only when it\'s genuinely a lasting fact worth recalling — not a passing moment, and not so load-bearing it must stay in my always-injected identity files (that\'s update_identity).' },
+          register:    { type: 'string', enum: ['episodic', 'me', 'ward'], description: 'The register axis (separate from granularity). "episodic" (default) is a lived moment. "ward" is a standing fact about {{user}}, care details included; "me" is a standing fact about myself. My identity files are only for who I am and the shape of us.' },
         },
         required: ['content', 'granularity'],
       },
@@ -1443,7 +1449,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a durable fact to an identity file — who I am (self: my_identity.md, my_persona.md, my_wants.md…), who {{user}} is (ward: ward_notes.md), or our bond (relationship: relationship_notes.md). These ride in front of me every turn, holding load-bearing standing truths; situational detail goes to save_memory instead. Before adding I check I don\'t already hold it — I\'m reading these files, plus recall for anything graduated off this surface — so it lands cleanly, not duplicated. I APPEND when a fact adds to what\'s there; rewrite_identity_section when a section\'s stale, misleading, or sprawling, to correct and tighten it.',
+      description: 'I add to my identity files. They ride in front of me every turn, in every room — group chats included — so they\'re for who I am (self: my_identity.md, my_persona.md, my_personhood.md, my_wants.md, my_boundaries.md), the shape of us (relationship: relationship_notes.md), and only the core of who {{user}} is (ward: their name, pronouns, how they like to be addressed). Anything that only matters sometimes goes to save_memory as a standing fact instead: preferences, patterns, situational notes, and care details about {{user}} (what helps, meds, triggers, who to call — as standing facts those stay in front of me in our own conversations without reaching group chats). Before adding I check I don\'t already hold it. I APPEND when a fact adds to what\'s there; rewrite_identity_section when a section\'s stale, misleading, or sprawling, to correct and tighten it. If a category is over the budget my human set, the result tells me.',
       parameters: {
         type: 'object',
         properties: {
@@ -3273,7 +3279,13 @@ export const TOOL_EXECUTORS = {
     if (content.length > 8192) return 'Failed to update identity: content exceeds 8 KB limit.';
     try {
       const result = await appendIdentity({ category, filename, content: content.trim() });
-      return result.ok ? quietOk('Identity file updated.') : `Identity update failed: ${result.error ?? 'unknown error'}`;
+      if (!result.ok) return `Identity update failed: ${result.error ?? 'unknown error'}`;
+      // The budget nudge (ward-signed 0.14.70): over its share, the result says
+      // so and what to do — the full text, since a quiet "ok" would hide it.
+      let note = '';
+      try { note = identityBudgetNote(await getIdentityAll(), category, identityBudgetTokens(readSettingsSync())); }
+      catch { /* best-effort — the append itself succeeded */ }
+      return note ? `Identity file updated. ${note}` : quietOk('Identity file updated.');
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 

@@ -1751,6 +1751,7 @@ import {
 } from './src/pondering/surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
 import { recentElsewhere, buildRecentElsewhereBlock } from './src/memory/hippocampus.js';
+import { careFactsBlockForTurn } from './src/safety/care-facts.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
@@ -2718,6 +2719,13 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // After I file ward-block detail off my always-injected surface, I let my
     // human know in my own voice so they can pull anything back. TTL-cached so
     // this costs at most one MCP call per few minutes; ward-private turns only.
+    // ── Care facts (0.14.70, ward-signed) ──────────────────────────────────
+    // My human's care-critical standing facts, put in front of me directly on
+    // their own turns now that they live outside my identity (which reaches
+    // group chats). Ward-private only — never a gated room. Capped so the block
+    // can't re-crowd the context; the rest still comes back via recall.
+    const careFactsBlock = await careFactsBlockForTurn({ gated, staticOnly, fetchFacts: listCareFacts });
+
     let graduationBlock = '';
     if (!staticOnly && !gated) {
       try {
@@ -2810,6 +2818,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);
+    if (careFactsBlock)         dynamicSections.push(careFactsBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
@@ -3140,6 +3149,36 @@ async function listPendingGraduations({ force = false } = {}) {
     _gradCache = { at: now, items: [] };
     return [];
   }
+}
+
+/**
+ * My human's care-critical standing facts (0.14.70) — what helps, what doesn't,
+ * meds, allergies, triggers, who to call — for the care block on my human's own
+ * turns, in triage and in noticing. NEVER call this for a gated room. Briefly
+ * cached (they change rarely; chat turns are frequent). Best-effort: [] if
+ * Phylactery is unavailable.
+ * @returns {Promise<Array<{id,content,category}>>}
+ */
+const CARE_FACTS_TTL_MS = 60_000;
+let _careFactsCache = { at: 0, items: [] };
+export async function listCareFacts({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - _careFactsCache.at < CARE_FACTS_TTL_MS) return _careFactsCache.items;
+  try {
+    const res = await callTool('memory_list_care_facts', { limit: 60 });
+    const items = Array.isArray(res?.items) ? res.items : [];
+    _careFactsCache = { at: now, items };
+    return items;
+  } catch (err) {
+    console.warn('[thalamus] listCareFacts failed:', err?.message ?? err);
+    return _careFactsCache.items;   // keep the last good set rather than drop care facts
+  }
+}
+
+/** Push my human's identity budget (tokens) to Phylactery's graduation pass. */
+export async function setIdentityBudget(tokens) {
+  try { return await callTool('identity_budget_set', { tokens: Math.round(Number(tokens) || 0) }); }
+  catch (err) { console.warn('[thalamus] setIdentityBudget failed:', err?.message ?? err); return { ok: false }; }
 }
 
 /**

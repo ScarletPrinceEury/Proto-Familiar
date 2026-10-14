@@ -96,6 +96,7 @@ export function parseGraduationDecision(raw) {
       content:     typeof d.content === 'string' ? d.content.trim() : '',
       filename:    typeof d.filename === 'string' ? d.filename.trim() : '',
       granularity: typeof d.granularity === 'string' ? d.granularity.trim() : 'significant',
+      register:    typeof d.register === 'string' ? d.register.trim() : '',
       relations:   Array.isArray(d.relations) ? d.relations : [],
     });
   }
@@ -103,6 +104,7 @@ export function parseGraduationDecision(raw) {
 }
 
 const GRAD_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
+const GRAD_REGISTERS = new Set(['ward', 'me']);
 
 /**
  * Resolve a graph node by exact (case-insensitive) label, or create it.
@@ -188,9 +190,12 @@ export async function routeDecision(decision, candidate, deps = {}) {
     if (home === 'memory') {
       const granularity = GRAD_GRANULARITIES.has(decision.granularity) ? decision.granularity : 'significant';
       // A long-term memory about my human goes through the consent greenlight,
-      // same as the memorization worker — never silently kept.
-      const r = await deps.createMemoryFull({ content, granularity, consent_pending: true });
-      return { ok: r?.ok !== false, wrote: true, home, granularity };
+      // same as the memorization worker — never silently kept. A standing fact
+      // (register 'ward'/'me') is where lasting detail lives now that identity is
+      // kept for who I am and the shape of us (0.14.70).
+      const register = GRAD_REGISTERS.has(decision.register) ? decision.register : undefined;
+      const r = await deps.createMemoryFull({ content, granularity, consent_pending: true, ...(register ? { register } : {}) });
+      return { ok: r?.ok !== false, wrote: true, home, granularity, ...(register ? { register } : {}) };
     }
     return { ok: false, error: `unknown home ${home}` };
   } catch (err) {

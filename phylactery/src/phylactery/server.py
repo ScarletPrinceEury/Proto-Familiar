@@ -50,6 +50,8 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     lifecycle_pass          — hygiene + consolidation + graduation audit on demand
     graduation_list_pending — ward-block detail graduated but not yet mentioned
     graduation_acknowledge  — mark graduation mentions as surfaced
+    identity_budget_set     — my human's identity budget (tokens) for graduation
+    memory_list_care_facts  — my human's care-critical standing facts (care block)
     backup_export           — passphrase-encrypted single-file backup
     backup_restore          — restore from a passphrase-encrypted backup
 
@@ -582,6 +584,27 @@ def memory_list_content_gate_candidates(limit: int = 40) -> dict[str, Any]:
     { items: [{ id, date, content, content_tag, category }] }."""
     items = mem.list_content_gate_candidates(limit=limit, conn=_c())
     return {"items": items}
+
+
+@mcp.tool()
+def memory_list_care_facts(limit: int = 40) -> dict[str, Any]:
+    """My human's care-critical standing facts (what helps, what doesn't, meds,
+    allergies, triggers, who to call), crisis and support first. This is what
+    keeps them in front of me on my human's own turns, in triage and in noticing
+    now that they live as standing facts rather than in my identity. Only for
+    ward-private contexts — never a group room. Returns
+    { items: [{ id, content, category }] }."""
+    return {"items": mem.list_care_facts(limit=limit, conn=_c())}
+
+
+@mcp.tool()
+def identity_budget_set(tokens: int) -> dict[str, Any]:
+    """Set how many tokens of identity ride in front of me every turn (my human's
+    setting, pushed from Proto-Familiar). My graduation pass trims over-budget
+    files toward it; the protected core is never trimmed. Clamped to [2000, 30000].
+    Returns { ok, tokens }."""
+    from phylactery import graduation as grad
+    return grad.set_identity_budget_tokens(tokens, conn=_c())
 
 
 @mcp.tool()
