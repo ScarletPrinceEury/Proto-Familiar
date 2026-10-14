@@ -2975,14 +2975,30 @@ first was not).
 | Noticing (ward-signed) | 180s per call, 600s per deliberation | Partial result kept: acted if a proactive tool already ran, else `deliberation_failed`; logged with `timedOut` |
 | Memorization extraction | 120s default, ward-tunable (`phylacteryLlmTimeoutS`) | Unchanged (pre-existing) |
 | Discord turn | 180s per call, 10 min per turn | See *Turn deadlines (0.14.63)* |
+| `/api/chat` non-streaming requests (tool-loop rounds, raw path, outgoing-filter rewrite) | Client disconnect + 300s (`providerCallTimeoutMs`) | 504 `No complete answer from <provider> within Ns…` (logged); a filter rewrite fails CLOSED to the safe refusal |
+| `/api/chat` streaming requests | Client disconnect only (a long stream is legitimate; my human can stop it) | — |
+| `/v1/*` compatibility endpoints | The external client's disconnect, carried into their loopback call to `/api/chat` | — |
+| `/api/video-understand` (Gemini File API) | Client disconnect + per step: 30s upload start / status poll, 10 min byte upload, 300s generateContent | `{ok:false}` naming the step (`generateContent: no answer from Google within 300s`) |
 
 300s is deliberate for the background default: undici's own `headersTimeout`
 already kills any non-trickling non-stream call at 300s, so this bound never
 cuts an answer that would have arrived — only a socket that was never going to
-deliver. Not covered here (interactive, bounded by the human closing the
-request rather than a wedge): the web `/api/chat` raw non-stream path and its
-filter-retry fetch don't abort on client disconnect, and the isolated
-`/api/video-understand` Gemini call is unbounded.
+deliver.
+
+**Client disconnect (0.14.66, `src/server/upstream-abort.js`).** Since Node 16
+a request's `'close'` fires when its BODY has been read, not when the client
+leaves — so `/api/chat`'s old `req.on('close')` listener, attached after
+`express.json()` and enrichment, never fired: a closed tab, a voice turn that
+gave up, or an external client hanging up left the provider request running
+(tokens spent, socket held; forever against a trickling provider).
+`clientDisconnectSignal(res)` listens on the RESPONSE's `'close'` (with
+`writableFinished` false), attached at the top of each handler, and every
+upstream fetch carries it. Every upstream body read on these routes is inside a
+`try` that classifies the failure (`upstreamFailure`: 499 client gone / 504
+deadline / 502 network) — Express 4 does not catch a rejected async handler and
+Node exits on an unhandled rejection, so before this a provider dropping the
+connection mid-reply on the raw path crashed the whole server (verified against
+the real route on `main`).
 
 ## Voice — Pass 0 (the bench tool and its supply chain)
 

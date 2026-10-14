@@ -7,7 +7,13 @@
  * and request shape. This module is that path, kept ENTIRELY isolated from the
  * main chat flow: it is reached only through its own endpoint, is default-OFF,
  * and every failure returns { ok:false } so the caller falls back to the inline
- * / stand-in behaviour. It never touches `llm-call.js` or the tool loop.
+ * / stand-in behaviour. It never calls into the chat flow (`llm-call.js`'s
+ * provider call or the tool loop) — it borrows only the shared deadline helpers.
+ *
+ * Every request is bounded (0.14.66): a per-step wall-clock deadline (a host can
+ * send headers and then trickle bytes forever; undici's idle timeouts never fire
+ * on that) plus the caller's `signal`, so the work stops when my human's
+ * request goes away. The status-poll wait honours the signal too.
  *
  * ⚠️ Verification boundary: the live upload + generate cannot run in CI (no
  * Google key, no egress). Every function takes an injectable `fetchFn`, and the
@@ -21,7 +27,31 @@
  *   4. models/<model>:generateContent with a file_data part → candidates[].text
  */
 
+import { deadlineSignal, isTimeoutError, providerCallTimeoutMs } from '../../llm-call.js';
+
 const DEFAULT_BASE = 'https://generativelanguage.googleapis.com';
+
+// Per-step bounds. The byte upload gets the most room: the store holds clips up
+// to 300 MB, and a slow uplink needs minutes for that. generateContent uses the
+// shared provider-call bound (300s by default).
+export const GEMINI_STEP_TIMEOUT_MS   = 30_000;       // upload START, each status poll
+export const GEMINI_UPLOAD_TIMEOUT_MS = 10 * 60_000;  // the bytes themselves
+
+// Name a failed step plainly: the caller's request went away, a step ran out of
+// time, or the error itself.
+function stepFailure(err, step, signal) {
+  if (signal?.aborted) return 'cancelled — the request went away';
+  if (isTimeoutError(err)) return `${step.what}: no answer from Google within ${Math.round(step.ms / 1000)}s`;
+  return err?.message || `${step.what} failed`;
+}
+
+// The poll's wait between status checks, cut short when the caller goes away.
+function pause(ms, signal) {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
 
 /** Provider ids whose chat model can take the Gemini File-API video path. */
 export function isGeminiVideoProvider(provider, model) {
@@ -42,10 +72,12 @@ export function bareModel(model) {
 export async function uploadVideoToGemini({
   buffer, mime, displayName = 'clip', apiKey, baseUrl = DEFAULT_BASE,
   fetchFn = fetch, pollMs = 1500, maxWaitMs = 120_000, now = Date.now,
+  signal = null, stepTimeoutMs = GEMINI_STEP_TIMEOUT_MS, uploadTimeoutMs = GEMINI_UPLOAD_TIMEOUT_MS,
 } = {}) {
   if (!apiKey) return { ok: false, error: 'no api key' };
   if (!Buffer.isBuffer(buffer) || !buffer.length) return { ok: false, error: 'no bytes' };
   const key = encodeURIComponent(apiKey);
+  let step = { what: 'upload start', ms: stepTimeoutMs };
   try {
     // 1) START a resumable upload — the reply carries the upload URL in a header.
     const start = await fetchFn(`${baseUrl}/upload/v1beta/files?key=${key}`, {
@@ -58,12 +90,15 @@ export async function uploadVideoToGemini({
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ file: { display_name: displayName } }),
+      signal: deadlineSignal({ signal, timeoutMs: step.ms }),
     });
     if (!start.ok) return { ok: false, error: `upload start http ${start.status}` };
     const uploadUrl = start.headers.get('x-goog-upload-url') || start.headers.get('X-Goog-Upload-URL');
     if (!uploadUrl) return { ok: false, error: 'no upload url returned' };
 
-    // 2) Upload + finalize the bytes.
+    // 2) Upload + finalize the bytes (the reply is read under the same deadline).
+    step = { what: 'upload', ms: uploadTimeoutMs };
+    const upSignal = deadlineSignal({ signal, timeoutMs: step.ms });
     const up = await fetchFn(uploadUrl, {
       method: 'POST',
       headers: {
@@ -72,6 +107,7 @@ export async function uploadVideoToGemini({
         'X-Goog-Upload-Command': 'upload, finalize',
       },
       body: buffer,
+      signal: upSignal,
     });
     if (!up.ok) return { ok: false, error: `upload http ${up.status}` };
     const upJson = await up.json();
@@ -84,9 +120,13 @@ export async function uploadVideoToGemini({
     while (state && state !== 'ACTIVE') {
       if (state === 'FAILED') return { ok: false, error: 'file processing failed' };
       if (now() >= deadline) return { ok: false, error: 'timed out waiting for ACTIVE' };
-      await new Promise(r => setTimeout(r, pollMs));
+      await pause(pollMs, signal);
+      if (signal?.aborted) return { ok: false, error: stepFailure(null, step, signal) };
+      step = { what: 'status check', ms: stepTimeoutMs };
       const id = String(file.name).replace(/^files\//, '');
-      const g = await fetchFn(`${baseUrl}/v1beta/files/${encodeURIComponent(id)}?key=${key}`, { method: 'GET' });
+      const g = await fetchFn(`${baseUrl}/v1beta/files/${encodeURIComponent(id)}?key=${key}`, {
+        method: 'GET', signal: deadlineSignal({ signal, timeoutMs: step.ms }),
+      });
       if (!g.ok) return { ok: false, error: `files.get http ${g.status}` };
       file = await g.json();
       state = String(file?.state || '').toUpperCase();
@@ -94,7 +134,7 @@ export async function uploadVideoToGemini({
     if (!file?.uri) return { ok: false, error: 'active file has no uri' };
     return { ok: true, uri: file.uri, mimeType: file.mimeType || mime, name: file.name };
   } catch (err) {
-    return { ok: false, error: err?.message || 'upload failed' };
+    return { ok: false, error: stepFailure(err, step, signal) };
   }
 }
 
@@ -143,16 +183,19 @@ export function extractGeminiText(json) {
  */
 export async function generateWithGeminiFile({
   model, apiKey, baseUrl = DEFAULT_BASE, history = [], prompt, fileUri, mimeType, fetchFn = fetch,
+  signal = null, timeoutMs = providerCallTimeoutMs(),
 } = {}) {
   if (!apiKey) return { ok: false, error: 'no api key' };
   const mdl = bareModel(model);
   if (!mdl) return { ok: false, error: 'no model' };
+  const step = { what: 'generateContent', ms: timeoutMs };
   try {
     const body = toGeminiRequest({ history, prompt, fileUri, mimeType });
     const res = await fetchFn(`${baseUrl}/v1beta/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: deadlineSignal({ signal, timeoutMs }),
     });
     if (!res.ok) return { ok: false, error: `generateContent http ${res.status}` };
     const json = await res.json();
@@ -160,7 +203,7 @@ export async function generateWithGeminiFile({
     if (!text) return { ok: false, error: 'empty answer' };
     return { ok: true, text };
   } catch (err) {
-    return { ok: false, error: err?.message || 'generate failed' };
+    return { ok: false, error: stepFailure(err, step, signal) };
   }
 }
 
@@ -170,9 +213,9 @@ export async function generateWithGeminiFile({
  */
 export async function answerAboutVideo({
   buffer, mime, displayName, model, apiKey, baseUrl = DEFAULT_BASE,
-  history = [], prompt, fetchFn = fetch, pollMs, maxWaitMs,
+  history = [], prompt, fetchFn = fetch, pollMs, maxWaitMs, signal = null,
 } = {}) {
-  const up = await uploadVideoToGemini({ buffer, mime, displayName, apiKey, baseUrl, fetchFn, pollMs, maxWaitMs });
+  const up = await uploadVideoToGemini({ buffer, mime, displayName, apiKey, baseUrl, fetchFn, pollMs, maxWaitMs, signal });
   if (!up.ok) return { ok: false, error: `upload: ${up.error}` };
-  return generateWithGeminiFile({ model, apiKey, baseUrl, history, prompt, fileUri: up.uri, mimeType: up.mimeType, fetchFn });
+  return generateWithGeminiFile({ model, apiKey, baseUrl, history, prompt, fileUri: up.uri, mimeType: up.mimeType, fetchFn, signal });
 }
