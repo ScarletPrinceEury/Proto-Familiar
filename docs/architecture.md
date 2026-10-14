@@ -1662,6 +1662,17 @@ ponderings, never raw recent input), and is audience-gated + location-excluded
 the current location is left out — it's already in the live history). Exact-values:
 relative phrasing ("12 min ago") is computed in code from `ts`, never authored by
 the model. Off: `hippocampusEnabled` / `PROTO_FAMILIAR_HIPPOCAMPUS_DISABLED=1`.
+**Excerpts, not trailing-off clips (0.14.69, `src/util/excerpt.js`):** an entry
+longer than 280 chars is stored as its start AND its real end around
+`[… cut for length …]`, cut at word boundaries — it used to be the first 279
+chars + `…`, which read back as my own reply breaking off ("I didn't finish that
+sentence"). The same rule covers the noticing / warm reach-out recent lines
+(`formatRecentMessagesForContext`, 300 chars) and is the rule for any context
+block that shortens a message: never a bare `…`, never a silent mid-word cut.
+Triage (ward-signed) reads its recent lines WHOLE — `renderTriageSliceBody`;
+the newest `TRIAGE_UNCUT_LATEST` (5) are never shortened in any way, an older
+line only past `TRIAGE_LINE_CEILING` (10,000 chars) so an old giant paste can't
+push the prompt past the model's context and fail every deliberation.
 Wired writes: web inbound (`/api/chat`), Discord inbound + the Familiar's reply
 (`deliverReply`); deferred to a follow-up: web assistant-reply capture (streaming
 seam) and observed/ambient Discord messages + voice writes.

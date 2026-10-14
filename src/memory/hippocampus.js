@@ -33,6 +33,7 @@ import { promises as fsp } from 'fs';
 import { REPO_ROOT } from '../../repo-root.js';
 import { meaningSlugId } from '../../slug-ids.js';
 import { sanitizeExternal } from '../../injection-guard.js';
+import { excerpt, EXCERPT_MARKER } from '../util/excerpt.js';
 
 const DEFAULT_TOMES_DIR = path.join(REPO_ROOT, 'tomes');
 const STORE_NAME = '.hippocampus.json';
@@ -49,7 +50,11 @@ export const HIPPOCAMPUS_MAX_EVENTS = 250;
 export const RECENT_WINDOW_MS = 90 * 60 * 1000;   // 90min
 export const RECENT_MAX_LINES = 8;
 
-const MAX_TEXT = 280;   // one line's worth; the buffer is a gist, not a transcript
+// One line's worth; the buffer is a gist, not a transcript. A longer message is
+// stored as an excerpt — its start AND its real end around an explicit marker
+// (util/excerpt.js) — never as a start trailing off in "…": read back, that made
+// a finished reply of mine look like one I hadn't finished (0.14.69).
+const MAX_TEXT = 280;
 
 async function readStore(tomesDir) {
   try {
@@ -109,7 +114,7 @@ export async function recordEvent({ surface, locationKey = null, speaker, audien
       locationKey: locationKey ?? null,
       speaker: String(speaker || '').trim() || 'someone',
       audienceTag: String(audienceTag || 'ward-private'),
-      text: safe.length > MAX_TEXT ? safe.slice(0, MAX_TEXT - 1) + '…' : safe,
+      text: excerpt(safe, MAX_TEXT),
     });
     await writeStore(tomesDir, data);
   } catch { /* the buffer never breaks a turn */ }
@@ -148,6 +153,16 @@ export async function recentElsewhere({ now = new Date(), wardView = false, visi
   return rows.slice(Math.max(0, rows.length - limit));
 }
 
+// An entry stored before 0.14.69 was clipped to MAX_TEXT ending in "…". Those age
+// out within the 6h retention, but until then show the cut as a cut, not as a
+// sentence trailing off.
+function legacyClipToMarker(text) {
+  const t = String(text ?? '');
+  return (t.length >= MAX_TEXT && t.endsWith('…') && !t.includes(EXCERPT_MARKER))
+    ? `${t.slice(0, -1).trimEnd()} ${EXCERPT_MARKER}`
+    : t;
+}
+
 // "12 min ago" / "just now" / "2 h ago" — computed in code from machine ts.
 function agoPhrase(fromMs, nowMs) {
   const s = Math.max(0, Math.round((nowMs - fromMs) / 1000));
@@ -172,7 +187,7 @@ export function buildRecentElsewhereBlock(events, { now = new Date() } = {}) {
     const when = Number.isFinite(t) ? agoPhrase(t, nowMs) : 'recently';
     const where = e.surface === 'discord' ? 'on Discord' : e.surface === 'voice' ? 'on a call' : 'on the web';
     const who = e.speaker === 'me' ? 'I said' : `${e.speaker} said`;
-    return `- ${when}, ${where}: ${who}: ${e.text}`;
+    return `- ${when}, ${where}: ${who}: ${legacyClipToMarker(e.text)}`;
   });
   return `[Recently, elsewhere]\nA little of what's happened across my other conversations lately, so I'm not starting blank here:\n${lines.join('\n')}`;
 }

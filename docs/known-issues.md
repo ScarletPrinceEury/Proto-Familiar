@@ -41,19 +41,15 @@ the time. The tool descriptions and any identity-writing prompts need to steer
 into standing memories, and there's likely a clean-up pass to move existing
 entries.
 
-### "I didn't finish my sentence" when the sentence was finished
-
-Familiars sometimes believe a message of theirs was cut off when it went out
-complete. Likely cause: the hippocampus (cross-channel "recently, elsewhere"
-buffer) clips every entry, the Familiar's own replies included, to
-`MAX_TEXT = 280` characters and ends it with `…`
-(`src/memory/hippocampus.js`). Read back, a clipped line of its own looks
-unfinished. Fix direction: mark a clip as an excerpt of a message that was sent
-in full (or clip at a sentence boundary), so the gist can't be misread as a
-broken reply.
-
 <!--
 Resolved:
+- "I didn't finish my sentence" when the sentence was finished — fixed 0.14.69.
+  Root cause: context blocks showed the Familiar's own earlier messages cut to a
+  fixed length — the hippocampus at 280 chars ending in "…", the noticing /
+  warm reach-out recent lines at 300 and triage's at 400 with no marker at all —
+  so a complete reply read back as one that broke off. Long messages now show
+  their start and real end around an explicit cut marker (`src/util/excerpt.js`),
+  and triage reads its recent lines whole (see tests/excerpt.test.mjs).
 - Phylactery `UNIQUE constraint failed on memory_vecs primary key` during
   embedding — fixed 0.7.32. Root cause: the embedding write used
   `INSERT OR REPLACE`, but sqlite-vec (vec0) virtual tables don't honor

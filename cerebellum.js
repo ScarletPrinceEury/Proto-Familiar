@@ -74,6 +74,7 @@ import { disclosableVillagerFields } from './src/village/village-card.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './src/vision/media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './src/memory/graph-vocab.js';
 import { searchWeb, lookUp } from './src/search/websearch.js';
+import { excerpt } from './src/util/excerpt.js';
 import { browseEnabled, browserReadsPages, pageReaderTool } from './src/browser/browse-gate.js';
 import { readPageText } from './src/browser/page-read.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -445,11 +446,14 @@ export function formatRecentMessagesForContext(messages = [], now = Date.now()) 
         ? ((!namesOff && m.speaker) ? (speakerNameField({ role: 'user', speaker: m.speaker }) || 'Them') : 'Them')
         : 'Me';
       const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
-      return text.trim() ? `  ${prefix}: ${text.slice(0, 300)}` : '';
+      // Start + real end around a cut marker (ward-signed 0.14.69): a silent
+      // 300-char cut made my own finished replies read as broken off.
+      return text.trim() ? `  ${prefix}: ${excerpt(text, RECENT_LINE_MAX)}` : '';
     })
     .filter(Boolean)
     .join('\n');
 }
+const RECENT_LINE_MAX = 300;
 
 /**
  * One or two code-emitted lines stating WHERE a recent-message slice came from,
@@ -879,6 +883,38 @@ export async function callTriageDeliberation({ conn, messages, timeoutMs = TRIAG
   }
 }
 
+// Triage reads the recent conversation WHOLE (ward-signed 0.14.69): every line,
+// my human's, mine and anyone else's, in full. It used to cut each line at 400
+// characters with no marker, so a crisis sentence at the END of a long message
+// never reached triage, and my own finished replies read as broken off. The
+// newest TRIAGE_UNCUT_LATEST lines of each slice are never shortened in any way
+// — they are the context the decision rests on. Only an OLDER line can be cut,
+// and only past TRIAGE_LINE_CEILING (a pathological paste: start + real end
+// around a cut marker), so an old giant paste can't push the prompt past the
+// model's context and fail every deliberation.
+export const TRIAGE_UNCUT_LATEST = 5;
+export const TRIAGE_LINE_CEILING = 10_000;
+
+/**
+ * Render triage's recent-conversation lines (oldest first, as the slice comes).
+ * A user turn with no `speaker` is my human's own (a villager's turn in a shared
+ * room carries one).
+ */
+export function renderTriageSliceBody(slice, { nowMs = Date.now(), humanLabel = 'My human', namesOff = false } = {}) {
+  const firstUncut = slice.length - TRIAGE_UNCUT_LATEST;
+  return slice.map((m, i) => {
+    const text = typeof m.content === 'string'
+      ? m.content
+      : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
+    const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+    const who = m.role === 'user'
+      ? ((!namesOff && m.speaker) ? (speakerNameField({ role: 'user', speaker: m.speaker }) || humanLabel) : humanLabel)
+      : 'Me';
+    const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
+    return `  ${prefix}: ${i >= firstUncut ? text : excerpt(text, TRIAGE_LINE_CEILING)}`;
+  }).join('\n');
+}
+
 export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const s = readSettingsSync();
   // Ward-assignable per-feature connection (the ward's explicit, recorded choice
@@ -960,17 +996,7 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const wardLastSeenPhrase = relativeTime(lastUserAt, nowMs) || null;
   // One body renderer for both the primary (my human's own words) and the
   // secondary (the live room) slices — same label/speaker rules, no copy-paste.
-  const renderSliceBody = (slice) => slice.map(m => {
-    const text = typeof m.content === 'string'
-      ? m.content
-      : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
-    const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
-    const who = m.role === 'user'
-      ? ((!namesOff && m.speaker) ? (speakerNameField({ role: 'user', speaker: m.speaker }) || humanLabel) : humanLabel)
-      : 'Me';
-    const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
-    return `  ${prefix}: ${text.slice(0, 400)}`;
-  }).join('\n');
+  const renderSliceBody = (slice) => renderTriageSliceBody(slice, { nowMs, humanLabel, namesOff });
 
   const triageProvenance = formatSliceProvenanceLines(recentMessages.session, { wardLastSeenPhrase });
   let sessionBlock = recentMessages.length
