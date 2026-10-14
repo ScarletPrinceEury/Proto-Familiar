@@ -3028,6 +3028,25 @@ Node exits on an unhandled rejection, so before this a provider dropping the
 connection mid-reply on the raw path crashed the whole server (verified against
 the real route on `main`).
 
+**A throwing route can't take the server down (0.14.68,
+`src/server/async-routes.js`).** That crash class wasn't specific to upstream
+reads: ANY throw in any of the ~200 async routes, outside the route's own
+`try`, exited the process (Express 4 + Node's unhandled-rejection exit). Found
+live while verifying this: `/api/chat` with a `null` entry in `messages`
+crashed the server on `m.role`. `guardAsyncRoutes(app)` runs right after
+`express()` and wraps every handler registered through
+`app.get/post/put/patch/delete/all`, so a rejected handler goes to `next(err)`
+(a reason-less rejection still arrives as an error, never as "continue");
+`asyncRouteErrorHandler()` is the LAST `app.use` before `app.listen` and
+answers `{ error }` — the error's own 4xx/5xx status if it has one (the body
+parser's 400/413), else 500 — logging the route and stack loudly; a response
+that already started is ended, never left hanging. Rules: register routes on
+`app` itself (a separate `express.Router()` is not wrapped), and keep the error
+handler the last registration. It is deliberately NOT a process-wide
+`unhandledRejection` swallow, which would hide bugs and leave the request
+hanging. The specific `null`-entry input is now a 400 at the route
+(`malformedMessageIndex` in `/api/chat` and `/api/debug-prompt`).
+
 ## Voice — Pass 0 (the bench tool and its supply chain)
 
 Voice owns its own milestone (`docs/voice-build-spec.md`). Pass 0 is the
