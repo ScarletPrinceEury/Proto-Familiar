@@ -228,6 +228,7 @@ import { readSettingsSync, trackersEnabled } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
 import { contentWithStandins, getAssetMeta } from '../vision/media.js';
 import { createSessionFollowup } from './recent-ponderings.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 // Vision (§7): fold image stand-ins into a slice's transcript so an image-
 // carrying message is memorable — an image-only message (empty text, one
@@ -1455,24 +1456,31 @@ function pickNextJob(now) {
   return _queue.find(j => j.status === 'pending' && (!j.nextAttemptAt || j.nextAttemptAt <= now));
 }
 
-// Track the in-flight tick promise so stopMemorizationWorker can
-// await it on shutdown. Mirrors the pattern in pondering-loop.js,
-// reminders-loop.js, silence-triage-loop.js — without this, a
-// SIGTERM during a processJob can leave the tome write half-done
-// and the queue file out of sync with what actually persisted.
-let _activeTick = null;
-async function tick() {
-  if (_activeTick) return _activeTick;
-  _activeTick = (async () => {
+// The single-slot guard (shared tick-guard): one job at a time, the in-flight
+// tick is what stopMemorizationWorker awaits on shutdown (so a SIGTERM during
+// processJob doesn't leave a tome write half-done), and a job that hangs is
+// released after WATCHDOG_MS so the queue keeps draining. A released job stays
+// 'processing' until its run finishes or the next boot recovers it to pending.
+// The watchdog is roomy: a job may describe several images (≤300s each) and run
+// an extraction whose timeout my human can raise.
+const WATCHDOG_MS = 60 * 60_000;
+let _currentJobId = null;
+const _guard = createTickGuard({
+  name: 'memorization', watchdogMs: WATCHDOG_MS,
+  onRelease: () => console.error(`[memorization] job ${_currentJobId ?? '(unknown)'} hung — the queue moves on; the job is retried after the next restart if its run never finishes`),
+});
+function tick() {
+  return _guard.run(async () => {
     // Governor (§4.3): defer draining the memorization queue during a live call —
     // it is not time-critical and its LLM extraction would contend with the call.
-    // The outer finally still clears _activeTick, so it resumes after the call.
+    // The guard clears when this returns, so it resumes after the call.
     if (await isCallActiveFromFile()) return;
     await loadQueue();
     const now = Date.now();
     const job = pickNextJob(now);
     if (!job) return;
 
+    _currentJobId   = job.id ?? null;
     job.status      = 'processing';
     job.startedAt   = new Date().toISOString();
     job.attempts    = (job.attempts ?? 0) + 1;
@@ -1495,12 +1503,7 @@ async function tick() {
       }
     }
     await persistQueue();
-  })();
-  try {
-    return await _activeTick;
-  } finally {
-    _activeTick = null;
-  }
+  });
 }
 
 function pruneAcknowledged() {
@@ -1542,9 +1545,8 @@ export function startMemorizationWorker() {
 export async function stopMemorizationWorker() {
   if (_tickInterval)  { clearInterval(_tickInterval);  _tickInterval  = null; }
   if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
-  const pending = _activeTick;
   _started = false;
-  if (pending) { try { await pending; } catch { /* surfaced via job.lastError already */ } }
+  await _guard.settle();   // the in-flight job, but never past its watchdog
 }
 
 // ── Public API used by server endpoints ─────────────────────────

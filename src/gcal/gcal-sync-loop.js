@@ -25,8 +25,12 @@
  */
 
 import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const BASE_TICK_MS = 60_000;                 // how often the loop wakes to check
+// One sync = a calendar fetch (bounded) + one Unruh ingest. 15 min is far past
+// a healthy sync, even a year of look-ahead.
+const WATCHDOG_MS  = 15 * 60_000;
 export const DEFAULT_SYNC_INTERVAL_MS = 60 * 60_000;  // hourly (§1.6)
 const MIN_SYNC_INTERVAL_MS = 5 * 60_000;     // floor so a heavy user can't hammer Google
 const MAX_SYNC_INTERVAL_MS = 24 * 60 * 60_000;
@@ -37,7 +41,7 @@ export const FAILURE_RETRY_MS = 5 * 60_000;
 
 let _started      = false;
 let _interval     = null;
-let _activeTick   = null;
+let _guard        = null;
 let _nextDueTs    = 0;
 
 export function clampSyncIntervalMs(ms) {
@@ -111,6 +115,7 @@ export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async
 
 export function startGcalSyncLoop({
   baseTickMs    = BASE_TICK_MS,
+  watchdogMs    = WATCHDOG_MS,
   isEnabled     = async () => true,
   getIntervalMs = async () => DEFAULT_SYNC_INTERVAL_MS,
   onTick        = () => {},
@@ -122,32 +127,27 @@ export function startGcalSyncLoop({
   _started = true;
   _nextDueTs = 0;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        // Governor (§4.3): defer the calendar sync during a live call.
-        if (await isCallActiveFromFile()) return;
-        if (!(await isEnabled())) { onTick({ synced: false, reason: 'disabled' }); return; }
-        const intervalMs = clampSyncIntervalMs(await getIntervalMs());
-        const nowMs = now();
-        if (nowMs < _nextDueTs) {
-          onTick({ synced: false, reason: 'not_due' });
-          return;
-        }
-        const r = await runOneGcalSyncTick(tickConfig);
-        // Success consumes the full interval; failure retries on the short
-        // leash (never longer than the interval itself).
-        _nextDueTs = nowMs + (r?.synced ? intervalMs : Math.min(intervalMs, FAILURE_RETRY_MS));
-        try { onTick(r); } catch (err) { onError(err); }
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
+  _guard = createTickGuard({ name: 'gcal-sync', watchdogMs });
+  const fire = () => _guard.run(async () => {
+    try {
+      // Governor (§4.3): defer the calendar sync during a live call.
+      if (await isCallActiveFromFile()) return;
+      if (!(await isEnabled())) { onTick({ synced: false, reason: 'disabled' }); return; }
+      const intervalMs = clampSyncIntervalMs(await getIntervalMs());
+      const nowMs = now();
+      if (nowMs < _nextDueTs) {
+        onTick({ synced: false, reason: 'not_due' });
+        return;
       }
-    })();
-    return _activeTick;
-  };
+      const r = await runOneGcalSyncTick(tickConfig);
+      // Success consumes the full interval; failure retries on the short
+      // leash (never longer than the interval itself).
+      _nextDueTs = nowMs + (r?.synced ? intervalMs : Math.min(intervalMs, FAILURE_RETRY_MS));
+      try { onTick(r); } catch (err) { onError(err); }
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, baseTickMs);
   _interval.unref?.();
@@ -160,10 +160,10 @@ export function startGcalSyncLoop({
 export async function stopGcalSyncLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started   = false;
   _nextDueTs = 0;
-  if (pending) { try { await pending; } catch { /* surfaced via onError */ } }
+  if (guard) await guard.settle();
 }
 
 /** Force the next wake to sync regardless of the interval gate (the "Sync now" button). */

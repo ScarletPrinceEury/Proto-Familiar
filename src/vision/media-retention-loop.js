@@ -17,13 +17,16 @@ import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync } from '../../cerebellum.js';
 import { getThreat } from '../safety/threat-tracker.js';
 import { runMediaRetention } from './media-retention.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 6 * 60 * 60_000;   // ~daily-ish (6 h); aged audio is in no hurry
 const STAND_DOWN_TIERS = new Set(['moderate', 'high', 'severe']);
+// One batched keep/let-go judgment (≤300s) + file strips.
+const WATCHDOG_MS = 15 * 60_000;
 
 let _started = false;
 let _interval = null;
-let _active = null;
+let _guard = null;
 
 function hardDisabled() {
   return process.env.PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED === '1';
@@ -49,7 +52,7 @@ export async function runTick({ threat = getThreat, callActive = isCallActiveFro
   return summary;
 }
 
-export function startMediaRetentionLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
+export function startMediaRetentionLoop({ tickMs = DEFAULT_TICK_MS, watchdogMs = WATCHDOG_MS } = {}) {
   if (_started) return { stop: stopMediaRetentionLoop };
   if (hardDisabled()) {
     console.log('[media-retention] hard-disabled via PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1');
@@ -57,11 +60,10 @@ export function startMediaRetentionLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[media-retention] voice-clip curation loop armed (default on; keeps the words, curates the sound)');
+  _guard = createTickGuard({ name: 'media-retention', watchdogMs });
   _interval = setInterval(() => {
-    if (_active) return;
-    _active = runTick()
-      .catch(err => console.warn('[media-retention] tick error:', err?.message ?? err))
-      .finally(() => { _active = null; });
+    // The guard never overlaps ticks, and releases one that hangs.
+    _guard.run(() => runTick().catch(err => console.warn('[media-retention] tick error:', err?.message ?? err)));
   }, tickMs);
   _interval.unref?.();
   return { stop: stopMediaRetentionLoop };
@@ -69,6 +71,6 @@ export function startMediaRetentionLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
 
 export async function stopMediaRetentionLoop() {
   if (_interval) { clearInterval(_interval); _interval = null; }
-  if (_active) { try { await _active; } catch { /* already logged */ } }
+  if (_guard) await _guard.settle();
   _started = false;
 }

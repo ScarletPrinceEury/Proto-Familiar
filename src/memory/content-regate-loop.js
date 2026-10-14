@@ -21,13 +21,16 @@ import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.j
 import { resolveReasoningEffort } from '../../providers.js';
 import { substituteMacros } from '../../macros.js';
 import { runOneRetagTick, DEFAULT_BATCH_SIZE } from './content-regate.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — draining a backlog wants no urgency
 const CANDIDATE_LIMIT = 40;
+// One batched judgment (≤300s) + the re-tag writes.
+const WATCHDOG_MS     = 30 * 60_000;
 
 let _started  = false;
 let _interval = null;
-let _active   = null;
+let _guard    = null;
 
 function hardDisabled() {
   return process.env.PROTO_FAMILIAR_CONTENT_REGATE_DISABLED === '1';
@@ -80,7 +83,7 @@ async function runTick() {
   return summary;
 }
 
-export function startContentRegateLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
+export function startContentRegateLoop({ tickMs = DEFAULT_TICK_MS, watchdogMs = WATCHDOG_MS } = {}) {
   if (_started) return { stop: stopContentRegateLoop };
   if (hardDisabled()) {
     console.log('[regate] content-gating re-tag hard-disabled via PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1');
@@ -88,12 +91,13 @@ export function startContentRegateLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[regate] content-gating re-tag loop armed (opt-in; idles until "Review my private notes for content-sharing" is enabled in Settings)');
-  _interval = setInterval(async () => {
-    if (_active) return;                 // never overlap ticks
-    if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
-    _active = runTick()
-      .catch(err => console.warn('[regate] tick error:', err?.message ?? err))
-      .finally(() => { _active = null; });
+  _guard = createTickGuard({ name: 'content-regate', watchdogMs });
+  _interval = setInterval(() => {
+    // The guard never overlaps ticks, and releases one that hangs.
+    _guard.run(async () => {
+      if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
+      await runTick().catch(err => console.warn('[regate] tick error:', err?.message ?? err));
+    });
   }, tickMs);
   _interval.unref?.();
   return { stop: stopContentRegateLoop };
@@ -101,6 +105,6 @@ export function startContentRegateLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
 
 export async function stopContentRegateLoop() {
   if (_interval) { clearInterval(_interval); _interval = null; }
-  if (_active) { try { await _active; } catch { /* already logged */ } }
+  if (_guard) await _guard.settle();
   _started = false;
 }

@@ -182,6 +182,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, 
 import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
 import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { clientDisconnectSignal, upstreamSignal, upstreamFailure } from './src/server/upstream-abort.js';
+import { tickGuardStatus } from './src/util/tick-guard.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -3282,7 +3283,11 @@ app.post('/api/media/:id/transcript', async (req, res) => {
 app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION, loops: {
   pondering: ponderingRunning(), noticing: noticingRunning(), reachout: reachoutRunning(),
   memorySweep: memorySweepRunning(), gcalSync: gcalSyncRunning(), pageWatch: pageWatchRunning(),
-} }));
+},
+  // Per-loop tick guards: whether a tick is running and how often the watchdog
+  // had to release a stuck one — a loop that keeps hanging is visible here.
+  tickGuards: tickGuardStatus(),
+}));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
 
 // ── Self-update (updater.js) ────────────────────────────────────────
@@ -7058,6 +7063,7 @@ function startSilenceTriage() {
       if (r.acted)                            console.log(`[triage] reached out: "${r.decision?.message?.slice(0, 80)}…"`);
       else if (r.reason === 'reached_out')    console.log('[triage] reached out (dedup unexpected)');
       else if (r.reason === 'llm_said_wait')  console.log(`[triage] tick — threat ${r.threat?.tier}, silence ${Math.round((r.silenceMs||0)/60_000)}min, LLM said wait`);
+      else if (r.reason === 'tick_released')  console.warn('[triage] a stuck tick was released by its watchdog — logged, escalation check running, the next tick deliberates normally');
       // Other (low_threat / too_recent / no_activity) are silent.
 
       // M12c: check whether any pending trusted-contact escalations have

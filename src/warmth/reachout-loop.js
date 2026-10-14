@@ -38,6 +38,7 @@
 
 import { getWaitStreak, recordWait, recordProactive, isWaitStreakEnabled } from '../safety/wait-streak.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000;     // 10 min — warmth doesn't need a fast pulse
 
@@ -68,8 +69,11 @@ const RATE_LIMIT_BUCKET_MS = 2 * 60 * 60_000;
 
 let _started           = false;
 let _interval          = null;
-let _activeTick        = null;
+let _guard             = null;
 let _nextAllowedTickTs = 0;
+// One deliberation call (≤300s) + one delivery. A late duplicate from a released
+// tick is absorbed by the ward-knock dedup bucket.
+const WATCHDOG_MS = 15 * 60_000;
 
 function clampCooldown(ms) {
   if (!Number.isFinite(ms)) return null;
@@ -205,30 +209,26 @@ export function startReachoutLoop({
   onTick    = () => {},
   onError   = () => {},
   isEnabled = async () => true,
+  watchdogMs = WATCHDOG_MS,
   ...tickConfig
 }) {
   if (_started) throw new Error('reach-out loop already running');
   _started = true;
 
-  const fire = async () => {
-    if (_activeTick) return;
-    _activeTick = (async () => {
-      try {
-        // Governor (§4.3): a warm reach-out is redundant during a live call — the
-        // ward is maximally present, which is exactly the state warmth exists to
-        // break. Defer; the call also feeds the ward-active gate.
-        if (await isCallActiveFromFile()) return;
-        if (!(await isEnabled())) { onTick({ acted: false, reason: 'disabled' }); return; }
-        const r = await runOneReachoutTick(tickConfig);
-        try { onTick(r); } catch (err) { onError(err); }
-      } catch (err) {
-        try { onError(err); } catch { /* swallow */ }
-      } finally {
-        _activeTick = null;
-      }
-    })();
-    return _activeTick;
-  };
+  _guard = createTickGuard({ name: 'reachout', watchdogMs });
+  const fire = () => _guard.run(async () => {
+    try {
+      // Governor (§4.3): a warm reach-out is redundant during a live call — the
+      // ward is maximally present, which is exactly the state warmth exists to
+      // break. Defer; the call also feeds the ward-active gate.
+      if (await isCallActiveFromFile()) return;
+      if (!(await isEnabled())) { onTick({ acted: false, reason: 'disabled' }); return; }
+      const r = await runOneReachoutTick(tickConfig);
+      try { onTick(r); } catch (err) { onError(err); }
+    } catch (err) {
+      try { onError(err); } catch { /* swallow */ }
+    }
+  });
 
   _interval = setInterval(() => { fire(); }, tickMs);
   _interval.unref?.();
@@ -239,10 +239,10 @@ export function startReachoutLoop({
 export async function stopReachoutLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
-  const pending = _activeTick;
+  const guard = _guard;
   _started           = false;
   _nextAllowedTickTs = 0;
-  if (pending) { try { await pending; } catch { /* surfaced via onError */ } }
+  if (guard) await guard.settle();
 }
 
 export function isRunning() { return _started; }

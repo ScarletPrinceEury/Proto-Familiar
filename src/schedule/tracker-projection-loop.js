@@ -28,13 +28,16 @@ import { projectTrackerNodes } from '../../thalamus.js';
 import { getThreat } from '../safety/threat-tracker.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync } from '../../cerebellum.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — projections want no urgency
 const STAND_DOWN_TIERS = new Set(['moderate', 'high', 'severe']);
+// One Unruh reconcile call; no LLM.
+const WATCHDOG_MS = 10 * 60_000;
 
 let _started  = false;
 let _interval = null;
-let _active   = null;
+let _guard    = null;
 
 function hardDisabled() {
   return process.env.PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED === '1'
@@ -73,7 +76,7 @@ export async function runTrackerProjectionTick({
   return { reason: 'ran', minted, updated, resolved };
 }
 
-export function startTrackerProjectionLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
+export function startTrackerProjectionLoop({ tickMs = DEFAULT_TICK_MS, watchdogMs = WATCHDOG_MS } = {}) {
   if (_started) return { stop: stopTrackerProjectionLoop };
   if (hardDisabled()) {
     console.log('[tracker-projection] hard-disabled via env off-switch');
@@ -81,12 +84,14 @@ export function startTrackerProjectionLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[tracker-projection] loop armed (rides trackersEnabled; inert until a tracker exists)');
-  _interval = setInterval(async () => {
-    if (_active) return;                        // never overlap ticks
-    if (await isCallActiveFromFile()) return;   // defer during a live call
-    _active = runTrackerProjectionTick()
-      .catch(err => console.warn('[tracker-projection] tick error:', err?.message ?? err))
-      .finally(() => { _active = null; });
+  _guard = createTickGuard({ name: 'tracker-projection', watchdogMs });
+  _interval = setInterval(() => {
+    // The guard never overlaps ticks, and releases one that hangs.
+    _guard.run(async () => {
+      if (await isCallActiveFromFile()) return;   // defer during a live call
+      await runTrackerProjectionTick()
+        .catch(err => console.warn('[tracker-projection] tick error:', err?.message ?? err));
+    });
   }, tickMs);
   _interval.unref?.();
   return { stop: stopTrackerProjectionLoop };
@@ -94,6 +99,6 @@ export function startTrackerProjectionLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
 
 export async function stopTrackerProjectionLoop() {
   if (_interval) { clearInterval(_interval); _interval = null; }
-  if (_active) { try { await _active; } catch { /* already logged */ } }
+  if (_guard) await _guard.settle();
   _started = false;
 }

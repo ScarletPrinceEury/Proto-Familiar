@@ -27,13 +27,20 @@ import { readSettingsSync } from '../../cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';
 import { runGaugeCheckTick } from './gauge-escalation.js';
 import { runGaugeCrisisTick } from './gauge-crisis.js';
+import { createTickGuard } from '../util/tick-guard.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — bookkeeping wants no urgency
 const STAND_DOWN_TIERS = new Set(['moderate', 'high', 'severe']);
+// Watchdog on the tick guard (ward-signed 0.14.67). This tick also carries the
+// gauge safety ladder (check → crisis), so a tick that hung on a schedule read
+// used to stop the crisis teeth for good. A healthy tick is a few service calls
+// and no LLM; released after this long (logged), the next tick runs the ladder
+// again. Nothing about WHEN the teeth fire changes.
+export const NEEDS_WATCHDOG_MS = 10 * 60_000;
 
 let _started  = false;
 let _interval = null;
-let _active   = null;
+let _guard    = null;
 
 function needsTrackingHardDisabled() {
   return process.env.PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED === '1';
@@ -84,7 +91,7 @@ export async function runNeedsTick({
   return { reason: 'ran', considered: needs.length, marked };
 }
 
-export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
+export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS, watchdogMs = NEEDS_WATCHDOG_MS } = {}) {
   if (_started) return { stop: stopNeedsTrackingLoop };
   if (needsTrackingHardDisabled()) {
     console.log('[needs] needs-tracking hard-disabled via PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1');
@@ -92,10 +99,11 @@ export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   }
   _started = true;
   console.log('[needs] needs-tracking loop armed (opt-in; idles until "Track unmet needs" is enabled in Settings)');
-  _interval = setInterval(async () => {
-    if (_active) return;                 // never overlap ticks
-    if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
-    _active = (async () => {
+  _guard = createTickGuard({ name: 'needs-tracking', watchdogMs });
+  _interval = setInterval(() => {
+    // The guard never overlaps ticks, and releases one that hangs.
+    _guard.run(async () => {
+      if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
       await runNeedsTick().catch(err => console.warn('[needs] tick error:', err?.message ?? err));
       // Gauge safety-ladder (§10.6, G-C) rides this same timer (reuse, don't add
       // a loop). It runs INDEPENDENT of the needs threat stand-down — a "have you
@@ -108,7 +116,7 @@ export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
       // can only ever act on a check this tick's check phase left open.
       await runGaugeCheckTick().catch(err => console.warn('[gauge-check] tick error:', err?.message ?? err));
       await runGaugeCrisisTick().catch(err => console.warn('[gauge-crisis] tick error:', err?.message ?? err));
-    })().finally(() => { _active = null; });
+    });
   }, tickMs);
   _interval.unref?.();
   return { stop: stopNeedsTrackingLoop };
@@ -116,6 +124,6 @@ export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
 
 export async function stopNeedsTrackingLoop() {
   if (_interval) { clearInterval(_interval); _interval = null; }
-  if (_active) { try { await _active; } catch { /* already logged */ } }
+  if (_guard) await _guard.settle();
   _started = false;
 }

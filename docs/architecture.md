@@ -2985,6 +2985,34 @@ already kills any non-trickling non-stream call at 300s, so this bound never
 cuts an answer that would have arrived — only a socket that was never going to
 deliver.
 
+### Stuck-tick watchdog (0.14.67, `src/util/tick-guard.js`)
+
+Bounding provider calls doesn't bound everything else a tick awaits (an MCP
+call, a tool, a file lock). Every background loop now uses one shared guard,
+`createTickGuard({ name, watchdogMs, onRelease })`, instead of fourteen copies
+of `if (_activeTick) return; … finally { _activeTick = null }`. It never lets
+ticks overlap and hands a busy caller the in-flight tick. A tick still running
+after `watchdogMs` is RELEASED: logged loudly, counted, and the next tick may
+run. The stuck tick keeps going in the background (arbitrary awaits can't be
+force-cancelled), but its `tick` handle is marked `abandoned` and its `signal`
+aborted, and if it ever finishes that's logged too. `settle()` (used by every
+`stop*`) waits for the in-flight tick but never past its watchdog, so shutdown
+can't hang on it either. `tickGuardStatus()` (running / startedAt / released /
+lastReleasedAt per loop) is on `GET /api/health` as `tickGuards`. **A new loop
+must use the guard, with a watchdog well above its longest legitimate tick**
+(releasing a slow-but-healthy tick lets the next one overlap it).
+
+| Loop | Watchdog | Notes |
+|---|---|---|
+| reminders | 5 min | a stuck tick means no reminder fires; a late duplicate is absorbed by the outbox `originId` dedup |
+| silence triage (ward-signed) | 10 min | release reported through `onTick` as `tick_released` → triage event log, and the trusted-contact escalation check runs then |
+| needs-tracking + gauge ladder (ward-signed) | 10 min | logged; when the crisis teeth fire is unchanged |
+| memory sweep, tracker projections | 10 min | no LLM in the tick |
+| warm reach-out, page watch, gcal sync, media retention | 15 min | |
+| noticing (ward-signed) | 20 min | release reported as `tick_released` → noticing-events, no wait-streak change |
+| pondering, tome graduation, content re-tag | 30 min | multi-call ticks |
+| memorization | 60 min | a released job stays `processing` until its run finishes or the next boot recovers it; the job id is logged |
+
 **Client disconnect (0.14.66, `src/server/upstream-abort.js`).** Since Node 16
 a request's `'close'` fires when its BODY has been read, not when the client
 leaves — so `/api/chat`'s old `req.on('close')` listener, attached after
