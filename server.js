@@ -181,6 +181,7 @@ import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/vill
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
 import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
 import { writePidFile, clearPidFile } from './src/server/pid-file.js';
+import { clientDisconnectSignal, upstreamSignal, upstreamFailure } from './src/server/upstream-abort.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -387,6 +388,10 @@ const VOICE_CALL_MAX_TOOL_ROUNDS = 4;
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
   const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag } = req.body;
+  // Fires when the client goes away (tab closed, voice turn gave up, an external
+  // client hung up) so every upstream request below stops with it. Attached
+  // before any await — see upstream-abort.js for why it's the RESPONSE's close.
+  const clientSignal = clientDisconnectSignal(res);
   // Mood-tagged send (§6, T-D). A `moodTag` rides beside the turn as its own
   // field — never inside `messages`, and kept out of STORED history by
   // collapseToolTurns + the client whitelist (INVARIANT T1's compounding guard).
@@ -959,23 +964,23 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       ...authHeader(apiKey),
     };
 
-    // Abort the loop when the browser tab closes or the client disconnects.
-    // Fires req.on('close') which is emitted by Express/Node when the
-    // underlying socket closes. The signal is forwarded into runToolCallLoop
-    // (non-streaming) and into each upstream fetch (both paths).
-    const ac = new AbortController();
-    const onClientClose = () => ac.abort();
-    req.on('close', onClientClose);
+    // clientSignal (top of the handler) stops the loop when my human's client
+    // goes away: it is forwarded into runToolCallLoop (non-streaming) and into
+    // each upstream fetch (both paths). Non-streaming fetches also carry the
+    // wall-clock deadline (upstreamSignal).
 
     const thalamusEnvelope = buildThalamusEnvelope(enrichedResult, depth, injectedAt, timeAnchor);
 
     // Pillar D: upstream caller for filter retries — bare text round-trip,
-    // no tool calls (tools are not needed for rewrite nudges).
+    // no tool calls (tools are not needed for rewrite nudges). Bounded like any
+    // non-streaming call; filterOutgoingReply fails CLOSED (safe refusal) when
+    // this throws, so a stalled rewrite never lets the draft through.
     const filterCallUpstream = async (msgs) => {
       const r = await fetch(upstreamUrl, {
         method:  'POST',
         headers: authHeaders,
         body:    JSON.stringify({ model: payload.model, messages: msgs, stream: false }),
+        signal:  upstreamSignal(clientSignal),
       });
       if (!r.ok) {
         const t = await r.text();
@@ -1009,10 +1014,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
             // Loop mode passes its own evolving `msgs`, so the payload-level name
             // stamping doesn't reach here — stamp the ward's turns per round, and
             // retry bare on a name-field 400 (learn 'no' only if bare succeeds).
+            // A fresh deadline per fetch (the bare retry gets its own).
             const fetchOnce = (m) => fetch(upstreamUrl, {
-              method: 'POST', headers: authHeaders, body: JSON.stringify(mkBody(m)), signal: ac.signal,
+              method: 'POST', headers: authHeaders, body: JSON.stringify(mkBody(m)), signal: upstreamSignal(clientSignal),
             });
-            let r;
+            let r, text;
             try {
               r = await fetchOnce(nameFieldsOn ? stampNamesOnTurns(msgs, { wardName: nameWard }) : msgs);
               if (r.status === 400 && nameFieldsOn) {
@@ -1022,16 +1028,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
               } else if (r.ok && nameFieldsOn) {
                 recordNameFieldResult(nameJob, 'yes');
               }
+              // The body read is under the same signal — a trickle after the
+              // headers is exactly what the deadline is for.
+              text = await r.text();
             } catch (err) {
-              if (err.name === 'AbortError') {
-                const e = new Error('client disconnected');
-                e.status = 499; e.body = ''; throw e;
-              }
-              const e = new Error(`Network error reaching ${provider}: ${err.message}`);
-              e.status = 502; e.body = JSON.stringify({ error: e.message });
+              const f = upstreamFailure(err, { clientSignal, provider });
+              if (f.status === 504) console.warn(`[chat] ${provider}/${payload.model}: ${f.message}`);
+              const e = new Error(f.message);
+              e.status = f.status; e.body = f.status === 499 ? '' : JSON.stringify({ error: f.message });
               throw e;
             }
-            const text = await r.text();
             if (!r.ok) {
               const e = new Error(`upstream ${r.status}`);
               e.status = r.status; e.body = text;
@@ -1047,7 +1053,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           baseMessages,
           timeAnchor,
           toolCtx,
-          signal: ac.signal,
+          signal: clientSignal,
         });
         // Mid-turn hard fallback (§3.1): if the provider rejects the image
         // modality despite an optimistic 'capable' verdict, retry ONCE with
@@ -1080,7 +1086,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // Tell the client the round budget ran out mid-reach, so it can offer
         // the ward a one-click "go on" (a fresh turn = a fresh budget).
         if (roundCapHit) data._roundCapHit = true;
-        req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
@@ -1121,7 +1126,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         }
         return res.json(data);
       } catch (err) {
-        req.off('close', onClientClose);
         if (err.status === 499) return; // client already gone — nothing to send
         res.status(err.status ?? 502).setHeader('Content-Type', 'application/json');
         return res.send(err.body ?? JSON.stringify({ error: err.message }));
@@ -1153,7 +1157,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // Live ward conversation → the ward-configurable round budget.
     const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
     for (let round = 0; round <= liveMaxRounds + 1; round++) {
-      if (clientGone() || ac.signal.aborted) break;
+      if (clientGone() || clientSignal.aborted) break;
       const payloadMessages = timeAnchor
         ? [...currentMsgs, { role: 'system', content: timeAnchor }]
         : currentMsgs;
@@ -1163,23 +1167,32 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         ? { ...streamBase, messages: payloadMessages, stream: true }
         : { ...payload, messages: payloadMessages, stream: true };
 
+      // A stream carries no wall-clock deadline (a long answer streaming in is
+      // legitimate, and my human can stop it) — only the client's disconnect.
+      const failRound = (err) => {
+        const f = upstreamFailure(err, { clientSignal, provider });
+        if (f.status === 499) { if (!res.writableEnded) res.end(); return; }
+        if (!headersSent) return res.status(f.status).json({ error: f.message });
+        res.write(`data: ${JSON.stringify({ _loopError: f.message })}\n\n`);
+        return res.end();
+      };
       let upstream;
       try {
         upstream = await fetch(upstreamUrl, {
           method:  'POST',
           headers: authHeaders,
           body:    JSON.stringify(roundBody),
-          signal:  ac.signal,
+          signal:  upstreamSignal(clientSignal, { stream: true }),
         });
       } catch (err) {
-        if (!headersSent) return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
-        res.write(`data: ${JSON.stringify({ _loopError: `Network error reaching ${provider}: ${err.message}` })}\n\n`);
-        return res.end();
+        return failRound(err);
       }
 
       const upCt = upstream.headers.get('content-type') || '';
       if (!upstream.ok || upCt.includes('application/json')) {
-        const text = await upstream.text();
+        let text;
+        try { text = await upstream.text(); }
+        catch (err) { return failRound(err); }
         // Mid-turn hard fallback (§3.1): a modality rejection before any SSE
         // has streamed — rebuild this round's messages as stand-ins, flip the
         // capability cache, and retry the same round with degraded sight
@@ -1321,7 +1334,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       break;
     }
 
-    req.off('close', onClientClose);
     // The first successful live-image stream records capability (the "probe
     // once" — the real turn is the probe).
     if (imagesLiveThisTurn > 0 && !visionFellBack) {
@@ -1357,11 +1369,24 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   }
 
   let upstream;
+  // Stops with the client; a non-streaming request also carries the wall-clock
+  // deadline, fresh per fetch (the bare retry gets its own). The body read below
+  // is under the same signal.
   const sendUpstream = (msgs) => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader(apiKey) },
     body: JSON.stringify(msgs ? { ...payload, messages: msgs } : payload),
+    signal: upstreamSignal(clientSignal, { stream: !!stream }),
   });
+  // Any failed fetch/body read: nothing to send if the client left; otherwise an
+  // honest status (504 = no complete answer in time) — never an unhandled throw.
+  const failRaw = (err) => {
+    const f = upstreamFailure(err, { clientSignal, provider });
+    if (f.status === 499) { if (!res.writableEnded) res.end(); return; }
+    if (f.status === 504) console.warn(`[chat] ${provider}/${payload.model}: ${f.message}`);
+    if (res.headersSent) { if (!res.writableEnded) res.end(); return; }
+    return res.status(f.status).json({ error: f.message });
+  };
   try {
     upstream = await sendUpstream();
     // Name-field 400 handling: a provider that rejects the `name` field 400s the
@@ -1378,7 +1403,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       recordNameFieldResult(nameJob, 'yes');
     }
   } catch (err) {
-    return res.status(502).json({ error: `Network error reaching ${provider}: ${err.message}` });
+    return failRaw(err);
   }
 
   // The envelope mirrored on every successful response so the client
@@ -1389,7 +1414,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   // Non-streaming path
   if (!stream) {
-    const text = await upstream.text();
+    let text;
+    try { text = await upstream.text(); }
+    catch (err) { return failRaw(err); }
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
     // RULE A at the one seam every non-stream reply crosses. A thinking model
@@ -1439,7 +1466,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // Streaming path — detect if provider returned a JSON error instead of SSE
   const ct = upstream.headers.get('content-type') || '';
   if (!upstream.ok || ct.includes('application/json')) {
-    const text = await upstream.text();
+    let text;
+    try { text = await upstream.text(); }
+    catch (err) { return failRaw(err); }
     res.status(upstream.status).setHeader('Content-Type', 'application/json');
     return res.send(text);
   }
@@ -3161,6 +3190,9 @@ app.post('/api/media', express.raw({ type: ['image/*', 'audio/*', 'video/*'], li
 // clip, default-OFF, ward-only (web). Any failure → {ok:false} and the ward is
 // told; it never falls into the chat path.
 app.post('/api/video-understand', express.json({ limit: '256kb' }), async (req, res) => {
+  // Every Google request below stops when this request goes away, and each
+  // step carries its own deadline (gemini-file-api.js).
+  const clientSignal = clientDisconnectSignal(res);
   if (process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1') return res.status(403).json({ ok: false, error: 'Video is turned off.' });
   const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
   if (s.videoFileApiEnabled !== true) {
@@ -3180,7 +3212,9 @@ app.post('/api/video-understand', express.json({ limit: '256kb' }), async (req, 
       buffer: asset.buffer, mime: asset.meta.mime, displayName: asset.meta.slugs?.[0] || 'clip',
       model, apiKey,
       prompt: (typeof prompt === 'string' && prompt.trim()) ? prompt : 'Please watch this video and tell me what happens in it.',
+      signal: clientSignal,
     });
+    if (clientSignal.aborted) return;   // nobody left to tell
     if (r.ok) return res.json({ ok: true, text: r.text });
     return res.json({ ok: false, error: `I couldn't watch that clip: ${r.error}` });
   } catch (err) {
@@ -3333,25 +3367,41 @@ function completionPromptToMessages(prompt) {
   return null;
 }
 
+// The /v1 compatibility endpoints call /api/chat over loopback. Their loopback
+// request carries the EXTERNAL client's disconnect signal, so when that client
+// hangs up the loopback request closes too — which /api/chat sees as its own
+// client leaving, and stops the provider request. Any failed read ends quietly
+// if the client is gone, else answers 502; never an unhandled throw.
+function loopbackFailed(res, err, clientSignal) {
+  if (clientSignal.aborted || res.headersSent) { if (!res.writableEnded) res.end(); return; }
+  return res.status(502).json({ error: `Network error reaching /api/chat: ${err?.message ?? err}` });
+}
+
 async function proxyChatViaApiChat(req, res, body) {
+  const clientSignal = clientDisconnectSignal(res);
   let upstream;
   try {
     upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: clientSignal,
     });
   } catch (err) {
-    return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+    return loopbackFailed(res, err, clientSignal);
   }
 
   const ct = upstream.headers.get('content-type') || 'application/json';
-  res.status(upstream.status);
-  res.setHeader('Content-Type', ct);
   if (!body.stream || !upstream.body) {
-    const text = await upstream.text();
+    let text;
+    try { text = await upstream.text(); }
+    catch (err) { return loopbackFailed(res, err, clientSignal); }
+    res.status(upstream.status);
+    res.setHeader('Content-Type', ct);
     return res.send(text);
   }
+  res.status(upstream.status);
+  res.setHeader('Content-Type', ct);
 
   // Stream passthrough for /v1/chat/completions.
   const reader = upstream.body.getReader();
@@ -3395,6 +3445,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 app.post('/v1/completions', async (req, res) => {
+  const clientSignal = clientDisconnectSignal(res);
   const body = req.body || {};
   const { provider, apiKey, model } = resolveCompatConnection(req, body);
   const messages = completionPromptToMessages(body.prompt);
@@ -3411,13 +3462,16 @@ app.post('/v1/completions', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, apiKey, model, messages, stream: true, enrich: false }),
+        signal: clientSignal,
       });
     } catch (err) {
-      return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+      return loopbackFailed(res, err, clientSignal);
     }
 
     if (!upstream.ok || (upstream.headers.get('content-type') || '').includes('application/json')) {
-      const text = await upstream.text();
+      let text;
+      try { text = await upstream.text(); }
+      catch (err) { return loopbackFailed(res, err, clientSignal); }
       return res.status(upstream.status).type('application/json').send(text);
     }
 
@@ -3484,11 +3538,14 @@ app.post('/v1/completions', async (req, res) => {
         ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
         ...(typeof body.max_tokens === 'number' ? { max_tokens: body.max_tokens } : {}),
       }),
+      signal: clientSignal,
     });
   } catch (err) {
-    return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+    return loopbackFailed(res, err, clientSignal);
   }
-  const text = await upstream.text();
+  let text;
+  try { text = await upstream.text(); }
+  catch (err) { return loopbackFailed(res, err, clientSignal); }
   if (!upstream.ok) {
     return res.status(upstream.status).type('application/json').send(text);
   }

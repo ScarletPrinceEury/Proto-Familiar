@@ -44,7 +44,9 @@ const DEFAULT_MAX_TOKENS = 4000;
 // self-hosted model that trickles while it generates).
 export const PROVIDER_CALL_TIMEOUT_MS = 300_000;
 
-function defaultCallTimeoutMs() {
+/** The default per-call bound, honouring the env override — the one value every
+ *  non-streaming provider request uses unless it has a reason to differ. */
+export function providerCallTimeoutMs() {
   const env = Number(process.env.PROTO_FAMILIAR_LLM_CALL_TIMEOUT_MS);
   return Number.isFinite(env) && env > 0 ? env : PROVIDER_CALL_TIMEOUT_MS;
 }
@@ -165,7 +167,7 @@ export async function callProviderChat({
 
   const msgs = Array.isArray(messages) ? messages : [{ role: 'user', content: prompt }];
   // null/undefined → the default bound; only an explicit 0 opts out.
-  const fetchSignal = deadlineSignal({ signal, timeoutMs: timeoutMs ?? defaultCallTimeoutMs() });
+  const fetchSignal = deadlineSignal({ signal, timeoutMs: timeoutMs ?? providerCallTimeoutMs() });
   const t0 = Date.now();
   let resp, text;
   try {
