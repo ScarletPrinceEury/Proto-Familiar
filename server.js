@@ -183,6 +183,7 @@ import { villagerContextOn, tellContentTag } from './src/warmth/villager-context
 import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { clientDisconnectSignal, upstreamSignal, upstreamFailure } from './src/server/upstream-abort.js';
 import { tickGuardStatus } from './src/util/tick-guard.js';
+import { guardAsyncRoutes, asyncRouteErrorHandler } from './src/server/async-routes.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -247,6 +248,11 @@ function buildThalamusEnvelope(enrichedResult, depth, injectedAt, timeAnchor) {
 }
 
 const app = express();
+// Before any route is registered: a rejected async handler goes to Express's
+// error path instead of becoming an unhandled rejection that exits the whole
+// server (async-routes.js). The matching error handler is registered last,
+// just before app.listen.
+guardAsyncRoutes(app);
 app.set('trust proxy', 'loopback');
 
 // ── Runtime Tailscale / external-access gate ─────────────────────
@@ -382,6 +388,15 @@ function chatRateLimit(req, res, next) {
 // if the cap is reached, so this bounds cost without risking dead air.
 const VOICE_CALL_MAX_TOOL_ROUNDS = 4;
 
+// Index of the first `messages` entry that isn't an object with a string role,
+// or -1. The chat routes read `m.role` / `m.content` on every entry, so a null
+// or bare string there threw inside the handler — on Express 4 that used to
+// exit the whole server (the async-routes net now turns it into a 500; this
+// makes it the 400 it should be).
+function malformedMessageIndex(messages) {
+  return messages.findIndex(m => !m || typeof m !== 'object' || Array.isArray(m) || typeof m.role !== 'string');
+}
+
 /**
  * POST /api/chat
  * Body: { provider, apiKey, model, messages, stream, temperature?, max_tokens? }
@@ -451,6 +466,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
+  { const bad = malformedMessageIndex(messages);
+    if (bad >= 0) return res.status(400).json({ error: `messages[${bad}] must be an object with a string role.` }); }
 
   // Enrich with Phylactery + Unruh context. Split into a static
   // prefix (identity + base instructions; stable across turns so the
@@ -1569,6 +1586,8 @@ app.post('/api/debug-prompt', async (req, res) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required.' });
   }
+  { const bad = malformedMessageIndex(messages);
+    if (bad >= 0) return res.status(400).json({ error: `messages[${bad}] must be an object with a string role.` }); }
 
   // Mirror the /api/chat split: static into the system message,
   // dynamic depth-injected. Keeps the debug-prompt preview accurate
@@ -5958,6 +5977,11 @@ async function runPhylacteryMaintenance() {
   } catch { /* retries next boot */ }
   console.log('[memory] Phylactery maintenance pass complete');
 }
+
+// After every route: answers `{ error }` for anything a route threw or a
+// middleware rejected (body-parser 400/413 included) and logs it loudly — the
+// server stays up. Must stay the last app.use.
+app.use(asyncRouteErrorHandler());
 
 const httpServer = app.listen(PORT, HOST, async () => {
   // Claim the PID file with my OWN pid now that the bind succeeded — this
