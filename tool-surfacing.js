@@ -26,6 +26,12 @@ export const TOOL_MODULES = {
   recall: 'core', recall_timeframe: 'core', search_conversation: 'core', save_memory: 'core', save_to_tome: 'core',
   list_tomes: 'core', create_tome: 'core',   // the Familiar keeps its own themed tomes (reuse via list_tomes before create)
   update_identity: 'core', schedule_find: 'core',
+  // My identity edit tools travel together (0.14.75): a turn that can ADD to
+  // identity can always cut, delete or rewrite too. When only the append was
+  // core, a turn without memory-edit "removed" a duplicate by appending it twice
+  // (first identity review). Villager turns use their own allowlist, so this
+  // never reaches them.
+  remove_from_identity: 'core', delete_identity_section: 'core', rewrite_identity_section: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   bookmark_for_later: 'core',   // the Familiar's own initiative (nothing in a user msg triggers it) — always reachable, like the other interest-layer tools
 
@@ -56,9 +62,7 @@ export const TOOL_MODULES = {
   delete_memory: 'memory-edit', delete_memory_by_id: 'memory-edit',
   list_memories: 'memory-edit', move_memory_date: 'memory-edit',
   memorize_now: 'memory-edit',
-  rewrite_identity_section: 'memory-edit', remove_from_identity: 'memory-edit',
   list_care_facts: 'memory-edit',
-  delete_identity_section: 'memory-edit',
 
   create_graph_node: 'graph', find_graph_node: 'graph',
   update_graph_node: 'graph', delete_graph_node: 'graph',
@@ -133,7 +137,7 @@ export const ALL_MODULES = [...new Set(Object.values(TOOL_MODULES))];
 export const MODULE_INDEX =
   'schedule-write (add/re-time/snooze/resolve/delete/link calendar items, requirement templates, push to Google), ' +
   'schedule-read (export an item as .ics/link, list requirement templates), ' +
-  'memory-edit (read/update/delete/list/move my memories, memorize-now, rewrite identity sections, cut lines or sections out of identity, review my care list), ' +
+  'memory-edit (read/update/delete/list/move my memories, memorize-now, review my care list), ' +
   'graph (my knowledge web: nodes + relationships), ' +
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +

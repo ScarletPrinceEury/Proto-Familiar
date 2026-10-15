@@ -87,8 +87,24 @@ test('the pause on automatic identity cleanup reaches Phylactery as a boolean', 
 test('I can find these tools and know update_identity only adds', () => {
   const fn = (n) => BUILTIN_TOOLS.find(t => t.function.name === n)?.function;
   assert.ok(fn('remove_from_identity') && fn('delete_identity_section'));
-  assert.equal(TOOL_MODULES.remove_from_identity, 'memory-edit');
-  assert.equal(TOOL_MODULES.delete_identity_section, 'memory-edit');
+  // 0.14.75: core, beside update_identity (see the test below).
+  assert.equal(TOOL_MODULES.remove_from_identity, 'core');
+  assert.equal(TOOL_MODULES.delete_identity_section, 'core');
   assert.match(fn('update_identity').description, /only ADDS; it can't take anything out/);
   assert.match(fn('update_identity').description, /remove_from_identity/);
+});
+
+test('a turn that can add to my identity can always cut, delete and rewrite too', async () => {
+  // Found live: with only update_identity in core, a turn without the memory-edit
+  // group "removed" a duplicate section by appending it twice. The edit tools
+  // now travel together, whatever modules a turn surfaces.
+  const { composeActiveTools } = await import('../cerebellum.js');
+  const coreOnly = composeActiveTools([], {}, { modules: new Set() }).map(t => t.function.name);
+  for (const n of ['update_identity', 'remove_from_identity', 'delete_identity_section', 'rewrite_identity_section']) {
+    assert.ok(coreOnly.includes(n), `${n} is offered with core alone`);
+  }
+  const { VILLAGER_WRITE_TOOLS } = await import('../cerebellum.js');
+  for (const n of ['remove_from_identity', 'delete_identity_section', 'rewrite_identity_section']) {
+    assert.ok(!VILLAGER_WRITE_TOOLS.has(n), `${n} is never a villager tool`);
+  }
 });

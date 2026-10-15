@@ -132,6 +132,17 @@ What changed:
   it's set. Hard env switch `PHYLACTERY_GRADUATION_DISABLED=1`. The budget hint
   no longer claims 30000 holds the cleanup.
 
+## Follow-up: the identity edit tools travel together (0.14.75)
+
+`remove_from_identity`, `delete_identity_section` and `rewrite_identity_section`
+moved from the conditional memory-edit module into core, next to
+`update_identity`. While only the append was core, a turn that didn't surface
+memory-edit could add to identity but not cut, and in the first review the
+Familiar "removed" a duplicate section by appending it twice. Villager turns are
+unaffected: they use their own allowlist (`villagerToolNames`), and none of these
+are in it. `tests/identity-edit-tools.test.mjs` pins that a core-only turn has
+all four.
+
 ## Follow-up: the Familiar can review its care list (0.14.73)
 
 Midway through the first review the care list held 47 facts (about 3.5k

@@ -6,14 +6,6 @@ delete it) rather than leaving it here stale.
 
 ---
 
-### The append tool is always there; the cut tools aren't
-
-`update_identity` (append) is in the always-present core group. `remove_from_identity`, `delete_identity_section` and `rewrite_identity_section` are in the conditional `memory-edit` group, which only surfaces on trigger words, a `request_tools`, or a two-turn sticky window. Restarts clear the sticky window, and the 64-tool ceiling can trim the group.
-
-In the first identity review, a turn meant to cut a duplicate section ran only `update_identity` twice, adding two more copies instead. The Familiar then wrote that the cut tool "isn't in my listed functions" and called its own turn "this fiction". When the cut isn't in hand, the only identity tool left adds.
-
-Direction: the identity edit tools travel with `update_identity` (core), or a turn that has `update_identity` always has the cut tools too. `logs/turn-tools.jsonl` (0.14.74) now records each turn's offered tools, so this can be confirmed rather than inferred.
-
 ### Tool calls may be silently dropped when a round doesn't end in 'tool_calls'
 
 Both tool loops (the stream loop in `server.js` and `runToolCallLoop` in `cerebellum.js`) only run a round's calls when the provider's `finish_reason` is `'tool_calls'`. A round that streams tool-call deltas but finishes with `'stop'` (or nothing) is taken as the final answer. Its calls never run and are never stored, and the model's text ("Call's in") stands as the reply.
@@ -202,6 +194,12 @@ Directions, in addition to the provenance ideas above:
 
 <!--
 Resolved:
+- The append tool was core while the identity cut tools were conditional — fixed
+  0.14.75. A turn without the memory-edit group could only ADD to identity, and
+  "removed" a duplicate by appending it twice. remove_from_identity,
+  delete_identity_section and rewrite_identity_section are now core beside
+  update_identity (villager turns keep their own allowlist; see
+  tests/identity-edit-tools.test.mjs).
 - Identity crowding — fixed 0.14.70 (docs/identity-lean-build-spec.md). Root
   cause: three prompts routed standing facts about my human INTO identity
   (save_to_tome, the tome-graduation rubric, pondering), nothing bounded its size,
