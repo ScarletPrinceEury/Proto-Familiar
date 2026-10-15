@@ -81,7 +81,7 @@ export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async
     ? src.snapshots
     : [{ icsText: src.icsText, events: src.events, reconcileDeletes: src.reconcileDeletes, calendarId: src.calendarId, includeLegacy: src.includeLegacy }];
 
-  const newIds = [], updatedIds = [], removedIds = [], complex = [];
+  const newIds = [], updatedIds = [], removedIds = [], complex = [], cappedIds = [];
   let anyOk = false, lastErr = null;
   for (const snap of snapshots) {
     const result = await ingest({
@@ -100,6 +100,12 @@ export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async
     if (Array.isArray(result.updated))        updatedIds.push(...result.updated);
     if (Array.isArray(result.removed))        removedIds.push(...result.removed);
     if (Array.isArray(result.complex_series)) complex.push(...result.complex_series);
+    if (Array.isArray(result.series_capped))  cappedIds.push(...result.series_capped);
+  }
+  if (cappedIds.length) {
+    // The doubled-events fix: an old series node stopped repeating because its
+    // occurrences now arrive one by one. Logged so it's never silent.
+    console.log(`[gcal] ${cappedIds.length} series node(s) stopped repeating — their occurrences arrive separately now: ${cappedIds.join(', ')}`);
   }
 
   if (!anyOk) {
@@ -108,7 +114,7 @@ export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async
   if (newIds.length) {
     try { await routeNew(newIds); } catch { /* projection cue is best-effort */ }
   }
-  return { synced: true, new: newIds, updated: updatedIds, removed: removedIds, complex_series: complex };
+  return { synced: true, new: newIds, updated: updatedIds, removed: removedIds, complex_series: complex, series_capped: cappedIds };
 }
 
 // ── Singleton lifecycle ──────────────────────────────────────────

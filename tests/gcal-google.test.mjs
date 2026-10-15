@@ -95,6 +95,17 @@ test('normalizeGoogleEvents: real Google shape → normalized, cancelled propaga
   assert.equal(evs[2].status, 'cancelled');
 });
 
+test('normalizeGoogleEvents: an occurrence of a recurring series names its series (doubled-events fix)', () => {
+  const [occ, plain] = normalizeGoogleEvents([
+    { id: 'abc123_20260708', recurringEventId: 'abc123', iCalUID: 'abc123@google.com', summary: 'Wash day',
+      start: { date: '2026-07-08' }, end: { date: '2026-07-09' }, status: 'confirmed' },
+    { id: 'g9', iCalUID: 'g9@google.com', summary: 'One-off', start: { date: '2026-07-09' }, status: 'confirmed' },
+  ]);
+  assert.equal(occ.uid, 'abc123_20260708', 'each occurrence keeps its own id');
+  assert.equal(occ.series_uid, 'abc123@google.com', 'the series id an iCal-link sync stored');
+  assert.ok(!('series_uid' in plain), 'a standalone event carries no series link');
+});
+
 test('buildEventResource: timed sends local + timeZone (Google does the math)', () => {
   const node = { label: 'Review', when: '2026-07-02T15:00:00', end: '2026-07-02T16:00:00', payload: { location: 'Room 4' } };
   const ev = buildEventResource(node, { timeZone: 'America/Los_Angeles' });

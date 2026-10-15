@@ -31,6 +31,7 @@ inbound rule, §1.3):
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
@@ -44,7 +45,7 @@ from . import schedule as sched
 _SYNC_OWNED_KEYS = (
     "source", "gcal_uid", "gcal_last_modified", "all_day",
     "location", "description", "recurrence", "gcal_expanded_from",
-    "gcal_calendar_id", "gcal_attribution",
+    "gcal_calendar_id", "gcal_attribution", "gcal_series_uid",
 )
 
 
@@ -64,6 +65,8 @@ def _sync_payload(ev: dict[str, Any]) -> dict[str, Any]:
         out["recurrence"] = ev["recurrence"]
     if ev.get("expanded_from"):
         out["gcal_expanded_from"] = ev["expanded_from"]
+    if ev.get("series_uid"):
+        out["gcal_series_uid"] = ev["series_uid"]
     # Which source calendar this event came from (multi-calendar support) and,
     # if the ward/Familiar told us, who that calendar belongs to. Both are
     # sync-owned: refreshed from the snapshot + the attribution map each pass.
@@ -261,6 +264,86 @@ def _adopt_hand_added_twin(conn: sqlite3.Connection, ev: dict[str, Any]) -> str 
     return row["id"]
 
 
+_INSTANCE_SUFFIX = re.compile(r"_\d{8}(T\d{6}Z?)?$")
+
+
+def _series_key_of(uid: str, payload: dict[str, Any]) -> str | None:
+    """Which series a synced node is ONE OCCURRENCE of, as that series' own
+    gcal_uid — or None for a standalone event or a series node itself.
+    Explicit links first (the Google adapter's series uid, the iCal parser's
+    own expansion); otherwise Google's instance-id shape `<eventId>_<date>`,
+    whose series carries the iCal UID `<eventId>@google.com`."""
+    if payload.get("gcal_series_uid"):
+        return payload["gcal_series_uid"]
+    if payload.get("gcal_expanded_from"):
+        return payload["gcal_expanded_from"]
+    m = _INSTANCE_SUFFIX.search(uid or "")
+    if m and "@" not in uid:
+        return uid[: m.start()] + "@google.com"
+    return None
+
+
+def cap_superseded_series(
+    conn: sqlite3.Connection,
+    nodes_by_uid: dict[str, sqlite3.Row],
+    seen_uids: set[str],
+) -> list[str]:
+    """Stop a recurring series node from repeating once its occurrences arrive
+    as separate events (the doubled-events fix).
+
+    An iCal-link sync stores a recurring event as ONE series node that repeats
+    by its rule. Google's own API (singleEvents) delivers the same series as
+    one event per occurrence. After a switch between the two, both lived on:
+    the series node kept generating every occurrence, next to the per-
+    occurrence nodes, so each one showed twice (and alerted twice). The old
+    series node is never in the API's snapshot, and its anchor date is in the
+    past, so deletion reconcile never touched it.
+
+    For each series node NOT in this snapshot (a source still sending it as a
+    series owns its rule — never capped), whose occurrences exist as their own
+    nodes, its recurrence now ends one second before the first of them. Its
+    history — past occurrences and their per-occurrence resolutions — stays.
+    Local-naive timestamp, never a bare date (a date-only `until` reads as UTC
+    midnight in JS and would drop that day's later occurrences). Idempotent.
+    Returns the ids of series nodes it capped.
+    """
+    first_by_series: dict[str, str] = {}
+    for uid, node in nodes_by_uid.items():
+        if not node["when_ts"]:
+            continue
+        payload = json.loads(node["payload_json"] or "{}")
+        if payload.get("recurrence"):
+            continue
+        key = _series_key_of(uid, payload)
+        if not key:
+            continue
+        when = to_local_naive(node["when_ts"])
+        if when and (key not in first_by_series or when < first_by_series[key]):
+            first_by_series[key] = when
+
+    capped: list[str] = []
+    for uid, node in nodes_by_uid.items():
+        first = first_by_series.get(uid)
+        if not first or uid in seen_uids or node["resolution"]:
+            continue
+        payload = json.loads(node["payload_json"] or "{}")
+        rec = payload.get("recurrence")
+        if not isinstance(rec, dict):
+            continue
+        try:
+            cap = (datetime.fromisoformat(first) - timedelta(seconds=1)).isoformat(timespec="seconds")
+        except ValueError:
+            continue
+        current = rec.get("until")
+        if current and str(current) <= cap:
+            continue  # already ends before its first separate occurrence
+        payload["recurrence"] = {**rec, "until": cap}
+        payload["gcal_series_superseded_at"] = first
+        sched.update_node(conn, id=node["id"], payload=payload)
+        capped.append(node["id"])
+    return capped
+
+
 def gcal_ingest(
     conn: sqlite3.Connection,
     *,
@@ -399,6 +482,12 @@ def gcal_ingest(
         )
         updated_ids.append(node["id"])
 
+    # A series node whose occurrences now arrive as their own events stops
+    # repeating (the doubled-events fix). Re-read so occurrences created this
+    # pass count; scoped like the rest of the reconcile.
+    refreshed, _ = dedupe_gcal_nodes(conn, calendar_id=calendar_id, include_legacy=include_legacy)
+    series_capped = cap_superseded_series(conn, refreshed, seen_uids)
+
     # Deletion reconcile — only on a confirmed-good full snapshot that parsed
     # at least one event, and only for still-future nodes (§1.3 guards).
     # `existing` is already scoped to source == 'gcal' (and, when given, to
@@ -428,4 +517,5 @@ def gcal_ingest(
         "unchanged": unchanged_ids,
         "removed": removed_ids,
         "complex_series": complex_series,
+        "series_capped": series_capped,
     }
