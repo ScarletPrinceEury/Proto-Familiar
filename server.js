@@ -20,7 +20,7 @@ const execFileP = promisify(execFile);
 import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
-  listCareFacts, setIdentityBudget,
+  listCareFacts, setIdentityBudget, setIdentityGraduationPaused,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, readMemoryById, getIdentityAll, villageRegistryGet, villageRegistrySet, stripVillageRegistry, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listUnresolvedAttributions,
@@ -5067,6 +5067,10 @@ app.put('/api/settings', async (req, res) => {
   if (identityBudgetTokens(merged) !== identityBudgetTokens(prior ?? {})) {
     setIdentityBudget(identityBudgetTokens(merged)).catch(() => {});
   }
+  // …and the pause on its automatic identity cleanup, the same way.
+  if ((merged.identityGraduationPaused === true) !== (prior?.identityGraduationPaused === true)) {
+    setIdentityGraduationPaused(merged.identityGraduationPaused === true).catch(() => {});
+  }
 
   return res.json({ ok: true });
 });
@@ -5927,6 +5931,9 @@ async function runPhylacteryMaintenance() {
   // follows every Settings change). Best-effort; graduation falls back to the
   // 6k default if this never lands.
   setIdentityBudget(identityBudgetTokens(readSettingsSync())).catch(() => {});
+  // …and whether my human has the automatic identity cleanup paused. Lands well
+  // before the lifecycle's first pass (deferred one 5-minute tick).
+  setIdentityGraduationPaused(readSettingsSync().identityGraduationPaused === true).catch(() => {});
   // 1. Health first: it is the cheapest call and it decides whether the
   // embedding backfill is even worth running. A silently-dead embedder is
   // what floods the consent queue with duplicate facts, so it must be

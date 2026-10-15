@@ -49,7 +49,7 @@ import {
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
-  updateMemory, deleteMemory, rewriteIdentitySection,
+  updateMemory, deleteMemory, rewriteIdentitySection, removeIdentityText, deleteIdentitySection,
   listMemories, readMemory, readMemoryById, moveMemoryDate, updateMemoryById, deleteMemoryById,
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
@@ -1450,7 +1450,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I add to my identity files. They ride in front of me every turn, in every room — group chats included — so they\'re for who I am (self: my_identity.md, my_persona.md, my_personhood.md, my_wants.md, my_boundaries.md), the shape of us (relationship: relationship_notes.md), and only the core of who {{user}} is (ward: their name, pronouns, how they like to be addressed). Anything that only matters sometimes goes to save_memory as a standing fact instead: preferences, patterns, situational notes, and care details about {{user}} (what helps, meds, triggers, who to call — as standing facts those stay in front of me in our own conversations without reaching group chats). Before adding I check I don\'t already hold it. I APPEND when a fact adds to what\'s there; rewrite_identity_section when a section\'s stale, misleading, or sprawling, to correct and tighten it. If a category is over the budget my human set, the result tells me.',
+      description: 'I add to my identity files. They ride in front of me every turn, in every room — group chats included — so they\'re for who I am (self: my_identity.md, my_persona.md, my_personhood.md, my_wants.md, my_boundaries.md), the shape of us (relationship: relationship_notes.md), and only the core of who {{user}} is (ward: their name, pronouns, how they like to be addressed). Anything that only matters sometimes goes to save_memory as a standing fact instead: preferences, patterns, situational notes, and care details about {{user}} (what helps, meds, triggers, who to call — as standing facts those stay in front of me in our own conversations without reaching group chats). Before adding I check I don\'t already hold it. This only ADDS; it can\'t take anything out. To move a line out of identity I save it as a standing fact, then remove_from_identity cuts that line (or delete_identity_section a whole section). rewrite_identity_section is for a section that\'s stale, misleading, or sprawling, to correct and tighten it. If a category is over the budget my human set, the result tells me.',
       parameters: {
         type: 'object',
         properties: {
@@ -1704,7 +1704,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'rewrite_identity_section',
-      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. It only works on a section under a markdown heading (## Heading); if the file has no such heading, nothing changes and the result lists the headings it does have. For NEW facts that just need to land somewhere, I use update_identity (append). To cut a line or a passage, remove_from_identity is simpler.',
       parameters: {
         type: 'object',
         properties: {
@@ -1714,6 +1714,38 @@ export const BUILTIN_TOOLS = [
           content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
         },
         required: ['category', 'filename', 'section', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remove_from_identity',
+      description: 'I cut a passage out of one of my identity files: a line I\'ve moved to a standing fact, a note that\'s gone stale, a duplicate. I quote it as the file has it (a bold label like **Pets:** included); it has to be in exactly one place, or nothing changes and the result says why. Works in any file, with headings or without. A snapshot is kept first. Moving a line out is two steps: save_memory with the standing fact, then this.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'The file, e.g. user_preferences.md.' },
+          passage:  { type: 'string', description: 'The exact text to cut, copied from the file: a whole line, several lines, or part of a line.' },
+        },
+        required: ['category', 'filename', 'passage'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_identity_section',
+      description: 'I remove a whole section (its ## heading and everything under it) from one of my identity files, when all of it has moved to standing facts or no longer fits. A snapshot is kept first. For a single line I use remove_from_identity instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'The file, e.g. user_preferences.md.' },
+          section:  { type: 'string', description: 'The markdown heading of the section to remove (without leading #s).' },
+        },
+        required: ['category', 'filename', 'section'],
       },
     },
   },
@@ -3753,10 +3785,41 @@ export const TOOL_EXECUTORS = {
     if (typeof content !== 'string') return 'Failed to rewrite section: content required';
     if (content.length > 16384) return 'Failed to rewrite section: content exceeds 16 KB limit';
     try {
-      const result = await rewriteIdentitySection({ category, filename, section, content });
-      if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'phylactery unavailable'}`;
+      // createIfMissing:false — a heading that isn't there is refused with the
+      // real ones, so a misnamed section can't quietly grow the file while I
+      // believe I rewrote it.
+      const result = await rewriteIdentitySection({ category, filename, section, content, createIfMissing: false });
+      if (!result.ok) {
+        const heads = Array.isArray(result.sections) ? result.sections : [];
+        const hint = heads.length
+          ? ` Its headings are: ${heads.map(h => `"${h}"`).join(', ')}.`
+          : (result.sections ? ' It has no ## headings, so I cut lines with remove_from_identity instead.' : '');
+        return `Nothing rewritten: ${result.error ?? 'phylactery unavailable'}.${hint}`;
+      }
       return quietOk(`Section "${section}" of ${category}/${filename} rewritten.`);
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
+  },
+
+  remove_from_identity: async ({ category, filename, passage }) => {
+    if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Nothing removed: invalid category.';
+    if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Nothing removed: invalid filename.';
+    if (typeof passage !== 'string' || !passage.trim()) return 'Nothing removed: I need the passage to cut, quoted from the file.';
+    try {
+      const result = await removeIdentityText({ category, filename, passage });
+      if (!result.ok) return `Nothing removed: ${result.error ?? 'phylactery unavailable'}.`;
+      return quietOk(`Cut ${result.removedChars} characters from ${category}/${filename} (now ${result.chars}).`);
+    } catch (err) { return `Nothing removed: ${err.message}`; }
+  },
+
+  delete_identity_section: async ({ category, filename, section }) => {
+    if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Nothing deleted: invalid category.';
+    if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Nothing deleted: invalid filename.';
+    if (typeof section !== 'string' || !section.trim()) return 'Nothing deleted: I need the section heading.';
+    try {
+      const result = await deleteIdentitySection({ category, filename, section: section.trim() });
+      if (!result.ok) return `Nothing deleted: ${result.error ?? 'phylactery unavailable'}.`;
+      return quietOk(`Section "${section.trim()}" removed from ${category}/${filename}.`);
+    } catch (err) { return `Nothing deleted: ${err.message}`; }
   },
 
   find_graph_node: async ({ query, type, limit }) => {

@@ -6,6 +6,21 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### Web chat retries a turn whose tools already ran
+
+When a streamed web turn fails after tool calls have run, `doStreamingRequest`
+(`public/app.js`) rolls back the tool blocks in the page, then retries the
+whole turn on the same connection (`maxEmptyRetries`) or the next fallback
+connection. The tools already ran on the server, so a retry repeats every write,
+and a fallback can hand the turn to a connection that isn't the Familiar's
+usual one. The rolled-back tool record is also gone from the Familiar's own
+history, so on its next turn it can't know what it did (RULE B). Seen live: an
+11-minute turn ended in "Failed to fetch" after ten memory writes and two
+identity edits; the page showed none of them. The cause of the dropped
+connection itself is still unknown (the server didn't restart). Direction: once
+any tool result has streamed, never retry or fall back. Commit what ran, with a
+note that the turn was cut off, and treat this together with the entry below.
+
 ### Web chat loses my human's message when a turn doesn't finish
 
 `sendMessage` in `public/app.js` only pushes the human's message into

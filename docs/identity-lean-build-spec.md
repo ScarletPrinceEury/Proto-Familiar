@@ -94,6 +94,44 @@ rule.
   reports about my human's care is exactly what triage should hear. Don't
   filter villager-sourced facts out of `list_care_facts` without the ward.
 
+## Follow-up: the Familiar can take things out of identity (0.14.72)
+
+Also from the first identity review. The Familiar could save a line as a
+standing fact but had no reliable way to take the line out of identity:
+
+- `update_identity` only appends. "Moving" a line out added a pointer under it.
+- `rewrite_identity_section` only reaches `## ` sections. Two of the ward files
+  had text above their first heading or no headings at all. On a heading that
+  didn't match, Phylactery appended a new section, and the thalamus wrapper
+  read Phylactery's reply as JSON, failed, and returned `{ok:true}`. So a
+  refusal, or an accidental append, read to the Familiar as "rewritten".
+- There was no Familiar tool to delete a section or cut a line.
+- The automatic cleanup (graduation) couldn't be paused. Holding the budget at
+  30000 only stopped budget-triggered audits; the 30-day rule still trimmed a
+  file mid-review, after the Familiar had been told cleanup was on hold.
+
+What changed:
+
+- **`remove_from_identity`** (Phylactery `identity_remove_text`) cuts one quoted
+  passage, in any file, with headings or without. Exact match first, then
+  whitespace-flexible (never different words). Missing or repeated → `{ok:false}`
+  and nothing changes. A whole line takes its line break with it. Snapshot first.
+- **`delete_identity_section`** exposes the existing `identity_delete_section`.
+- **`rewrite_identity_section`** passes `create_if_missing:false` from the
+  Familiar's tool: a missing heading is refused with the file's real headings
+  (or a pointer to `remove_from_identity` when it has none). Other MCP clients
+  keep the old append-on-missing default. The tool now returns `{ok, replaced}`,
+  and thalamus inspects it. A backslash in the new body is kept as text.
+- **`update_identity`'s description** says it only adds and names the two-step
+  move (save_memory, then remove_from_identity). The over-budget note says the
+  same. Both new tools are in the `memory-edit` module, whose trigger now
+  includes "identity file(s)/section(s)" and "standing fact(s)".
+- **"Pause automatic identity cleanup"** (`identityGraduationPaused`, next to the
+  budget field) → `identity_graduation_pause` → Phylactery meta
+  `identity_graduation_paused`; `run_graduation_audit` skips every file while
+  it's set. Hard env switch `PHYLACTERY_GRADUATION_DISABLED=1`. The budget hint
+  no longer claims 30000 holds the cleanup.
+
 ## Surface matrix (RULE C — the care block)
 
 | Surface | Care facts |

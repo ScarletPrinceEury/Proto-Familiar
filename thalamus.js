@@ -3195,6 +3195,13 @@ export async function setIdentityBudget(tokens) {
   catch (err) { console.warn('[thalamus] setIdentityBudget failed:', err?.message ?? err); return { ok: false }; }
 }
 
+// My human's "pause automatic identity cleanup" → Phylactery's graduation pass,
+// which then leaves every identity file alone (budget and 30-day rule alike).
+export async function setIdentityGraduationPaused(paused) {
+  try { return await callTool('identity_graduation_pause', { paused: paused === true }); }
+  catch (err) { console.warn('[thalamus] setIdentityGraduationPaused failed:', err?.message ?? err); return { ok: false }; }
+}
+
 /**
  * Mark ward-block graduation mentions as surfaced. Invalidates the cache.
  * @returns {Promise<{ ok: boolean, acknowledged?: number }>}
@@ -3775,16 +3782,48 @@ export async function deleteMemory({ granularity, date, instanceId, slug }) {
   }
 }
 
-export async function rewriteIdentitySection({ category, filename, section, content, instanceId = PROTO_INSTANCE_ID }) {
+// The tool returns {ok, replaced} / {ok:false, error, sections}; inspected here,
+// since a plain transport success used to read every refusal as a rewrite.
+// createIfMissing:false (my own tool) means a heading that isn't there is
+// refused with the file's real headings, never quietly appended.
+export async function rewriteIdentitySection({ category, filename, section, content, createIfMissing, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`identity_rewrite_section ${category}/${filename}#${section}`);
   try {
-    const result = await callTool('identity_rewrite_section', { category, filename, section, content, instanceId });
+    const result = await callTool('identity_rewrite_section', {
+      category, filename, section, content, instanceId,
+      ...(createIfMissing === false ? { create_if_missing: false } : {}),
+    });
+    if (result && result.ok === false) {
+      console.error(`[thalamus] rewriteIdentitySection rejected for ${category}/${filename} § ${section}: ${result.error}`);
+      return { ok: false, error: result.error ?? 'rewrite_section failed', sections: result.sections ?? [] };
+    }
     console.log(`[thalamus] rewriteIdentitySection ${category}/${filename} § ${section}`);
-    return { ok: true, result };
+    return { ok: true, replaced: result?.replaced !== false, result };
   } catch (err) {
     console.error('[thalamus] rewriteIdentitySection failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Cut one quoted passage out of an identity file — how a line I've moved to a
+// standing fact leaves identity, in files with or without headings. Phylactery
+// refuses a passage that's missing or in more than one place.
+export async function removeIdentityText({ category, filename, passage, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  await autoSnapshot(`identity_remove_text ${category}/${filename}`);
+  try {
+    const result = await callTool('identity_remove_text', { category, filename, passage, instanceId });
+    if (!result || result.ok !== true) {
+      console.error(`[thalamus] removeIdentityText rejected for ${category}/${filename}: ${result?.error}`);
+      return { ok: false, error: result?.error ?? 'remove_text failed' };
+    }
+    console.log(`[thalamus] removeIdentityText ${category}/${filename} (-${result.removed_chars} chars)`);
+    return { ok: true, removedChars: result.removed_chars, chars: result.chars };
+  } catch (err) {
+    console.error('[thalamus] removeIdentityText failed:', err.message);
     return { ok: false, error: err.message };
   }
 }

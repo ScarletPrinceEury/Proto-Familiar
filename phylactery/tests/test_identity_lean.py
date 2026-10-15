@@ -185,3 +185,20 @@ def test_care_facts_list_reads_flagged_and_unflagged_care_facts_crisis_first(con
     items = mem.list_care_facts(conn=conn)
     assert [i["id"] for i in items] == ["m2", "m3", "m1"], "support-map, then health, then the rest"
     assert mem.list_care_facts(limit=1, conn=conn)[0]["id"] == "m2"
+
+
+def test_a_paused_cleanup_leaves_every_file_alone_budget_and_age_alike(conn, monkeypatch):
+    """0.14.72: my human can pause the automatic identity cleanup (e.g. while we go
+    through my files together). The budget hold alone never covered the 30-day rule."""
+    old = "2026-08-01T00:00:00+00:00"   # well past the 30-day dwell
+    _file(conn, "r1", "relationship", "relationship_dynamics.md", "x " * 5000, updated=old)
+    assert grad.eligible_identity_files(conn, NOW), "eligible when not paused"
+    asked = []
+    llm = lambda cfg, prompt: asked.append(prompt) or "{}"
+    assert grad.set_graduation_paused(True, conn=conn) == {"ok": True, "paused": True}
+    out = grad.run_graduation_audit(conn, {}, llm, NOW)
+    assert out.get("skipped") == "paused" and out["graduated"] == 0 and not asked
+    grad.set_graduation_paused(False, conn=conn)
+    assert not grad.graduation_paused(conn)
+    monkeypatch.setenv("PHYLACTERY_GRADUATION_DISABLED", "1")
+    assert grad.graduation_paused(conn), "the hard env off-switch"

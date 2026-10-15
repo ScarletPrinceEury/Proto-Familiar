@@ -36,6 +36,7 @@ in noticing (memory.list_care_facts) — and never in a group chat.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -99,6 +100,36 @@ def set_identity_budget_tokens(tokens, conn: sqlite3.Connection | None = None) -
         with conn:
             conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", (_BUDGET_META_KEY, str(value)))
         return {"ok": True, "tokens": value}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+_PAUSED_META_KEY = "identity_graduation_paused"
+
+
+def graduation_paused(conn: sqlite3.Connection) -> bool:
+    """True while my human has the automatic identity cleanup paused (their
+    Settings, pushed via identity_graduation_pause; e.g. while they and I go
+    through my files ourselves), or PHYLACTERY_GRADUATION_DISABLED=1 is set."""
+    if os.environ.get("PHYLACTERY_GRADUATION_DISABLED") == "1":
+        return True
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (_PAUSED_META_KEY,)).fetchone()
+    except sqlite3.OperationalError:
+        return False   # no meta table (minimal/older schema)
+    return bool(row) and row["value"] == "1"
+
+
+def set_graduation_paused(paused, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        value = "1" if paused is True or str(paused).lower() in ("1", "true") else "0"
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", (_PAUSED_META_KEY, value))
+        return {"ok": True, "paused": value == "1"}
     finally:
         if own_conn:
             conn.close()
@@ -318,6 +349,8 @@ def run_graduation_audit(
     from phylactery.memory import create as memory_create
 
     now = now or datetime.now(timezone.utc)
+    if graduation_paused(conn):
+        return {"ok": True, "graduated": 0, "reviewed": 0, "skipped": "paused"}
     candidates = eligible_identity_files(conn, now)
     if not candidates:
         return {"ok": True, "graduated": 0, "reviewed": 0}

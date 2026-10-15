@@ -255,6 +255,7 @@ const state = {
   phylacteryLlmMaxTokens:  null, // memory consolidation output cap; null → engine default (8000)
   phylacteryLlmTimeoutS:   null, // memory consolidation per-call timeout (s); null → engine default (240)
   identityBudgetTokens:    null, // identity riding every turn (tokens); null → 6000 (identity-budget.js)
+  identityGraduationPaused: false, // hold the automatic identity cleanup (e.g. while reviewing files together)
   // ── Prompt-cache tuning ──────────────────────────────────
   // How many messages from the end of the conversation the dynamic
   // thalamus block gets injected at. Static identity stays at the
@@ -626,7 +627,7 @@ const SERVER_SYNCED_KEYS = [
   'providerApiKeys',
   'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend', 'pageWatchEnabled',
   'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
-  'phylacteryConnectionId', 'phylacteryLlmMaxTokens', 'phylacteryLlmTimeoutS', 'identityBudgetTokens',
+  'phylacteryConnectionId', 'phylacteryLlmMaxTokens', 'phylacteryLlmTimeoutS', 'identityBudgetTokens', 'identityGraduationPaused',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'ponderThreadChance', 'followupsEnabled',
   'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
@@ -4547,6 +4548,7 @@ function readSettingsFromUI() {
     // Blank → the default (6000); the server clamps to [2000, 30000].
     state.identityBudgetTokens = raw === '' ? null : (Number.isFinite(n) ? Math.max(2000, Math.min(30000, n)) : null);
   }
+  if ($('identity-graduation-paused')) state.identityGraduationPaused = $('identity-graduation-paused').checked;
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
@@ -4766,6 +4768,7 @@ function writeSettingsToUI() {
   if ($('phylactery-llm-max-tokens')) setIfNotFocused($('phylactery-llm-max-tokens'), 'value', state.phylacteryLlmMaxTokens ?? '');
   if ($('phylactery-llm-timeout'))    setIfNotFocused($('phylactery-llm-timeout'),    'value', state.phylacteryLlmTimeoutS ?? '');
   if ($('identity-budget-tokens'))    setIfNotFocused($('identity-budget-tokens'),    'value', state.identityBudgetTokens ?? '');
+  if ($('identity-graduation-paused')) $('identity-graduation-paused').checked = state.identityGraduationPaused === true;
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
@@ -6276,7 +6279,7 @@ function init() {
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'organ-status-block',
     'memory-sweep-toggle',
-    'phylactery-llm-max-tokens', 'phylactery-llm-timeout', 'identity-budget-tokens',
+    'phylactery-llm-max-tokens', 'phylactery-llm-timeout', 'identity-budget-tokens', 'identity-graduation-paused',
     'mood-visible-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
