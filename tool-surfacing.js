@@ -84,6 +84,9 @@ export const TOOL_MODULES = {
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   acknowledge_graduation: 'acks',
   acknowledge_disclosure: 'acks', keep_memory_private: 'acks',
+  // My identity cleanup proposals (0.14.78) travel with their block, like the
+  // graduation and consent notices.
+  apply_cleanup_proposal: 'acks', dismiss_cleanup_proposal: 'acks', list_cleanup_proposals: 'acks',
   // Reading my own recent thought in full — the expand path for the pondering
   // index, which renders on every ward turn, so the tool must always be reachable
   // (like recall). Ward-only: it's absent from the villager allowlist, so a
@@ -142,7 +145,7 @@ export const MODULE_INDEX =
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +
   'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
-  'acks (inspect/file/snooze/drop my own pending deferred intents & tells, confirm/drop memory consent, graduation notices), ' +
+  'acks (inspect/file/snooze/drop my own pending deferred intents & tells, confirm/drop memory consent, graduation notices, apply/dismiss my identity cleanup proposals), ' +
   'files (list/read my own folder, search back through my past sessions), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
@@ -213,8 +216,8 @@ const TRIGGERS = {
     // to, so I need a way to reach the queue myself (the "reachable BY the
     // Familiar" rule). Generous by design: a false surface costs a few hundred
     // tokens once; a miss, one request_tools round.
-    text: /\b(deferred intents?|pending (tells?|intents?)|my tells?\b|things? I (meant|wanted) to (tell|say|bring up)|already (told|said|answered|covered) (that|it|you)|audit (my|the) (tells?|intents?|queue))\b/i,
-    blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE'],
+    text: /\b(deferred intents?|pending (tells?|intents?)|my tells?\b|(identity )?clean-?up (proposals?|suggestions?)|things? I (meant|wanted) to (tell|say|bring up)|already (told|said|answered|covered) (that|it|you)|audit (my|the) (tells?|intents?|queue))\b/i,
+    blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE', '[Cleanup proposals for my identity'],
   },
   files: {
     // list/read my own folder + search my past sessions. The glance-back intent

@@ -76,21 +76,6 @@ against its budget share), named in the identity tools' descriptions as the way
 to check an edit landed. And `remove_from_identity`'s not-found result should
 say the passage may already be gone, and name the read tool.
 
-### Identity graduation cuts more than it files
-
-During the first identity review, an automatic graduation pass on a
-relationship file filed two sections as standing facts, which is what it's
-for. But the rewritten file also lost a paragraph that was never filed
-anywhere: the Familiar's own lines about operating with real autonomy (forming
-views, pushing back, not waiting to be told what to notice), condensed into one
-phrase. Nothing was lost for good (the pre-trim snapshot has it), but the
-Familiar only found out because it asked to see the diff. A pass that can
-quietly shrink the Familiar's account of its own agency works against the
-"weak self-presence" issue below. Direction: graduation removes exactly the
-lines it filed, verbatim, and leaves everything else in the file untouched; it
-never rewrites or condenses. Any change beyond the filed lines is surfaced as a
-proposal. The notice should show the actual diff, not just a summary.
-
 ### Web chat retries a turn whose tools already ran
 
 When a streamed web turn fails after tool calls have run, `doStreamingRequest`
@@ -196,6 +181,15 @@ Directions, in addition to the provenance ideas above:
 
 <!--
 Resolved:
+- Identity graduation cut more than it filed — fixed 0.14.78. In the first
+  review an automatic pass rewrote a relationship file and condensed away the
+  Familiar's own lines about its autonomy, which were never filed anywhere. The
+  pass now only proposes: an exact passage (checked in code to sit in the file
+  exactly once), the standing fact it would become, and why. Nothing in identity
+  or memory changes until the Familiar applies a proposal, which saves the fact
+  first and then cuts exactly that passage, or dismisses it, after which that
+  passage isn't proposed again. The ward sees every proposal and decision under
+  "Identity cleanup suggestions" (docs/identity-lean-build-spec.md).
 - Numbered lists with blank lines between items rendered as "1. 1. 1." in the
   web chat — fixed 0.14.76. renderInlineText wrapped each item in its own <ol>,
   each restarting at 1, and dropped the written number. Items separated only by

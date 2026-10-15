@@ -61,6 +61,14 @@ setting) to the saved-connection cards, and find the "Reasoning effort" select
 on the card marked PRIMARY. Direction: show it in the active-connection block,
 since that's what people read as "the current setup".
 
+### Similar connection names are easy to mix up
+
+With two connections whose names differ by one word (on different providers),
+it's easy to set reasoning effort on one and believe the other was set too. The
+cards show the model id in small text, but nothing makes the provider or the
+primary one stand out when scanning. Direction: show provider and model on each
+card's title line, and keep the primary card pinned at the top.
+
 ### "Topics" look like separate conversations, but they aren't sessions
 
 The **Topic** control above the composer reads like a way to open a new

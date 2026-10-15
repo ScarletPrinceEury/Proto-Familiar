@@ -29,7 +29,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,7 +37,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Parse `@mcp.tool()`-decorated Python defs → { toolName: {params:Set, required:Set} }. */
 function parsePythonTools(globPattern) {
-  const files = execSync(`git ls-files '${globPattern}'`, { cwd: ROOT, encoding: 'utf8' })
+  // No shell: cmd.exe keeps single quotes literally, so `git ls-files '<glob>'`
+  // matched nothing on Windows and every tool read as unknown.
+  const files = execFileSync('git', ['ls-files', globPattern], { cwd: ROOT, encoding: 'utf8' })
     .split('\n').filter(Boolean);
   const tools = {};
   for (const rel of files) {

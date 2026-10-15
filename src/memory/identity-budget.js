@@ -7,7 +7,7 @@
  *   • update_identity's result tells me when a category is over its share, and
  *     what to do about it — a nudge, never a refusal (a refusal could block a
  *     fact that matters);
- *   • Phylactery's graduation pass trims over-budget files toward it (pushed
+ *   • Phylactery's graduation pass proposes trims for over-budget files (pushed
  *     there via identity_budget_set). The split and clamps below MIRROR
  *     phylactery/src/phylactery/graduation.py — a test pins the two together.
  */

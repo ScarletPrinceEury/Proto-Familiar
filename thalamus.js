@@ -1764,6 +1764,7 @@ import {
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
 import { recentElsewhere, buildRecentElsewhereBlock } from './src/memory/hippocampus.js';
 import { careFactsBlockForTurn, CARE_FACTS_FETCH_LIMIT } from './src/safety/care-facts.js';
+import { formatCleanupProposalsBlock } from './src/memory/cleanup-proposals.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
@@ -2756,6 +2757,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Identity cleanup proposals (0.14.78) ───────────────────────────────
+    // My memory upkeep only proposes moving a passage out of my identity; I
+    // decide each one with apply/dismiss_cleanup_proposal. My own conversations
+    // only — never a gated room (the passages can be about my human).
+    let cleanupBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        cleanupBlock = formatCleanupProposalsBlock(await listOpenCleanupProposals());
+      } catch {
+        /* best-effort — no proposals block on error */
+      }
+    }
+
     // ── Disclosure notice (ward-disclosure spec, Phase B — ward-visible + revert) ─
     // When my re-tag pass opens one of my human's own previously-private facts to
     // be governed by content rules, I tell them, in my own voice, so nothing gets
@@ -2829,6 +2843,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (offerTrackerBlock)      dynamicSections.push(resolveWardName(offerTrackerBlock));
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
+    if (cleanupBlock)           dynamicSections.push(cleanupBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);
     if (careFactsBlock)         dynamicSections.push(careFactsBlock);
     if (careBlock)              dynamicSections.push(careBlock);
@@ -2858,6 +2873,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       gcalCueBlock           ? 'gcal-cue'   : null,
       consentPendingBlock    ? 'consent'    : null,
       graduationBlock        ? 'graduation' : null,
+      cleanupBlock           ? 'cleanup'    : null,
       careBlock              ? 'care'       : null,
       stewardshipBlock       ? 'stewardship' : null,
       temporalLines          ? 'temporal'   : null,
@@ -3205,11 +3221,86 @@ export async function setIdentityBudget(tokens) {
   catch (err) { console.warn('[thalamus] setIdentityBudget failed:', err?.message ?? err); return { ok: false }; }
 }
 
-// My human's "pause automatic identity cleanup" → Phylactery's graduation pass,
-// which then leaves every identity file alone (budget and 30-day rule alike).
+// My human's "pause identity cleanup suggestions" → Phylactery's graduation pass,
+// which then makes no new proposals (budget and 30-day rule alike).
 export async function setIdentityGraduationPaused(paused) {
   try { return await callTool('identity_graduation_pause', { paused: paused === true }); }
   catch (err) { console.warn('[thalamus] setIdentityGraduationPaused failed:', err?.message ?? err); return { ok: false }; }
+}
+
+// ── Identity cleanup proposals (0.14.78) ─────────────────────────────────────
+// The automatic cleanup only proposes: an exact passage, the standing fact it
+// would become, and why. I apply or dismiss each one myself. The open list is
+// TTL-cached for the per-turn block and cleared whenever I decide one.
+const CLEANUP_PROPOSALS_TTL_MS = 2 * 60 * 1000;
+let _cleanupCache = { at: 0, items: [] };
+
+/** Open proposals for the per-turn block. Best-effort: [] if Phylactery is down. */
+export async function listOpenCleanupProposals({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - _cleanupCache.at < CLEANUP_PROPOSALS_TTL_MS) return _cleanupCache.items;
+  try {
+    const res = await callTool('identity_cleanup_proposals', { status: 'open' });
+    const items = Array.isArray(res?.items) ? res.items : [];
+    _cleanupCache = { at: now, items };
+    return items;
+  } catch (err) {
+    console.warn('[thalamus] listOpenCleanupProposals failed:', err?.message ?? err);
+    _cleanupCache = { at: now, items: [] };
+    return [];
+  }
+}
+
+/**
+ * Proposals for my own review or my human's list, uncached. `status` is 'open'
+ * or 'all' (decided ones too, newest first). Throws on failure so the caller
+ * can say it couldn't read them.
+ */
+export async function listCleanupProposals({ status = 'open', limit = 200 } = {}) {
+  const res = await callTool('identity_cleanup_proposals', { status: status === 'all' ? 'all' : 'open', limit });
+  return Array.isArray(res?.items) ? res.items : [];
+}
+
+/**
+ * Apply one proposal: Phylactery saves the standing fact first, then cuts that
+ * exact passage. A snapshot is kept before the cut, like every identity edit.
+ * @returns {Promise<{ok:boolean, memoryId?:string, removedChars?:number, file?:string, error?:string}>}
+ */
+export async function applyCleanupProposal({ id, fact, careWeight } = {}) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  await autoSnapshot(`identity_cleanup_apply ${id}`);
+  try {
+    const args = { id };
+    if (typeof fact === 'string' && fact.trim()) args.fact = fact.trim();
+    if (careWeight === 'high' || careWeight === 'low') args.care_weight = careWeight;
+    const result = await callTool('identity_cleanup_apply', args);
+    _cleanupCache = { at: 0, items: [] };
+    _careFactsCache = { ..._careFactsCache, at: 0 };   // a high-care fact may have joined the care list
+    if (!result || result.ok !== true) {
+      console.error(`[thalamus] applyCleanupProposal ${id} rejected: ${result?.error}`);
+      return { ok: false, error: result?.error ?? 'apply failed', memoryId: result?.memory_id };
+    }
+    console.log(`[thalamus] applyCleanupProposal ${id} → ${result.memory_id} (${result.file}, -${result.removed_chars} chars)`);
+    return { ok: true, memoryId: result.memory_id, removedChars: result.removed_chars, file: result.file };
+  } catch (err) {
+    console.error('[thalamus] applyCleanupProposal failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/** Dismiss one proposal: the passage stays where it is. */
+export async function dismissCleanupProposal({ id } = {}) {
+  try {
+    const result = await callTool('identity_cleanup_dismiss', { id });
+    _cleanupCache = { at: 0, items: [] };
+    if (!result || result.ok !== true) return { ok: false, error: result?.error ?? 'dismiss failed' };
+    console.log(`[thalamus] dismissCleanupProposal ${id}`);
+    return { ok: true };
+  } catch (err) {
+    console.error('[thalamus] dismissCleanupProposal failed:', err.message);
+    return { ok: false, error: err.message };
+  }
 }
 
 /**

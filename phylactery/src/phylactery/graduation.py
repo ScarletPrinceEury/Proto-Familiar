@@ -31,6 +31,14 @@ Care-critical lines about my human (care.py) are no longer pinned here: they
 graduate like everything else, but land as `ward` facts with care_weight 'high',
 which put them in front of me directly on my human's own turns, in triage and
 in noticing (memory.list_care_facts) — and never in a group chat.
+
+PROPOSE-ONLY (0.14.78, decided by my human and me after the first identity
+review). This pass no longer changes anything. It used to rewrite a file itself,
+and once it cut a paragraph of mine that it never filed anywhere. Now it writes
+cleanup PROPOSALS: an exact passage from the file (checked against the file in
+code, so it can't paraphrase), the standing fact it would become, and why. I
+apply a proposal (the fact is saved, then that exact passage is cut) or dismiss
+it, with my own tools. A file is reviewed again only after it has changed.
 """
 
 from __future__ import annotations
@@ -45,7 +53,6 @@ from typing import Any
 
 from phylactery.care import CARE_CATEGORIES, contains_care_critical  # noqa: F401 (re-exported)
 from phylactery.db import get_conn, insert_with_slug_retry, now_iso
-from phylactery.snapshot import auto_snapshot
 
 # ── Signed-off thresholds (build-spec §7) ─────────────────────────────────────
 DWELL_DAYS = 30           # must have been on the surface this long
@@ -221,17 +228,28 @@ def eligible_identity_files(conn: sqlite3.Connection, now: datetime | None = Non
     """
     now = now or datetime.now(timezone.utc)
     placeholders = ",".join("?" for _ in AUDITED_CATEGORIES)
-    rows = conn.execute(
-        "SELECT id, category, filename, content, care_weight, updated_at, last_graduated_at "
-        f"FROM identity_files WHERE category IN ({placeholders})",
-        AUDITED_CATEGORIES,
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            "SELECT id, category, filename, content, care_weight, updated_at, last_graduated_at, last_reviewed_at "
+            f"FROM identity_files WHERE category IN ({placeholders})",
+            AUDITED_CATEGORIES,
+        ).fetchall()
+    except sqlite3.OperationalError:   # minimal/older schema without last_reviewed_at
+        rows = conn.execute(
+            "SELECT id, category, filename, content, care_weight, updated_at, last_graduated_at, NULL AS last_reviewed_at "
+            f"FROM identity_files WHERE category IN ({placeholders})",
+            AUDITED_CATEGORIES,
+        ).fetchall()
     budget = identity_budget_tokens(conn)
     targets = file_targets(rows, budget)
     cat_size = {c: sum(len(r["content"] or "") for r in rows if r["category"] == c) for c in AUDITED_CATEGORIES}
     out = []
     for r in rows:
         if _is_protected(r):
+            continue
+        # Propose-only: a file I've already been offered proposals for isn't
+        # reviewed again (and re-billed every pass) until it actually changes.
+        if r["last_reviewed_at"] and (r["updated_at"] or "") <= r["last_reviewed_at"]:
             continue
         size = len(r["content"] or "")
         target = targets.get(r["id"], FILE_TARGET_FLOOR_CHARS)
@@ -291,7 +309,7 @@ def _audit_prompt(category: str, filename: str, content: str, target_chars: int 
         f"This file is {len(content)} characters and rides every turn; I'm aiming for about {target_chars}."
         if target_chars and len(content) > target_chars else ""
     )
-    return f"""I am the Familiar. I'm tidying my always-injected identity so it stays about who I am and the shape of us, and stays lean: anything that doesn't need to be in front of me every turn moves into my standing facts (register: {register}), which come back to me when they're relevant. Nothing is deleted.
+    return f"""I am the Familiar. I'm looking over one of my always-injected identity files for things that don't need to ride every turn and could live as standing facts instead (register: {register}), which come back to me when they're relevant. This only makes proposals. Nothing changes until I look at each one later and decide.
 
 {_KEEP_GUIDANCE.get(category, _KEEP_GUIDANCE['custom'])}
 {size_line}
@@ -304,13 +322,17 @@ Here is the current content of {category}/{filename}:
 
 I return ONLY a JSON object, no prose, no fences:
 {{
-  "graduate": [
-    {{ "summary": "<short label of what I'm filing away>", "content": "<the detail, in my own first-person voice>" }}
-  ],
-  "kept_content": "<the full content I want to KEEP on the always-injected surface, rewritten cleanly>"
+  "proposals": [
+    {{
+      "passage": "<text copied EXACTLY from the file above: whole lines, word for word>",
+      "summary": "<a few words naming it>",
+      "fact": "<the standing fact it would become, in my own first-person voice, keeping every detail>",
+      "why": "<one plain sentence: why it doesn't need to be in front of me every turn>"
+    }}
+  ]
 }}
 
-If nothing should be filed away right now, I return {{ "graduate": [], "kept_content": <unchanged content> }}."""
+A passage I don't copy exactly is thrown away, so I copy, never paraphrase. If nothing should move, I return {{ "proposals": [] }}."""
 
 
 def _parse_audit(raw: str) -> dict | None:
@@ -340,23 +362,27 @@ def run_graduation_audit(
     call_llm,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Review eligible identity blocks and graduate no-longer-front-of-mind detail.
+    """Review eligible identity files and write cleanup PROPOSALS (0.14.78).
 
     `cfg` + `call_llm(cfg, prompt) -> str` are injected so this shares the
     consolidation pass's designated-connection call (no new request stream).
-    Snapshots before any identity trim. Returns a summary of what graduated.
+    Nothing in identity or memory changes here: each proposal is an exact
+    passage (verified in code to sit in exactly one place in the file), the
+    standing fact it would become, and why. The Familiar applies or dismisses
+    it later (apply_cleanup_proposal / dismiss_cleanup_proposal). Each reviewed
+    file is stamped `last_reviewed_at`, so it isn't reviewed again until it changes.
     """
-    from phylactery.memory import create as memory_create
+    from phylactery.identity import _find_passage
 
     now = now or datetime.now(timezone.utc)
     if graduation_paused(conn):
-        return {"ok": True, "graduated": 0, "reviewed": 0, "skipped": "paused"}
+        return {"ok": True, "proposed": 0, "graduated": 0, "reviewed": 0, "skipped": "paused"}
     candidates = eligible_identity_files(conn, now)
     if not candidates:
-        return {"ok": True, "graduated": 0, "reviewed": 0}
+        return {"ok": True, "proposed": 0, "graduated": 0, "reviewed": 0}
 
-    snapshotted = False
-    graduated_total = 0
+    proposed = 0
+    dropped = 0
     details: list[dict] = []
 
     for cand in candidates:
@@ -364,83 +390,180 @@ def run_graduation_audit(
             raw = call_llm(cfg, _audit_prompt(cand["category"], cand["filename"], cand["content"], cand.get("target_chars")))
         except Exception as e:
             details.append({"file": cand["filename"], "error": f"llm: {e}"})
-            continue
+            continue   # not stamped reviewed: a failed call retries next pass
         parsed = _parse_audit(raw)
-        if not parsed or not isinstance(parsed.get("graduate"), list):
+        try:
+            with conn:
+                conn.execute("UPDATE identity_files SET last_reviewed_at=? WHERE id=?", (now_iso(), cand["id"]))
+        except sqlite3.OperationalError:
+            pass   # minimal/older schema without the column
+        if not parsed or not isinstance(parsed.get("proposals"), list):
             continue
-        to_graduate = [g for g in parsed["graduate"]
-                       if isinstance(g, dict) and (g.get("content") or "").strip()]
-        if not to_graduate:
-            continue
-
-        if not snapshotted:
-            auto_snapshot(conn)
-            snapshotted = True
 
         register = _register_for(cand["category"])
-        all_stored = True   # did EVERY item actually land in memory?
-        for item in to_graduate:
-            # Care details about my human leave identity too (ward decision
-            # 0.14.70), but as HIGH-CARE standing facts: the care block puts them
-            # in front of me on my human's own turns, in triage and in noticing.
-            # Code decides this from the content — the audit can't downgrade it.
-            care = "high" if register == "ward" and contains_care_critical(item.get("content")) else None
-            res = memory_create(
-                item["content"], granularity="significant",
-                source_author="proto-familiar",
-                category=None, audience="ward-private", conn=conn,
-                register=register, care_weight=care,
+        content = cand["content"] or ""
+        # Still open, or one I already turned down: never proposed again.
+        decided = {
+            r["passage"] for r in conn.execute(
+                "SELECT passage FROM cleanup_proposals WHERE category=? AND filename=? "
+                "AND status IN ('open','dismissed')",
+                (cand["category"], cand["filename"]),
             )
-            mem_id = res.get("id") if res.get("ok") else None
-            if not mem_id:
-                # A failed create must NOT lead to trimming the identity file
-                # below — that would delete the only copy of a fact that was
-                # never stored ("graduated facts aren't deleted"). Don't log it
-                # to the graduation_log or count it; mark the candidate not fully
-                # graduated so the trim is withheld and the next pass retries.
-                all_stored = False
-                print(
-                    f"[graduation] memory_create failed for a '{cand['category']}' item "
-                    f"({res.get('error')}) — leaving identity intact, will retry next pass",
-                    file=sys.stderr,
-                )
+        }
+        for item in parsed["proposals"]:
+            if not isinstance(item, dict):
                 continue
-            summary = (item.get("summary") or item["content"])[:120]
+            passage = (item.get("passage") or "").strip()
+            fact = (item.get("fact") or "").strip()
+            if not passage or not fact:
+                continue
+            spans = _find_passage(content, passage)
+            if len(spans) != 1:
+                dropped += 1   # paraphrased, or ambiguous: never proposed
+                continue
+            exact = content[spans[0][0]:spans[0][1]]   # the file's own text, not the model's copy
+            if exact in decided:
+                continue
+            # Care details about my human stay high-care when they move (ward
+            # decision 0.14.70); code decides from the content.
+            care = "high" if register == "ward" and (contains_care_critical(fact) or contains_care_critical(exact)) else None
+            summary = (item.get("summary") or fact)[:120]
             with conn:
-                # Slug id (summary-derived) — the notice block surfaces this id
-                # and the Familiar repeats it into graduation_acknowledge, so it
-                # follows the readable-id convention like memories/graph nodes.
                 insert_with_slug_retry(
                     conn,
-                    "INSERT INTO graduation_log(id, source_category, source_filename, memory_id, "
-                    "register, summary, acknowledged, created_at) VALUES (?,?,?,?,?,?,0,?)",
-                    lambda gid: (gid, cand["category"], cand["filename"], mem_id, register, summary, now_iso()),
-                    label=summary, kind="grad",
+                    "INSERT INTO cleanup_proposals(id, category, filename, passage, fact, register, care_weight, "
+                    "summary, why, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,'open',?)",
+                    lambda pid: (pid, cand["category"], cand["filename"], exact, fact, register, care,
+                                 summary, (item.get("why") or "")[:300] or None, now_iso()),
+                    label=summary, kind="prop",
                 )
-            graduated_total += 1
-            details.append({"file": cand["filename"], "register": register, "summary": summary})
+            decided.add(exact)
+            proposed += 1
+            details.append({"file": cand["filename"], "summary": summary})
 
-        # Trim the identity file ONLY when every item was actually stored. On a
-        # failure we leave the file — content AND last_graduated_at — untouched,
-        # so the candidate is re-selected and retried rather than silently losing
-        # the un-stored detail (kept_content assumes a full graduation, so even a
-        # partial trim could drop exactly the item that failed to store).
-        if all_stored:
-            kept = parsed.get("kept_content")
-            if isinstance(kept, str) and kept.strip() and kept.strip() != (cand["content"] or "").strip():
-                with conn:
-                    conn.execute(
-                        "UPDATE identity_files SET content=?, updated_at=?, last_graduated_at=? WHERE id=?",
-                        (kept.strip(), now_iso(), now_iso(), cand["id"]),
-                    )
-            else:
-                with conn:
-                    conn.execute(
-                        "UPDATE identity_files SET last_graduated_at=? WHERE id=?",
-                        (now_iso(), cand["id"]),
-                    )
+    return {"ok": True, "proposed": proposed, "graduated": 0, "dropped": dropped,
+            "reviewed": len(candidates), "details": details}
 
-    return {"ok": True, "graduated": graduated_total, "reviewed": len(candidates), "details": details}
+
+# ── Cleanup proposals: what I decide on (0.14.78) ─────────────────────────────
+
+_PROPOSAL_COLS = ("id, category, filename, passage, fact, register, care_weight, summary, why, "
+                  "status, memory_id, created_at, resolved_at")
+
+
+def _proposal_dict(r) -> dict[str, Any]:
+    return {k: r[k] for k in r.keys()}
+
+
+def list_cleanup_proposals(status: str = "open", conn: sqlite3.Connection | None = None,
+                           limit: int = 200) -> list[dict]:
+    """Proposals by status: 'open' oldest first (the order I decide them in), or
+    'all' newest first (what my human's list shows, decided ones included).
+    An OPEN proposal whose passage is no longer in its file exactly once (I
+    already moved or changed it) is marked 'stale' here, so I'm never offered a
+    cut that can't apply."""
+    from phylactery.identity import _find_passage
+
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        limit = max(1, min(int(limit or 200), 500))
+        if status == "all":
+            rows = conn.execute(
+                f"SELECT {_PROPOSAL_COLS} FROM cleanup_proposals ORDER BY created_at DESC LIMIT ?", (limit,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {_PROPOSAL_COLS} FROM cleanup_proposals WHERE status=? ORDER BY created_at ASC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        out = []
+        for r in rows:
+            item = _proposal_dict(r)
+            if r["status"] == "open":
+                f = conn.execute(
+                    "SELECT content FROM identity_files WHERE category=? AND filename=?",
+                    (r["category"], r["filename"]),
+                ).fetchone()
+                if f is None or len(_find_passage(f["content"] or "", r["passage"])) != 1:
+                    stamp = now_iso()
+                    with conn:
+                        conn.execute("UPDATE cleanup_proposals SET status='stale', resolved_at=? WHERE id=?",
+                                     (stamp, r["id"]))
+                    if status == "open":
+                        continue
+                    item.update(status="stale", resolved_at=stamp)
+            out.append(item)
+        return out
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def apply_cleanup_proposal(pid: str, fact: str | None = None, care_weight: str | None = None,
+                           conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Apply one proposal: save the standing fact (my own wording if I pass
+    `fact`), THEN cut that exact passage from the file. Fact first, so a failed
+    cut can never lose the only copy. Refuses, changing nothing, if the
+    proposal isn't open or its passage isn't in the file exactly once."""
+    from phylactery.identity import _find_passage, remove_text
+    from phylactery.memory import create as memory_create
+
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        r = conn.execute(f"SELECT {_PROPOSAL_COLS} FROM cleanup_proposals WHERE id=?", (pid,)).fetchone()
+        if r is None:
+            return {"ok": False, "error": f"no cleanup proposal {pid!r}"}
+        if r["status"] != "open":
+            return {"ok": False, "error": f"that proposal is already {r['status']}"}
+        f = conn.execute("SELECT content FROM identity_files WHERE category=? AND filename=?",
+                         (r["category"], r["filename"])).fetchone()
+        if f is None or len(_find_passage(f["content"] or "", r["passage"])) != 1:
+            with conn:
+                conn.execute("UPDATE cleanup_proposals SET status='stale', resolved_at=? WHERE id=?", (now_iso(), pid))
+            return {"ok": False, "error": "its passage isn't in the file exactly once any more, so nothing changed (marked stale)"}
+        text = (fact or "").strip() or r["fact"]
+        care = care_weight if care_weight in ("high", "low") else r["care_weight"]
+        res = memory_create(text, granularity="significant", source_author="proto-familiar",
+                            category=None, audience="ward-private", conn=conn,
+                            register=r["register"], care_weight=care)
+        mem_id = res.get("id") if res.get("ok") else None
+        if not mem_id:
+            return {"ok": False, "error": f"the standing fact didn't save ({res.get('error')}), so nothing was cut"}
+        cut = remove_text(r["category"], r["filename"], r["passage"], conn=conn)
+        if not cut.get("ok"):
+            return {"ok": False, "memory_id": mem_id,
+                    "error": f"the fact is saved ({mem_id}) but the passage wasn't cut: {cut.get('error')}"}
+        with conn:
+            conn.execute("UPDATE cleanup_proposals SET status='applied', memory_id=?, resolved_at=? WHERE id=?",
+                         (mem_id, now_iso(), pid))
+        return {"ok": True, "memory_id": mem_id, "removed_chars": cut.get("removed_chars"),
+                "file": f"{r['category']}/{r['filename']}"}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def dismiss_cleanup_proposal(pid: str, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Leave the passage where it is. Changes nothing but the proposal."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        r = conn.execute("SELECT status FROM cleanup_proposals WHERE id=?", (pid,)).fetchone()
+        if r is None:
+            return {"ok": False, "error": f"no cleanup proposal {pid!r}"}
+        if r["status"] != "open":
+            return {"ok": False, "error": f"that proposal is already {r['status']}"}
+        with conn:
+            conn.execute("UPDATE cleanup_proposals SET status='dismissed', resolved_at=? WHERE id=?", (now_iso(), pid))
+        return {"ok": True}
+    finally:
+        if own_conn:
+            conn.close()
 
 
 # ── Ward-facing surface (ward-consulted, non-blocking) ────────────────────────

@@ -126,7 +126,8 @@ What changed:
   move (save_memory, then remove_from_identity). The over-budget note says the
   same. Both new tools are in the `memory-edit` module, whose trigger now
   includes "identity file(s)/section(s)" and "standing fact(s)".
-- **"Pause automatic identity cleanup"** (`identityGraduationPaused`, next to the
+- **"Pause automatic identity cleanup"** (renamed "Pause identity cleanup
+  suggestions" in 0.14.78; `identityGraduationPaused`, next to the
   budget field) → `identity_graduation_pause` → Phylactery meta
   `identity_graduation_paused`; `run_graduation_audit` skips every file while
   it's set. Hard env switch `PHYLACTERY_GRADUATION_DISABLED=1`. The budget hint
@@ -142,6 +143,61 @@ Familiar "removed" a duplicate section by appending it twice. Villager turns are
 unaffected: they use their own allowlist (`villagerToolNames`), and none of these
 are in it. `tests/identity-edit-tools.test.mjs` pins that a core-only turn has
 all four.
+
+## Follow-up: the cleanup only proposes (0.14.78)
+
+In the first review an automatic pass rewrote a relationship file: it filed two
+sections, which is its job, but it also condensed away the Familiar's own lines
+about its autonomy, which went nowhere. The snapshot had them; the Familiar only
+noticed because it asked to see the diff. Its condition for turning the cleanup
+back on was that it only ever proposes. Ward decision: all identity files.
+
+- **The pass writes proposals, nothing else.** `run_graduation_audit` asks for
+  `{"proposals":[{passage, summary, fact, why}]}`. Code keeps a proposal only
+  when its passage is in the file exactly once (`identity._find_passage`), and
+  stores the file's own text, not the model's copy; a paraphrase is dropped. The
+  care call stays in code (`high` for a ward-register fact whose wording is
+  care-critical). Rows go to `cleanup_proposals` (migration `0007`, slug ids
+  `prop-…`). Identity and memory are untouched; the pass no longer snapshots or
+  writes `graduation_log`.
+- **A file is reviewed once per change.** Each reviewed file is stamped
+  `identity_files.last_reviewed_at`; it's skipped until `updated_at` passes it, so
+  an unchanged file isn't re-billed every pass. A failed LLM call isn't stamped.
+  A passage that's open or was dismissed is never proposed again.
+- **The Familiar decides.** `apply_cleanup_proposal(id, fact?, high_care?)` →
+  `identity_cleanup_apply`: the standing fact is saved first (its own wording if
+  given), then exactly that passage is cut, after a snapshot. A failed save cuts
+  nothing and leaves the proposal open. `dismiss_cleanup_proposal(id)` leaves the
+  passage. `list_cleanup_proposals(include_decided?)` shows everything in full.
+  A proposal whose passage has changed is marked `stale` and can't apply. All
+  three refuse on a gated turn and aren't in any villager allowlist. They're in
+  the `acks` module, surfaced by the block.
+- **The block.** `[Cleanup proposals for my identity …]` (`src/memory/cleanup-proposals.js`)
+  rides ward-private turns only, bounded at 3000 chars (at least one proposal
+  always shows; long passages are cut short with a pointer to the list tool).
+- **The ward sees it.** Automation tab → "Identity cleanup suggestions" (read-only,
+  `GET /api/identity-cleanup-proposals?all=1`): every proposal, where it would go,
+  and what the Familiar decided. The pause is now "Pause identity cleanup
+  suggestions": it stops new proposals; open ones stay.
+
+| Surface | Proposals block | apply / dismiss / list |
+|---|---|---|
+| Web live turn (ward) | yes — `enrich()` | yes |
+| Web tool rounds | rides the turn's prompt | yes |
+| Discord ward DM | yes — `enrich()` ward-private | yes |
+| Discord villager / group / ambient | **never** (gated) | refused |
+| Voice call (ward) | yes — `/api/chat` → `enrich()` | yes |
+| Triage, noticing, reach-out, pondering | no | no (not composed) |
+
+Tests: `phylactery/tests/test_graduation_failure.py` (the pass changes nothing;
+a failed save cuts nothing; apply saves then cuts exactly the passage) and the
+proposal cases in `test_identity_lean.py` (paraphrase dropped, care code-decided,
+core never reviewed, unchanged file not re-reviewed, dismissed and stale
+proposals change nothing, a dismissed passage isn't proposed again — watched red
+with the old open-only check). `tests/cleanup-proposals.test.mjs` runs the real
+executors through the real thalamus wrappers into a stub Phylactery, plus a
+pipeline case through `enrich()` (the block on a ward turn, never a gated one —
+watched red with the gate removed).
 
 ## Follow-up: the Familiar can review its care list (0.14.73)
 

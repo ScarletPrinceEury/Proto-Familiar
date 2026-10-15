@@ -3,9 +3,10 @@
 Identity is for the Familiar's own self and the shape of the bond. It rides every
 turn and reaches group chats, so situational detail and care data about the human
 belong in standing facts. These pin the revised graduation rule (protected core,
-budget trigger regardless of recent edits, care lines leaving as HIGH-CARE ward
-facts instead of being pinned), the auto care flag on create, and the care-facts
-list that puts those facts back in front of the Familiar where they're needed.
+budget trigger regardless of recent edits, care lines proposed as HIGH-CARE ward
+facts instead of being pinned — since 0.14.78 the pass only proposes and the
+Familiar decides), the auto care flag on create, and the care-facts list that
+puts those facts back in front of the Familiar where they're needed.
 """
 
 import json
@@ -95,32 +96,70 @@ def test_the_budget_is_my_humans_setting(conn):
 
 # ── What the audit does with what it moves ────────────────────────────────────
 
-def test_care_lines_leave_as_high_care_ward_facts_and_the_file_is_trimmed(conn):
-    _file(conn, "w1", "ward", "ward_notes.md", "x " * 5000)
-    reply = json.dumps({
-        "graduate": [
-            {"summary": "meds", "content": "My human takes 50mg sertraline every morning."},
-            {"summary": "film", "content": "My human's favourite film is Arrival."},
-        ],
-        "kept_content": "My human is Sam.",
-    })
+def test_care_lines_are_proposed_as_high_care_ward_facts_and_nothing_changes(conn):
+    """0.14.78 propose-only: the pass writes proposals with the file's exact text;
+    a paraphrased passage is dropped; care stays high-care; nothing is cut or saved."""
+    content = ("My human is Sam.\nMy human takes 50mg sertraline every morning.\n"
+               "My human's favourite film is Arrival.\n" + "x " * 5000)
+    _file(conn, "w1", "ward", "ward_notes.md", content)
+    reply = json.dumps({"proposals": [
+        {"passage": "My human takes 50mg sertraline every morning.", "summary": "meds",
+         "fact": "My human takes 50mg sertraline every morning.", "why": "only matters around meds"},
+        {"passage": "My human's favourite film is Arrival.", "summary": "film",
+         "fact": "My human's favourite film is Arrival.", "why": "only matters when films come up"},
+        {"passage": "My human loves films.", "summary": "paraphrase", "fact": "x", "why": "w"},
+    ]})
     res = grad.run_graduation_audit(conn, {}, lambda cfg, prompt: reply, NOW)
-    assert res["graduated"] == 2
-    rows = {r["content"]: r for r in conn.execute("SELECT content, register, care_weight FROM memories")}
-    assert rows["My human takes 50mg sertraline every morning."]["care_weight"] == "high"
-    assert rows["My human takes 50mg sertraline every morning."]["register"] == "ward"
-    assert rows["My human's favourite film is Arrival."]["care_weight"] is None
-    assert conn.execute("SELECT content FROM identity_files WHERE id='w1'").fetchone()["content"] == "My human is Sam."
-    assert len(grad.list_unacknowledged_graduations(conn)) == 2, "my human sees what was filed away"
+    assert res["proposed"] == 2 and res["dropped"] == 1, "a passage not in the file is never proposed"
+    props = {p["summary"]: p for p in grad.list_cleanup_proposals(conn=conn)}
+    assert props["meds"]["care_weight"] == "high" and props["meds"]["register"] == "ward"
+    assert props["film"]["care_weight"] is None
+    assert conn.execute("SELECT content FROM identity_files WHERE id='w1'").fetchone()["content"] == content
+    assert conn.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"] == 0
 
 
-def test_self_detail_leaves_as_me_facts(conn):
+def test_self_detail_is_proposed_as_me_facts_and_an_unchanged_file_waits(conn):
     _file(conn, "core", "self", "my_identity.md", "z " * 9000)
-    _file(conn, "mech", "self", "my_mechanics.md", "m " * 3000)
-    reply = json.dumps({"graduate": [{"summary": "s", "content": "I keep my tool notes short."}], "kept_content": "How my memory works."})
+    _file(conn, "mech", "self", "my_mechanics.md", "I keep my tool notes short.\n" + "m " * 3000)
+    asked = []
+    reply = json.dumps({"proposals": [{"passage": "I keep my tool notes short.", "summary": "s",
+                                       "fact": "I keep my tool notes short.", "why": "w"}]})
+
+    def llm(cfg, prompt):
+        asked.append(prompt)
+        return reply
+
+    grad.run_graduation_audit(conn, {}, llm, NOW)
+    [p] = grad.list_cleanup_proposals(conn=conn)
+    assert p["register"] == "me" and p["filename"] == "my_mechanics.md"
+    assert len(asked) == 1, "the protected core is never reviewed"
+    grad.run_graduation_audit(conn, {}, llm, NOW)
+    assert len(asked) == 1, "an unchanged file isn't reviewed (or billed) again"
+    assert len(grad.list_cleanup_proposals(conn=conn)) == 1
+
+
+def test_dismissed_and_stale_proposals_change_nothing(conn):
+    from phylactery import identity as ident
+    _file(conn, "w1", "ward", "user_notes.md", "Likes tea.\nLikes rain.\n" + "x " * 4000)
+    reply = json.dumps({"proposals": [
+        {"passage": "Likes tea.", "summary": "tea", "fact": "My human likes tea.", "why": "w"},
+        {"passage": "Likes rain.", "summary": "rain", "fact": "My human likes rain.", "why": "w"},
+    ]})
     grad.run_graduation_audit(conn, {}, lambda cfg, prompt: reply, NOW)
-    row = conn.execute("SELECT register, care_weight FROM memories").fetchone()
-    assert row["register"] == "me" and row["care_weight"] is None
+    props = {p["summary"]: p for p in grad.list_cleanup_proposals(conn=conn)}
+    assert grad.dismiss_cleanup_proposal(props["tea"]["id"], conn=conn)["ok"] is True
+    assert grad.dismiss_cleanup_proposal(props["tea"]["id"], conn=conn)["ok"] is False
+    ident.remove_text("ward", "user_notes.md", "Likes rain.", conn=conn)   # I moved it myself
+    every = {p["summary"]: p["status"] for p in grad.list_cleanup_proposals(status="all", conn=conn)}
+    assert every == {"tea": "dismissed", "rain": "stale"}, "my human's list shows decided ones too"
+    assert grad.list_cleanup_proposals(conn=conn) == [], "a passage that's gone makes its proposal stale"
+    out = grad.apply_cleanup_proposal(props["rain"]["id"], conn=conn)
+    assert out["ok"] is False and "stale" in out["error"]
+    assert "Likes tea." in conn.execute("SELECT content FROM identity_files WHERE id='w1'").fetchone()["content"]
+    with conn:   # the file changes again, so the next pass reviews it
+        conn.execute("UPDATE identity_files SET updated_at='2999-01-01T00:00:00' WHERE id='w1'")
+    again = grad.run_graduation_audit(conn, {}, lambda cfg, prompt: reply, NOW)
+    assert again["reviewed"] == 1 and again["proposed"] == 0, "a passage I turned down isn't proposed again"
 
 
 def test_the_audit_prompt_no_longer_tells_me_to_keep_care_lines(conn):

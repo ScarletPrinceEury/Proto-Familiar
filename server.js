@@ -20,7 +20,7 @@ const execFileP = promisify(execFile);
 import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
-  listCareFacts, setIdentityBudget, setIdentityGraduationPaused,
+  listCareFacts, setIdentityBudget, setIdentityGraduationPaused, listCleanupProposals,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, readMemoryById, getIdentityAll, villageRegistryGet, villageRegistrySet, stripVillageRegistry, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listUnresolvedAttributions,
@@ -4882,6 +4882,16 @@ app.post('/api/pondering/consolidate/restore', async (req, res) => {
 // held fact to Phylactery (a false positive → kept); discard confirms the drop
 // (the row stays for the audit trail). Ward-facing surface for the console↔UI
 // twin `!quarantine`.
+// My Familiar's identity cleanup proposals (0.14.78), read-only for my human:
+// the automatic cleanup only proposes; the Familiar applies or dismisses each
+// one with its own tools. ?all=1 includes the ones already decided.
+app.get('/api/identity-cleanup-proposals', async (req, res) => {
+  try {
+    const all = req.query?.all === '1' || req.query?.all === 'true';
+    res.json({ ok: true, items: await listCleanupProposals({ status: all ? 'all' : 'open' }) });
+  } catch (err) { res.json({ ok: false, items: [], error: err?.message ?? 'list failed' }); }
+});
+
 app.get('/api/memory-quarantine', async (req, res) => {
   try {
     const includeSettled = req.query?.all === '1' || req.query?.all === 'true';

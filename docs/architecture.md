@@ -210,7 +210,7 @@ ponderings injection, care-check framing) and as background loops
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
 │   ├── src/phylactery/server.py  FastMCP server (identity / memory / graph / snapshots / lifecycle / backup)
 │   ├── src/phylactery/identity.py + memory.py + graph.py + consolidate.py  (consolidate: weekly→monthly→yearly rollups + distillation, all through `_call_llm` — RULE-A-parity as of 0.12.8: `reasoning_content` fallback via `_extract_message_content`, retry-once on timeout, and cfg-driven `max_tokens`/`timeout_s`/`chunk_chars` defaulting to 8000/240s/60000. Oversized periods are date-sorted and summarized in lossless chunks folded via the existing `prior_summary` path (`_summarize_entries`) so a drained backlog's huge week never truncates or times out. Tunables ride PHYLACTERY_LLM_MAX_TOKENS / _TIMEOUT_S / _CHUNK_CHARS env, forwarded by `loadPhylacteryEnv` from the ward's `phylacteryLlmMaxTokens`/`phylacteryLlmTimeoutS` settings; a blank/too-small setting is not forwarded, so the robust defaults stand)
-│   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit. Revised 0.14.70 (ward-signed, docs/identity-lean-build-spec.md): protected self core never audited; a file is audited when its category is over my human's identity budget (`identity_budget_set`, default 6k tokens) and it's above its share — regardless of recent edits — or by the original 30-day rule; all four categories; care lines move out as HIGH-CARE `ward` facts instead of pinning the file. Pausable (0.14.72): my human's "Pause automatic identity cleanup" setting (`identityGraduationPaused`, pushed via `identity_graduation_pause` at boot and on change → meta `identity_graduation_paused`) or the hard env switch `PHYLACTERY_GRADUATION_DISABLED=1` makes the audit leave every file alone
+│   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit. Revised 0.14.70 (ward-signed, docs/identity-lean-build-spec.md): protected self core never audited; a file is audited when its category is over my human's identity budget (`identity_budget_set`, default 6k tokens) and it's above its share — regardless of recent edits — or by the original 30-day rule; all four categories; care lines move out as HIGH-CARE `ward` facts instead of pinning the file. Pausable (0.14.72): my human's "Pause automatic identity cleanup" setting (`identityGraduationPaused`, pushed via `identity_graduation_pause` at boot and on change → meta `identity_graduation_paused`) or the hard env switch `PHYLACTERY_GRADUATION_DISABLED=1` makes the audit leave every file alone. Propose-only (0.14.78): the audit writes `cleanup_proposals` rows (migration 0007) and never edits identity or memory itself; `list_cleanup_proposals` / `apply_cleanup_proposal` (save the fact, then cut exactly the passage) / `dismiss_cleanup_proposal` back the `identity_cleanup_*` MCP tools
 │   ├── src/phylactery/care.py        The one care-critical matcher (`contains_care_critical`, `CARE_CATEGORIES`) — used by graduation, `memory.create` (auto high-care for a care-matching `ward` fact) and `memory.list_care_facts` (the care block's source, `memory_list_care_facts`)
 │   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED). Pass 4 = distill-only memory lifecycle (temporal-bridges Piece 4): rides the pass, ADDS standing pattern-memories out of aged episodic facts, never demotes/deletes an original (distilled_at breadcrumb). Opt-in via memoryLifecycleEnabled → PROTO_FAMILIAR_MEMORY_LIFECYCLE_ENABLED env; hard off PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1
 │   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
@@ -386,6 +386,7 @@ multi-calendar panel.
 - `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
 - `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, a `fatal` flag (token/intents rejected — the UI shows red instead of a perpetual "reconnecting"), plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
 - `POST /api/discord/apply` — apply the saved Discord settings and (re)connect immediately (the Settings "Apply & connect" button), clearing any fatal state; returns the resulting status. Saves the ward waiting for the 30s supervisor tick or reloading the page
+- `GET /api/identity-cleanup-proposals[?all=1]` — the identity cleanup proposals (0.14.78), read-only for the ward: open ones, or with `all=1` the decided ones too (applied / dismissed / stale), newest first. The Familiar applies or dismisses them with its own tools; this endpoint changes nothing.
 - `GET /api/turn-diagnostics?limit=N` — per-turn tool-loop diagnostics (`src/diagnostics/turn-log.js` → `logs/turn-tools.jsonl`, rotated past 2 MB, 0.14.74): per live turn (web, voice, Discord) the tools offered and surfaced/requested modules, per round the finish reason, the calls the model sent, whether they ran or were **dropped** (calls on a round that didn't end with `finish_reason: 'tool_calls'`), and whether the web client was retrying after tools had already run (`clientAttempt` in the `/api/chat` body). Newest first. Diagnostics only; off-switch `PROTO_FAMILIAR_TURN_LOG_DISABLED=1`.
 - `GET /api/discord-writes` — the villager-write audit trail (`discord-write-log.js` → `logs/discord-writes.jsonl`): every state-mutating tool a villager triggered through the Familiar on Discord, with who caused it. Newest first.
 
@@ -1751,8 +1752,9 @@ facts share one plain `date_key`, that key **cannot** address a single fact —
 > **separate axis** (`phylactery-design.md:272`). The memorization pipeline only
 > produces **`episodic`** facts; the `me`/`ward` registers hold *standing truths*
 > about the Familiar (`me`) or the human (`ward`). They are reached two ways:
-> autonomously by *graduation* (Pillar H moves identity-file detail off the
-> always-injected surface, created at `significant`), and **deliberately by the
+> by *graduation* (Pillar H proposes moving identity-file detail off the
+> always-injected surface and the Familiar applies the proposal, created at
+> `significant`), and **deliberately by the
 > Familiar** via `save_memory`'s `register` choice (0.8.6 — a me/ward write is
 > filed as a standalone `significant` fact on that register; the lighter sibling
 > of `update_identity`). `me`/`ward` are **not** `granularity` values.
@@ -2153,14 +2155,25 @@ NEVER eligible (pinned): careWeight:high
 ```
 
 The bias is toward KEEPING — false positives are cheap, filing away a
-safety-relevant fact is not. The actual per-block decision rides the
-consolidation LLM call (the Familiar, in its own voice); code only narrows the
-candidates and re-screens every graduated item against the care matcher
-(defence in depth). `auto_snapshot` runs before any identity trim. Ward-block
-graduations land in `graduation_log`; thalamus surfaces unacknowledged ones as
-a `[GRADUATION NOTICE]` block (TTL-cached, ward-private turns only,
-non-blocking), and the Familiar calls `acknowledge_graduation` once mentioned.
-Tested in `phylactery/tests/test_graduation.py`.
+safety-relevant fact is not. **Since 0.14.78 the pass only proposes**
+(docs/identity-lean-build-spec.md, "the cleanup only proposes"): the
+consolidation LLM call reviews each eligible file once per change
+(`identity_files.last_reviewed_at`) and returns proposals; code keeps one only
+when its passage is in the file exactly once, stores the file's own text, and
+decides the care weight. Proposals land in `cleanup_proposals` (open → applied /
+dismissed / stale). Nothing in identity or memory changes until the Familiar
+applies one (`apply_cleanup_proposal` → `identity_cleanup_apply`: save the
+standing fact, then cut exactly that passage, after a snapshot) or dismisses it
+(never proposed again). thalamus injects the open ones as a bounded
+`[Cleanup proposals for my identity …]` block (`src/memory/cleanup-proposals.js`,
+TTL-cached, ward-private turns only) whose tools travel with it in the `acks`
+module; the ward reads them, decided ones included, under "Identity cleanup
+suggestions" (`GET /api/identity-cleanup-proposals`). Older graduations still in
+`graduation_log` surface as a `[GRADUATION NOTICE]` block (ward-private turns
+only, non-blocking), settled by `acknowledge_graduation`; the pass no longer
+writes new ones. Tested in `phylactery/tests/test_graduation.py`,
+`test_graduation_failure.py`, `test_identity_lean.py` and
+`tests/cleanup-proposals.test.mjs`.
 
 The sibling `[DISCLOSURE NOTICE]` block (ward-disclosure Phase B) works the same
 way for the content-gating re-tag pass: when `content-regate.js` opens one of the
