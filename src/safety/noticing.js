@@ -378,6 +378,10 @@ const isTimeout = (err) => err?.name === 'TimeoutError';
  */
 export async function runNoticingToolLoop({
   runLoop, callRaw, conn, settings, messages, tools, executeTool, toolCtx,
+  // request_tools growth (0.14.82): recomposes the set for the next round;
+  // defaults to the fixed set. maxRounds omitted = the loop's own default.
+  getTools = null,
+  maxRounds,
   callTimeoutMs  = NOTICING_CALL_TIMEOUT_MS,
   totalTimeoutMs = NOTICING_DELIBERATION_TIMEOUT_MS,
 }) {
@@ -399,7 +403,8 @@ export async function runNoticingToolLoop({
           signal: overall, timeoutMs: callTimeoutMs, surface: 'noticing',
         }),
         baseMessages: messages,
-        getTools:     () => tools,
+        getTools:     getTools ?? (() => tools),
+        ...(Number.isFinite(maxRounds) ? { maxRounds } : {}),
         executeTool,
         toolCtx,
         signal:       overall,

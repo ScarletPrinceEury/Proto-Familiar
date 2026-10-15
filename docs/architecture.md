@@ -1196,6 +1196,17 @@ evaluated here, not left to the model, since no human reads this turn), the
 code-built situation report for the non-event conditions, the ward-signed
 prompt (`buildNoticingPrompt` — threat-tier line only at moderate+, flag_distress
 clause only when that tool is in hand), and the injectable `runOneNoticingTick`.
+**Tools (0.14.82, ward-signed):** the noticing turn's toolset matches a live
+turn's — `composeNoticingTools` = core + the modules its own text surfaces
+(`selectModules` over the wake body) + whatever `request_tools` pulls in (the
+loop recomposes per round, growth-only, as live), plus `NOTICING_ALWAYS_TOOLS`
+(the few non-core tools its wake conditions rely on, ranked with core under the
+tool ceiling) and the noticing-scoped `reach_out_to_ward` / `set_next_check`;
+the round budget is the live `toolRoundsPerTurn`. The crisis tools are excluded
+(`NOTICING_EXCLUDED_TOOLS`): escalation stays `flag_distress` → triage. Before
+this, a fixed allowlist meant an intention set in a full live turn ("walk the
+care list, merge the duplicate node, cut the doubled paragraph") fired in a turn
+that had none of those tools but did have `intention_done` and the reach-out.
 **Role (entity-as-subject, ward-signed 0.11.86):** the prompt is the Familiar's
 own reflection, so it assembles as a **`system`** message next to identity
 (`noticingMessages`), never a `user` turn (which framed it as being operated); a

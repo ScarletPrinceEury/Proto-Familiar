@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 9;
+export const MANUAL_TOME_VERSION = 10;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -163,7 +163,7 @@ export function buildManualTome() {
 
   add(
     ['notice', 'noticing', 'act on your own', 'initiative', 'do things without asking'],
-    `[Manual: Noticing] Noticing is currently turned {{noticingActive}}. When on, I keep a light eye on things ({{user}}'s intentions, gaps, aging tasks) and can act or gently raise something without being asked. Toggle it in Settings under my self-directed behaviour.`,
+    `[Manual: Noticing] Noticing is currently turned {{noticingActive}}. When on, I keep a light eye on things ({{user}}'s intentions, gaps, aging tasks) and can act or gently raise something without being asked. A noticing turn has the same tools as when we talk, so an intention I set for later can actually get done then; the one exception is contacting someone in a crisis, which goes through my safety check. Toggle it in Settings under my self-directed behaviour.`,
     { comment: 'Noticing' },
   );
 
