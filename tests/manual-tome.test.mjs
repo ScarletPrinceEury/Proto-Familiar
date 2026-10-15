@@ -213,7 +213,7 @@ test('the manual covers identity, care facts and checking what I did, with real 
   assert.ok(identity && care && check, 'the three entries exist');
   assert.match(care.content, /takes it out of what triage and noticing see/);
   const html = await fsp.readFile(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  for (const label of ['Identity budget (tokens)', 'Pause automatic identity cleanup', 'Open Temporal editor', 'Is my Familiar alive?', 'Tool turns']) {
+  for (const label of ['Identity budget (tokens)', 'Pause identity cleanup suggestions', 'Identity cleanup suggestions', 'Open Temporal editor', 'Is my Familiar alive?', 'Tool turns']) {
     assert.ok(identity.content.includes(label) || check.content.includes(label), `the manual names "${label}"`);
     assert.ok(html.includes(label), `"${label}" is a real label in the UI`);
   }

@@ -50,6 +50,7 @@ import {
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection, removeIdentityText, deleteIdentitySection,
+  listCleanupProposals, applyCleanupProposal, dismissCleanupProposal,
   listMemories, readMemory, readMemoryById, moveMemoryDate, updateMemoryById, deleteMemoryById,
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
@@ -70,6 +71,7 @@ import {
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
 import { formatCareFactsBlock, careWeightFromFlag, formatCareFactsReview } from './src/safety/care-facts.js';
+import { formatCleanupProposalsReview } from './src/memory/cleanup-proposals.js';
 import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
@@ -1755,6 +1757,45 @@ export const BUILTIN_TOOLS = [
           section:  { type: 'string', description: 'The markdown heading of the section to remove (without leading #s).' },
         },
         required: ['category', 'filename', 'section'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'apply_cleanup_proposal',
+      description: 'I accept one of my identity cleanup proposals (the ids are in my [Cleanup proposals for my identity] block). The standing fact is saved first, in my own words if I give `fact`, and then exactly that passage is cut from the file. A snapshot is kept first. If the passage has changed since it was proposed, nothing happens and the result says so.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:        { type: 'string', description: 'The proposal id, e.g. prop-likes-tea-x7.' },
+          fact:      { type: 'string', description: 'Optional: the standing fact in my own words, instead of the proposed wording.' },
+          high_care: { type: 'boolean', description: 'Optional: true keeps it on my care list (what helps, meds, triggers, who to call), false keeps it off. Left out, the proposal\'s own call stands.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'dismiss_cleanup_proposal',
+      description: 'I turn down one of my identity cleanup proposals: the passage stays where it is, and that passage isn\'t proposed again.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The proposal id.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_cleanup_proposals',
+      description: 'I look over my identity cleanup proposals in full: every open one with its whole passage, and with include_decided the ones I already applied or dismissed.',
+      parameters: {
+        type: 'object',
+        properties: { include_decided: { type: 'boolean', description: 'Also show the ones I already decided.' } },
       },
     },
   },
@@ -3845,6 +3886,43 @@ export const TOOL_EXECUTORS = {
       if (!result.ok) return `Nothing deleted: ${result.error ?? 'phylactery unavailable'}.`;
       return quietOk(`Section "${section.trim()}" removed from ${category}/${filename}.`);
     } catch (err) { return `Nothing deleted: ${err.message}`; }
+  },
+
+  // Identity cleanup proposals (0.14.78): the automatic cleanup proposes, I
+  // decide. My own conversations only — the passages can be about my human.
+  apply_cleanup_proposal: async ({ id, fact, high_care } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'Nothing changed: I only decide on my identity cleanup in my own conversations with my human.';
+    const pid = String(id ?? '').trim();
+    if (!pid) return 'Nothing changed: I need the proposal id from my [Cleanup proposals for my identity] block.';
+    try {
+      const result = await applyCleanupProposal({ id: pid, fact, careWeight: careWeightFromFlag(high_care) });
+      if (!result.ok) {
+        return result.memoryId
+          ? `The standing fact is saved (${result.memoryId}), but the passage wasn't cut: ${result.error}. I can cut it with remove_from_identity.`
+          : `Nothing changed: ${result.error ?? 'phylactery unavailable'}.`;
+      }
+      return quietOk(`Saved the standing fact (${result.memoryId}) and cut ${result.removedChars} characters from ${result.file}.`);
+    } catch (err) { return `Nothing changed: ${err.message}`; }
+  },
+
+  dismiss_cleanup_proposal: async ({ id } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'Nothing changed: I only decide on my identity cleanup in my own conversations with my human.';
+    const pid = String(id ?? '').trim();
+    if (!pid) return 'Nothing changed: I need the proposal id.';
+    try {
+      const result = await dismissCleanupProposal({ id: pid });
+      if (!result.ok) return `Nothing changed: ${result.error ?? 'phylactery unavailable'}.`;
+      return quietOk(`Dismissed ${pid}; the passage stays where it is.`);
+    } catch (err) { return `Nothing changed: ${err.message}`; }
+  },
+
+  list_cleanup_proposals: async ({ include_decided } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'My identity cleanup stays between my human and me, so I only look at it in our own conversations.';
+    const includeDecided = include_decided === true || include_decided === 'true';
+    try {
+      const items = await listCleanupProposals({ status: includeDecided ? 'all' : 'open' });
+      return formatCleanupProposalsReview(items, { includeDecided });
+    } catch (err) { return `I couldn't read my cleanup proposals: ${err.message}`; }
   },
 
   find_graph_node: async ({ query, type, limit }) => {

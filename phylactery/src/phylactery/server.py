@@ -13,6 +13,7 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     identity_remove_text    — cut one quoted passage out of an identity file
     identity_set_file       — overwrite a whole identity file (edits top content too)
     identity_delete_section — remove one section from an identity file
+    identity_cleanup_*      — cleanup proposals (list / apply / dismiss), 0.14.78
 
   Village registry (routing/gating state — NOT identity):
     village_registry_get    — read the canonical Village registry JSON
@@ -620,8 +621,9 @@ def memory_list_care_facts(limit: int = 40) -> dict[str, Any]:
 @mcp.tool()
 def identity_budget_set(tokens: int) -> dict[str, Any]:
     """Set how many tokens of identity ride in front of me every turn (my human's
-    setting, pushed from Proto-Familiar). My graduation pass trims over-budget
-    files toward it; the protected core is never trimmed. Clamped to [2000, 30000].
+    setting, pushed from Proto-Familiar). My graduation pass proposes passages from
+    over-budget files that could move out (I decide each one); the protected core
+    is never reviewed. Clamped to [2000, 30000].
     Returns { ok, tokens }."""
     from phylactery import graduation as grad
     return grad.set_identity_budget_tokens(tokens, conn=_c())
@@ -630,9 +632,9 @@ def identity_budget_set(tokens: int) -> dict[str, Any]:
 @mcp.tool()
 def identity_graduation_pause(paused: bool) -> dict[str, Any]:
     """Pause or resume my automatic identity cleanup (my human's setting, pushed
-    from Proto-Familiar): while paused, my graduation pass leaves every identity
-    file alone, whatever the budget or the 30-day rule says. For when my human
-    and I go through my files ourselves. Returns { ok, paused }."""
+    from Proto-Familiar): while paused, my graduation pass makes no new cleanup
+    proposals, whatever the budget or the 30-day rule says (open ones stay mine to
+    decide). For when my human and I go through my files ourselves. Returns { ok, paused }."""
     from phylactery import graduation as grad
     return grad.set_graduation_paused(paused, conn=_c())
 
@@ -1030,6 +1032,32 @@ def graduation_acknowledge(ids: list[str]) -> str:
         return "No ids provided."
     result = grad.acknowledge_graduations(ids, conn=_c())
     return f"Acknowledged {result.get('acknowledged', 0)} graduation notice(s)."
+
+
+@mcp.tool()
+def identity_cleanup_proposals(status: str = "open", limit: int = 200) -> dict[str, Any]:
+    """I use this to see the cleanup proposals for my identity files: each an exact
+    passage, the standing fact it would become, and why. Nothing has changed yet;
+    I decide on each one. status "open" (default) or "all" (decided ones too,
+    newest first). Returns { items: [{ id, category, filename, passage,
+    fact, register, care_weight, summary, why, status, ... }] }."""
+    return {"items": grad.list_cleanup_proposals(status=status, conn=_c(), limit=limit)}
+
+
+@mcp.tool()
+def identity_cleanup_apply(id: str, fact: Optional[str] = None, care_weight: Optional[str] = None) -> dict[str, Any]:
+    """I use this to accept one cleanup proposal: the standing fact is saved (in my
+    own wording if I pass `fact`), then that exact passage is cut from the file.
+    Refuses, changing nothing, if the passage isn't in the file exactly once any
+    more. Returns { ok, memory_id, removed_chars, file } or { ok:false, error }."""
+    return grad.apply_cleanup_proposal(id, fact=fact, care_weight=care_weight, conn=_c())
+
+
+@mcp.tool()
+def identity_cleanup_dismiss(id: str) -> dict[str, Any]:
+    """I use this to turn down a cleanup proposal: the passage stays where it is.
+    Returns { ok } or { ok:false, error }."""
+    return grad.dismiss_cleanup_proposal(id, conn=_c())
 
 
 # ── Backup / restore (Pillar H) ───────────────────────────────────────────────

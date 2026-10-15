@@ -6722,6 +6722,7 @@ function init() {
   $('consolidate-restore-btn')?.addEventListener('click', () => runConsolidationNow('restore'));
   $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
   $('quarantine-review-btn')?.addEventListener('click', () => runQuarantineReview());
+  $('cleanup-proposals-btn')?.addEventListener('click', () => runCleanupProposalsView());
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
   });
@@ -13546,6 +13547,41 @@ async function runConsolidationNow(which) {
   } finally {
     btnIds.forEach(id => { const b = $(id); if (b) b.disabled = false; });
     if (btn) btn.textContent = original;
+  }
+}
+
+// Identity cleanup suggestions (0.14.78), read-only: what the memory upkeep
+// proposed moving out of my Familiar's identity, and what it decided. The
+// Familiar applies or dismisses each one with its own tools, never from here.
+const CLEANUP_STATUS_LABEL = {
+  open: 'Waiting on your Familiar', applied: 'Moved to a standing fact',
+  dismissed: 'Kept in identity', stale: 'No longer applies (the passage changed)',
+};
+async function runCleanupProposalsView() {
+  const list = $('cleanup-proposals-list');
+  if (!list) return;
+  list.innerHTML = '<div class="field-hint">Loading…</div>';
+  try {
+    const res = await fetch('/api/identity-cleanup-proposals?all=1');
+    const d = await res.json().catch(() => ({}));
+    if (!d || d.ok === false) { list.innerHTML = `<div class="field-hint">Couldn't load the suggestions: ${esc(d?.error || 'the memory store didn\'t respond')}.</div>`; return; }
+    const rows = Array.isArray(d.items) ? d.items : [];
+    if (!rows.length) { list.innerHTML = '<div class="field-hint">No suggestions yet.</div>'; return; }
+    list.innerHTML = rows.map(p => {
+      const where = p.register === 'me' ? 'a standing fact about your Familiar' : 'a standing fact about you';
+      const care = p.care_weight === 'high' ? ' (high-care)' : '';
+      const when = (p.resolved_at || p.created_at) ? new Date(p.resolved_at || p.created_at).toLocaleString() : '';
+      const fact = p.fact && p.fact.trim() !== String(p.passage || '').trim()
+        ? `<div style="margin-top:4px"><span class="field-hint">Would become:</span> ${esc(p.fact)}</div>` : '';
+      return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+        <div class="field-hint">${esc(CLEANUP_STATUS_LABEL[p.status] || p.status)} · ${esc(p.category)}/${esc(p.filename)} → ${esc(where + care)}${when ? ` · ${esc(when)}` : ''}</div>
+        <div style="white-space:pre-wrap;margin-top:4px">${esc(p.passage || '')}</div>
+        ${fact}
+        ${p.why ? `<div class="field-hint" style="margin-top:4px">Why: ${esc(p.why)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="field-hint">Couldn't load the suggestions: ${esc(err.message)}.</div>`;
   }
 }
 
