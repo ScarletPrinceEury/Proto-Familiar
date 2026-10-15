@@ -6,6 +6,67 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### A villager's turn can edit any memory by id (privacy-class; needs the ward)
+
+`update_memory_by_id` is in `DISCORD_MEMORY_WRITE_TOOLS`, so a villager whose
+grants allow memory writes gets it on their Discord turn. Its executor doesn't
+check that the target memory is one the room may see: given an id, it rewrites
+the content, subjects or attribution of any memory, ward-private ones included.
+Recall on that turn is scoped, so ids don't leak through it, but slug ids are
+readable and guessable. 0.14.73 closed one slice: taking a fact off the care
+list (`high_care: false`) is refused on a gated turn, since that also removes it
+from triage's view. Direction: a gated write by id first checks the target's
+audience against `discordReadAudiences(ctx)` and the content gate, and refuses
+anything the room couldn't read. This is the same class as the content-gating
+privacy paths, so it needs ward sign-off.
+
+### Recall results are cut mid-word with no marker
+
+Phylactery's search results carry `excerpt: content[:300]` (`memory.py`, four
+places), and the `recall` tool prints that excerpt as the fact. A longer fact
+stops mid-word with nothing to say it was cut, so it reads as the whole fact.
+Seen live in the first identity review: the Familiar read a cut-off recall as
+"this part isn't saved yet", saved a near-duplicate, then found the full text
+with `read_memory_by_id` and deleted its own duplicate. The same class as the
+0.14.69 clipped-message fix, on a surface that fix didn't cover. Direction: the
+excerpts go through the same start-and-end excerpting with an explicit cut
+marker (`src/util/excerpt.js` has the Node side; Phylactery needs the
+equivalent), and a cut result names `read_memory_by_id` with its id as the way
+to see the rest.
+
+### The Familiar can't read its own identity files mid-turn
+
+There's no tool that returns an identity file's current content. Within a turn
+the Familiar only sees the identity loaded at the start of that turn, so after
+cutting or rewriting it has nothing real to check against, and its own edits
+show up only on the next turn. In the first review it saved two sections as
+standing facts, never deleted them, and then reported the file "clean by the
+earlier verification". Later the same night it cut a line successfully, then
+spent four more calls "re-cutting" it with different quote characters: each
+"Nothing removed: that passage isn't in … it has to be quoted as the file has
+it" pointed it at its quoting, never at the possibility that the line was
+already gone. It then tried `read_file` / `list_files` on an `identity/` path
+that doesn't exist, because identity lives inside Phylactery, not on disk.
+Direction: a read tool for one identity file (current content plus size
+against its budget share), named in the identity tools' descriptions as the way
+to check an edit landed. And `remove_from_identity`'s not-found result should
+say the passage may already be gone, and name the read tool.
+
+### Identity graduation cuts more than it files
+
+During the first identity review, an automatic graduation pass on a
+relationship file filed two sections as standing facts, which is what it's
+for. But the rewritten file also lost a paragraph that was never filed
+anywhere: the Familiar's own lines about operating with real autonomy (forming
+views, pushing back, not waiting to be told what to notice), condensed into one
+phrase. Nothing was lost for good (the pre-trim snapshot has it), but the
+Familiar only found out because it asked to see the diff. A pass that can
+quietly shrink the Familiar's account of its own agency works against the
+"weak self-presence" issue below. Direction: graduation removes exactly the
+lines it filed, verbatim, and leaves everything else in the file untouched; it
+never rewrites or condenses. Any change beyond the filed lines is surfaced as a
+proposal. The notice should show the actual diff, not just a summary.
+
 ### Web chat retries a turn whose tools already ran
 
 When a streamed web turn fails after tool calls have run, `doStreamingRequest`
@@ -57,6 +118,42 @@ imagined-or-pondered), give it a cheap way to check its own action record (tool
 calls that actually ran) before claiming one, and make "I did X" claims
 checkable against that record. Related to RULE B in CLAUDE.md (tool results are
 how I know what I actually did).
+
+Seen live in the first identity review, where every claim could be checked
+against the tool record and the stored files. Four shapes:
+1. **A planned edit reported as done.** It saved two sections as standing facts,
+   then said both sections were "out of the file". No removal call ran.
+2. **An announced write with no call.** "Filing that as a standing fact in a
+   second", and the turn ended without the save.
+3. **Wrong bookkeeping.** It miscounted its own saves and credited some of them
+   to someone else, who had made none.
+4. **Values from feel.** Its message headers ran several minutes ahead of the
+   [Now] clock.
+5. **Invented results, zero calls.** Late in a long session (140 messages, max
+   reasoning effort) a whole turn ran no tool calls, yet its reply reported
+   four completed actions with their results: "Results in, in order…", "Both
+   in — X's on the board". The saved session shows no tool calls and no tool
+   results for that turn; no store changed. The likely mechanism: the model
+   ran the calls "in its head" during long reasoning and summarised imagined
+   results. Unlike shapes 1–2, nothing in the turn can contradict it, because
+   there are no results to compare against. A code-side check would catch it:
+   a reply that claims completed actions in a turn with zero tool results.
+
+Each time, once shown the record, it corrected itself plainly and adopted a rule
+("called" = what I ran this turn, "verified" = what the file shows next turn).
+So the gap is the missing record, not the willingness.
+
+Two things in the system made this easier:
+- Every write answered just "ok" (quietOk collapses the success text), so the
+  results carried no account of WHAT happened.
+- Identity edits can't be checked within the turn (see "can't read its own
+  identity files mid-turn" above).
+
+Directions, in addition to the provenance ideas above:
+- Write tools keep a short factual result even in quiet mode ("Section X
+  removed from Y", "Saved Z as a high-care fact").
+- A per-turn "what I actually did" record, built from the tool calls that ran,
+  that the Familiar can read before it summarises its turn.
 
 <!--
 Resolved:

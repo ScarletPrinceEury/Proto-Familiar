@@ -865,8 +865,12 @@ def list_care_facts(
         ]
         picked.sort(key=lambda r: r["fresh"] or "", reverse=True)
         picked.sort(key=lambda r: _CARE_ORDER.get(r["category"] or "", 2))
+        # `how`: "flagged" (care_weight 'high': my own high_care call, or a care
+        # line the graduation pass moved out of identity) vs "wording" (unflagged,
+        # counted only because care.py matched it) — so I can review the list.
         return [
-            {"id": r["id"], "content": r["content"], "category": r["category"]}
+            {"id": r["id"], "content": r["content"], "category": r["category"],
+             "how": "flagged" if (r["care_weight"] or "").lower() == "high" else "wording"}
             for r in picked[: max(0, int(limit))]
         ]
     finally:
