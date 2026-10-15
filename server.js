@@ -197,7 +197,7 @@ import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
 import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
-import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth } from './message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -650,7 +650,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // null/mid-sentence carrier turn re-injected verbatim reads as a "null" or
   // truncated past turn (see collapseToolTurns). The current turn carries no
   // carriers yet, so this only cleans earlier turns; user turns are untouched.
-  const historyMessages = collapseToolTurns(Array.isArray(messages) ? messages : []);
+  // records: each past turn that really ran tools keeps an app-written system
+  // record after it, so history doesn't teach me that a sentence is an action.
+  const historyMessages = collapseToolTurns(Array.isArray(messages) ? messages : [], { records: true });
   let baseMessages = injectCorePrompts
     ? withCorePrompts(historyMessages, readSettingsSync() || {})
     : historyMessages;
@@ -705,6 +707,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         ? readWeatherNowLine({ unit: anchorSettings?.weatherUnit })
         : readWeatherVagueLine(),
     }) || '';
+    // What my previous turn actually ran, from the stored record — beside the
+    // clock at the end of the context, so I start this turn knowing it.
+    timeAnchor = [timeAnchor, lastTurnRecord(Array.isArray(messages) ? messages : [])].filter(Boolean).join('\n\n');
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
