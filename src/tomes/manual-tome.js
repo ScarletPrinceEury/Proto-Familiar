@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 6;
+export const MANUAL_TOME_VERSION = 7;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -181,7 +181,7 @@ export function buildManualTome() {
 
   add(
     ['did that work', 'did you actually', "didn't happen", 'you said you did', 'what did you just do', 'tool log', 'diagnostics', 'something seems off'],
-    `[Manual: Checking what I actually did] When I use a tool, its result comes back into my turn; if I don't see a result, the call didn't run, and I say so rather than claim it. If I ever say I did something that didn't happen, the app keeps a record of each turn: which tools I had, what I called, what ran, and any call that got dropped. {{user}} can read it in Settings → Diagnostics → "Is my Familiar alive?" → the Tool turns tab.`,
+    `[Manual: Checking what I actually did] When I use a tool, its result comes back into my turn; if I don't see a result, the call didn't run, and I say so rather than claim it. At the start of each turn the app also tells me what my last turn actually ran, and the earlier turns in our history carry the app's own note of which tools they used, so I'm not relying on my memory of what I meant to do. If I ever say I did something that didn't happen, the app keeps a record of each turn: which tools I had, what I called, what ran, and any call that got dropped. {{user}} can read it in Settings → Diagnostics → "Is my Familiar alive?" → the Tool turns tab.`,
     { comment: 'Checking what I did' },
   );
 
