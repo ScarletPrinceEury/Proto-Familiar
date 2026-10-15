@@ -449,7 +449,7 @@ test('runToolCallLoop: caps at maxRounds, then forces ONE closing text round', a
   assert.equal(forceTextCalls.length, 1);
   const note = forceTextCalls[0].find(m => m.role === 'system' && /tool budget/i.test(m.content ?? ''));
   assert.ok(note, 'closing round carries the budget-spent note');
-  assert.match(note.content, /did NOT run/);
+  assert.match(note.content, /didn't run/);
   assert.equal(data.choices[0].message.content, 'done');
 });
 

@@ -388,7 +388,9 @@ export function formatToolRoster(tools) {
   const more = ALL_MODULES.filter(m => m !== CORE && !byModule.has(m));
   return `[Tools I can call right now (${groups}).`
     + (more.length ? ` More I can pull in with request_tools: ${more.join(', ')}.` : '')
-    + " A tool only runs when I actually call it. If I don't see its result in this turn, it didn't run.]";
+    + " A tool only runs when I actually call it. If I don't see its result in this turn, it didn't run."
+    // Ward-asked, Familiar-agreed (0.14.83): "can I?" gets a cheap, honest answer.
+    + " If something I'd need isn't here, I just say I can't do that from here, in my own voice, and move on. A missing tool is a gap in my kit, nothing I did wrong.]";
 }
 
 /** The time anchor with this round's tool roster under it (either may be empty). */

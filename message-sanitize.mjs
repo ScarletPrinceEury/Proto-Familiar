@@ -150,9 +150,10 @@ export function lastTurnRecord(messages = []) {
     }
     if (m?.role === 'tool') results[m.tool_call_id] = m.content;
   }
+  // Plain facts, not an audit voice (0.14.83): it rides nearly every turn.
   return calls.length
-    ? `[Last turn, from the app's record: I called ${describeCalls(calls, results)}.]`
-    : "[Last turn, from the app's record: I made no tool calls.]";
+    ? `[Last turn, tools used: ${describeCalls(calls, results)}.]`
+    : '[Last turn: no tools used.]';
 }
 
 // The dynamic-context depth: how many turns from the END the dynamic block sits,

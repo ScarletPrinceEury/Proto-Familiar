@@ -1227,6 +1227,10 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
 // files" legitimately needs six-plus reaches, so ward turns use the
 // ward-configurable budget below instead (ward decision, 0.9.8).
 export const MAX_TOOL_ROUNDS = 5;
+// What I'm told when a turn's tool budget runs out (RULE B): the pending calls
+// didn't run, said plainly so I don't present them as done. One copy, shared by
+// both tool loops (it was pasted into server.js too); plain words, no verdict (0.14.83).
+export const ROUND_CAP_NOTE = "[My tool budget for this turn is used up, so the calls I just asked for didn't run. I answer my human with what I have and say which checks or changes I didn't get to. If they tell me to go on, I get a fresh budget and carry on.]";
 
 // Tool-round budget for a LIVE ward turn (web chat + ward Discord turns).
 // Ward-configurable via settings.toolRoundsPerTurn; clamped so a typo can't
@@ -6065,7 +6069,7 @@ export async function runToolCallLoop({
     roundCapHit = true;
     const closingMsgs = [
       ...currentMsgs,
-      { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
+      { role: 'system', content: ROUND_CAP_NOTE },
       ...(timeAnchor ? [{ role: 'system', content: timeAnchor }] : []),
     ];
     try {

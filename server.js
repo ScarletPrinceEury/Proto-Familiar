@@ -141,7 +141,7 @@ import {
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
-  composeActiveTools, executeToolCall, toolRoundsPerTurn,
+  composeActiveTools, executeToolCall, toolRoundsPerTurn, ROUND_CAP_NOTE,
   trackersEnabled,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
@@ -1379,7 +1379,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         forceTextRound = true;
         currentMsgs = [
           ...currentMsgs,
-          { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
+          { role: 'system', content: ROUND_CAP_NOTE },
         ];
         console.log('[tools] round cap reached with tools still pending — forcing a closing text round (stream)');
         continue;

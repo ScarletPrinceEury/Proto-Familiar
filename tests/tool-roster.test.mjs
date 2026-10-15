@@ -22,7 +22,7 @@ test('the roster names this round\'s tools by group, what else I can pull in, an
   assert.match(r, /^\[Tools I can call right now \(core: recall, save_memory, update_identity; graph: find_graph_node; my own: my_custom_thing\)\./);
   assert.match(r, /More I can pull in with request_tools: .*memory-edit/);
   assert.doesNotMatch(r, /request_tools: [^.]*graph/, 'a group I already have is not offered again');
-  assert.match(r, /A tool only runs when I actually call it\. If I don't see its result in this turn, it didn't run\.\]$/);
+  assert.match(r, /A tool only runs when I actually call it\. If I don't see its result in this turn, it didn't run\./);
 });
 
 test('no tools (a closing text round) means no roster, and the anchor is just the clock', () => {
@@ -83,4 +83,14 @@ test('without rosterTools the anchor is unchanged (background loops, old callers
     timeAnchor: '[Now: 13:20]',
   });
   assert.equal(last.content, '[Now: 13:20]');
+});
+
+test("the tool list makes 'I can't do that from here' a cheap, honest answer (0.14.83)", () => {
+  // Ward-asked and Familiar-agreed: a missing tool gets said plainly and the
+  // turn moves on, without turning into a fix-and-new-rule spiral. The check
+  // itself stays: what isn't listed isn't callable this turn.
+  const r = formatToolRoster(TOOLS);
+  assert.match(r, /If something I'd need isn't here, I just say I can't do that from here, in my own voice, and move on\./);
+  assert.match(r, /A missing tool is a gap in my kit, nothing I did wrong\.\]$/);
+  assert.match(r, /If I don't see its result in this turn, it didn't run\./, 'the honesty half stays');
 });

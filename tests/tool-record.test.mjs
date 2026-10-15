@@ -49,8 +49,8 @@ test('without records the collapse is unchanged (memorization and other callers)
 });
 
 test('the last-turn line says what the previous turn actually ran', () => {
-  assert.equal(lastTurnRecord(HISTORY), "[Last turn, from the app's record: I made no tool calls.]");
-  assert.match(lastTurnRecord(HISTORY.slice(0, 6)), /^\[Last turn, from the app's record: I called save_memory \(ok\), remove_from_identity \(returned: Nothing removed/);
+  assert.equal(lastTurnRecord(HISTORY), '[Last turn: no tools used.]');
+  assert.match(lastTurnRecord(HISTORY.slice(0, 6)), /^\[Last turn, tools used: save_memory \(ok\), remove_from_identity \(returned: Nothing removed/);
   assert.equal(lastTurnRecord([{ role: 'user', content: 'hi' }]), '', 'no previous turn yet');
 });
 
