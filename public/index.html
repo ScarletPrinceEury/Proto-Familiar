@@ -2043,6 +2043,11 @@
             <input type="number" id="phylactery-llm-timeout" min="10" step="10" placeholder="240" style="width:8em">
           </div>
           <div class="field-hint">How long to wait for one memory job — pulling facts out of a conversation, or folding a roll-up — before giving up and trying again next pass. Leave blank for the safe defaults (extraction 120s, roll-ups 240s). A slow or always-thinking model needs the room: <strong>if your Familiar's memory extraction keeps timing out, raise this.</strong> Applies to the next extraction (roll-ups after the app restarts).</div>
+          <div class="field-row">
+            <label for="identity-budget-tokens">Identity budget (tokens)</label>
+            <input type="number" id="identity-budget-tokens" min="2000" max="30000" step="500" placeholder="6000" style="width:8em">
+          </div>
+          <div class="field-hint">How much of your Familiar's identity rides along with every message (it's sent in group chats too). Over this, your Familiar is nudged to move things that only matter sometimes into standing facts it recalls when relevant, and its memory upkeep tidies over-budget files the same way. Its core self (identity, persona, personhood, wants, boundaries) is never trimmed automatically. Care details about you move to high-care standing facts that stay in front of it in your own conversations and safety checks, but not in group chats. Leave blank for 6000. Set it to 30000 to hold off the automatic tidying, for example while you go through the files together.</div>
 
           <div class="field-row" style="margin-top:12px">
             <label for="stewardship-toggle">Stewardship</label>

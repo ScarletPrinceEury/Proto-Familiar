@@ -44,12 +44,17 @@ def test_care_weight_high_never_graduates():
     assert grad.is_graduation_eligible(_base(care_weight="HIGH"), NOW) is False
 
 
-def test_care_categories_never_graduate():
+# Revised by the ward in 0.14.70: care categories and care content no longer pin
+# detail to the always-injected identity (which also reaches group chats). It
+# graduates as a HIGH-CARE ward standing fact instead — see test_identity_lean.py
+# for the high-care landing and the care-facts list that keeps it in front of me.
+
+def test_care_categories_no_longer_pin():
     for cat in ("health_info", "crisis", "support-map"):
-        assert grad.is_graduation_eligible(_base(category=cat), NOW) is False, cat
+        assert grad.is_graduation_eligible(_base(category=cat), NOW) is True, cat
 
 
-def test_care_critical_content_never_graduates():
+def test_care_critical_content_no_longer_pins():
     for content in (
         "allergic to penicillin",
         "takes 50mg of sertraline daily",
@@ -58,7 +63,7 @@ def test_care_critical_content_never_graduates():
         "do not mention her father",
         "keeps an epipen in the kitchen drawer",
     ):
-        assert grad.is_graduation_eligible(_base(content=content), NOW) is False, content
+        assert grad.is_graduation_eligible(_base(content=content), NOW) is True, content
 
 
 def test_recently_confirmed_never_graduates():

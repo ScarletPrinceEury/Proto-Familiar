@@ -20,6 +20,7 @@ const execFileP = promisify(execFile);
 import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
+  listCareFacts, setIdentityBudget,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, readMemoryById, getIdentityAll, villageRegistryGet, villageRegistrySet, stripVillageRegistry, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listUnresolvedAttributions,
@@ -184,6 +185,8 @@ import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { clientDisconnectSignal, upstreamSignal, upstreamFailure } from './src/server/upstream-abort.js';
 import { tickGuardStatus } from './src/util/tick-guard.js';
 import { guardAsyncRoutes, asyncRouteErrorHandler } from './src/server/async-routes.js';
+import { formatCareFactsBlock } from './src/safety/care-facts.js';
+import { identityBudgetTokens } from './src/memory/identity-budget.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -5059,6 +5062,12 @@ app.put('/api/settings', async (req, res) => {
     resetNoticingCooldown();
   }
 
+  // My human's identity budget lives in Phylactery for its graduation pass —
+  // push it whenever it changes (also pushed once at boot). Best-effort.
+  if (identityBudgetTokens(merged) !== identityBudgetTokens(prior ?? {})) {
+    setIdentityBudget(identityBudgetTokens(merged)).catch(() => {});
+  }
+
   return res.json({ ok: true });
 });
 
@@ -5914,6 +5923,10 @@ startThalamus();
  * fire-and-forget by nature and retries on the next boot.
  */
 async function runPhylacteryMaintenance() {
+  // 0. My human's identity budget → Phylactery's graduation pass (it also
+  // follows every Settings change). Best-effort; graduation falls back to the
+  // 6k default if this never lands.
+  setIdentityBudget(identityBudgetTokens(readSettingsSync())).catch(() => {});
   // 1. Health first: it is the cheapest call and it decides whether the
   // embedding backfill is even worth running. A silently-dead embedder is
   // what floods the consent queue with duplicate facts, so it must be
@@ -7421,12 +7434,17 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
   const recentConversation = recentConversationLines
     ? (noticingProvenance ? `${noticingProvenance}\n${recentConversationLines}` : recentConversationLines)
     : recentConversationLines;
+  // My human's care-critical standing facts, the whole set (ward-signed
+  // 0.14.70) — noticing is a ward-private deliberation, and these no longer ride
+  // in my identity.
+  const careFacts = formatCareFactsBlock(await listCareFacts().catch(() => []));
   const noticingBody = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's
     // hand-to-triage clause names a lever the Familiar can actually pull.
     nowBlock, openEvents, otherItems: situationReport, spanText, threatTier, hasFlagDistress: true,
     recentConversation,
     recentMemories,
+    careFacts,
   }), s);
   // Role (ward decision): the Familiar's own reflection rides as SYSTEM, next to
   // identity — never a `user` turn, which framed it as being operated. A bare,

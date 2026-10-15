@@ -73,8 +73,9 @@ async function loadTomes() {
 export function buildGraduationPrompt({ items }) {
   const rubric =
 `I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it belongs:
-- A standing fact about who I am, as I grow and change → my self identity (home "self").
-- A standing fact about who {{user}} is → their identity (home "ward"). About our bond → our relationship (home "relationship").
+- Who I am at the core, as I grow and change → my self identity (home "self"). A note about myself that only matters sometimes → a standing fact (home "memory", register "me").
+- The core of who {{user}} is (name, pronouns, how they like to be addressed) → their identity (home "ward"). Anything else lasting about them — preferences, patterns, care details like what helps, meds or triggers → a standing fact (home "memory", register "ward"). The shape of our bond → our relationship (home "relationship").
+- My identity files ride every turn, group chats included, so I keep them for who I am and the shape of us.
 - A person, place, or thing and HOW IT CONNECTS to others — a relationship between entities → my knowledge graph (home "graph"). I give the relationship(s) as subject → edge → object, using the entities' canonical labels as I already know them.
 - A moment, event, or pattern with a 'when' → my memory (home "memory").
 - Keyword-triggered context or lore — something that should resurface on a topic but isn't a fact about who someone is, how things connect, or a moment in time → it stays a tome (home "tome").
@@ -95,7 +96,7 @@ The entries to review:
 ${list}
 
 I reply with ONLY a JSON array — one object per uid, no prose:
-[{ "uid": "…", "home": "self|ward|relationship|graph|memory|tome", "already_held": false, "content": "for an identity or memory home: the fact rewritten in my own voice (omit for graph/tome/already_held)", "filename": "for an identity home: my_identity.md | ward_notes.md | relationship_notes.md", "granularity": "for memory: daily|significant", "relations": "for a graph home: [{ \\"subject\\": {\\"label\\":\\"Chen\\",\\"type\\":\\"person\\"}, \\"edge\\": \\"lives_in\\", \\"object\\": {\\"label\\":\\"Berlin\\",\\"type\\":\\"place\\"} }]" }]`;
+[{ "uid": "…", "home": "self|ward|relationship|graph|memory|tome", "already_held": false, "content": "for an identity or memory home: the fact rewritten in my own voice (omit for graph/tome/already_held)", "filename": "for an identity home: my_identity.md | ward_notes.md | relationship_notes.md", "granularity": "for memory: daily|significant", "register": "for a standing fact in memory: ward|me (omit for a moment)", "relations": "for a graph home: [{ \\"subject\\": {\\"label\\":\\"Chen\\",\\"type\\":\\"person\\"}, \\"edge\\": \\"lives_in\\", \\"object\\": {\\"label\\":\\"Berlin\\",\\"type\\":\\"place\\"} }]" }]`;
 }
 
 // Provider call — mirrors the reachout/triage loops' shape. (If a fourth

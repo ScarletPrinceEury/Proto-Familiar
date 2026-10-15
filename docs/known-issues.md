@@ -30,19 +30,18 @@ calls that actually ran) before claiming one, and make "I did X" claims
 checkable against that record. Related to RULE B in CLAUDE.md (tool results are
 how I know what I actually did).
 
-### Identity crowding: facts go into the identity block instead of standing memories
-
-The Familiar is quick to append information to its identity segments when it
-should save it as a semantically recalled standing fact (the `ward` register /
-`temporality: standing`, recalled when relevant). The identity block rides
-every turn, so this crowds the context with things that don't apply most of
-the time. The tool descriptions and any identity-writing prompts need to steer
-"who I am / who we are to each other" into identity and everything situational
-into standing memories, and there's likely a clean-up pass to move existing
-entries.
-
 <!--
 Resolved:
+- Identity crowding — fixed 0.14.70 (docs/identity-lean-build-spec.md). Root
+  cause: three prompts routed standing facts about my human INTO identity
+  (save_to_tome, the tome-graduation rubric, pondering), nothing bounded its size,
+  and the Pillar H cleanup judged whole files — any file edited in 30 days, or
+  holding one care word, was never tidied. Now: one rule in every writer
+  (identity = who I am + the shape of us; everything else, care included, is a
+  standing fact), a ward-set budget with an update_identity nudge, a cleanup that
+  works on over-budget files (protected self core excepted), and care facts
+  moved to high-care standing facts that are put in front of me on my human's own
+  turns, in triage and noticing — never in group chats.
 - "I didn't finish my sentence" when the sentence was finished — fixed 0.14.69.
   Root cause: context blocks showed the Familiar's own earlier messages cut to a
   fixed length — the hippocampus at 280 chars ending in "…", the noticing /
