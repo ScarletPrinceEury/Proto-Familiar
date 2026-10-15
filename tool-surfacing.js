@@ -96,6 +96,9 @@ export const TOOL_MODULES = {
   list_files: 'files', read_file: 'files', search_sessions: 'files',
 
   convert_ids_to_slugs: 'maintenance',
+  // My canary stamps (0.14.79): rarely used, so they travel with the
+  // [Canary check] block or with talk about canaries/stamps.
+  add_identity_canary: 'maintenance', list_identity_canaries: 'maintenance', retire_identity_canary: 'maintenance',
 
   set_day_start_anchor: 'stewardship',
 
@@ -147,7 +150,7 @@ export const MODULE_INDEX =
   'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
   'acks (inspect/file/snooze/drop my own pending deferred intents & tells, confirm/drop memory consent, graduation notices, apply/dismiss my identity cleanup proposals), ' +
   'files (list/read my own folder, search back through my past sessions), ' +
-  'maintenance (id tidy-up), ' +
+  'maintenance (id tidy-up, register/list/retire my identity canary stamps), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'media (look again at an image shared earlier, tie an image to someone/something in my graph), ' +
   'trackers (my human\'s private ledgers: mood, sleep, the pantry, laundry, upkeep gauges — list/create/log/read/adjust), ' +
@@ -226,8 +229,8 @@ const TRIGGERS = {
     blocks: [],
   },
   maintenance: {
-    text: /\b(convert|tidy|migrate|old ids?|hex ids?)\b/i,
-    blocks: [],
+    text: /\b(convert|tidy|migrate|old ids?|hex ids?|canar(y|ies)|stamps?)\b/i,
+    blocks: ['[Canary check'],
   },
   intentions: {
     // The intention tools are CORE now (always exposed — ward directive 2026-09),

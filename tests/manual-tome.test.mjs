@@ -218,4 +218,10 @@ test('the manual covers identity, care facts and checking what I did, with real 
     assert.ok(html.includes(label), `"${label}" is a real label in the UI`);
   }
   assert.ok(html.includes('>Automation<') || /data-[a-z-]*tab="automation"/i.test(html) || html.includes('Automation'), 'the Automation tab exists');
+  // 0.14.79: canary stamps.
+  const canary = find('canary stamps');
+  assert.ok(canary, 'the canary entry exists');
+  for (const label of ['Identity canary stamps', 'Check stamps']) {
+    assert.ok(canary.content.includes(label) && html.includes(label), `"${label}" is named and real`);
+  }
 });

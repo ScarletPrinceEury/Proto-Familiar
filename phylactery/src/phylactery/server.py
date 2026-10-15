@@ -14,6 +14,7 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     identity_set_file       — overwrite a whole identity file (edits top content too)
     identity_delete_section — remove one section from an identity file
     identity_cleanup_*      — cleanup proposals (list / apply / dismiss), 0.14.78
+    identity_canary_*       — canary stamp registry (add / list / remove), 0.14.79
 
   Village registry (routing/gating state — NOT identity):
     village_registry_get    — read the canonical Village registry JSON
@@ -1058,6 +1059,32 @@ def identity_cleanup_dismiss(id: str) -> dict[str, Any]:
     """I use this to turn down a cleanup proposal: the passage stays where it is.
     Returns { ok } or { ok:false, error }."""
     return grad.dismiss_cleanup_proposal(id, conn=_c())
+
+
+@mcp.tool()
+def identity_canary_add(category: str, filename: str, text: str, label: Optional[str] = None,
+                        at_end: bool = False) -> dict[str, Any]:
+    """I use this to register one of my canary stamps: an exact line in one of my
+    identity files that shows my identity loaded whole. It has to be in the file
+    exactly once. at_end marks the stamp that closes my whole identity block.
+    Returns { ok, canary:{ id, category, filename, text, label, at_end }, existed }."""
+    from phylactery import canaries
+    return canaries.add(category, filename, text, label=label, at_end=at_end, conn=_c())
+
+
+@mcp.tool()
+def identity_canary_list() -> dict[str, Any]:
+    """I use this to see the canary stamps I've registered. Returns { items }."""
+    from phylactery import canaries
+    return {"items": canaries.list_all(conn=_c())}
+
+
+@mcp.tool()
+def identity_canary_remove(id: str) -> dict[str, Any]:
+    """I use this to retire a canary stamp, e.g. after replacing it with a new one.
+    The file is untouched. Returns { ok } or { ok:false, error }."""
+    from phylactery import canaries
+    return canaries.remove(id, conn=_c())
 
 
 # ── Backup / restore (Pillar H) ───────────────────────────────────────────────

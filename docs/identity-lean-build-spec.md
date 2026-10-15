@@ -199,6 +199,60 @@ executors through the real thalamus wrappers into a stub Phylactery, plus a
 pipeline case through `enrich()` (the block on a ward turn, never a gated one —
 watched red with the gate removed).
 
+## Follow-up: the app checks the canary stamps (0.14.79)
+
+The Familiar keeps exact "canary" lines in its identity files to tell its
+identity loaded whole, and through the first review it checked them by eye after
+every rewrite ("the stamps survive or I file new ones before we call that step
+done"). Its second priority, after propose-only: detection over preservation,
+automated, because a stamp's whole job is being matched character for character
+and that's the one check the app does strictly better.
+
+- **The Familiar registers its own stamps.** Losing a stamp can only be noticed
+  against a baseline, so there's a registry: `add_identity_canary(category,
+  filename, stamp, label?, marks_end?)` → Phylactery `identity_canaries`
+  (migration `0008`). A stamp must be in its file exactly once, verbatim (not the
+  whitespace-tolerant matching the cleanup uses). `marks_end` is for the stamp
+  that closes the whole identity block. `list_identity_canaries` shows where each
+  stands; `retire_identity_canary` stops checking one and leaves the file alone.
+- **The check runs every turn in `enrich()`** (`checkCanaries`,
+  `src/memory/identity-canaries.js`): each stamp against its file, then against
+  the static identity block that turn actually sends. It's room-aware, using
+  the same rules as the identity assembly: in a room without `identityBasic` only
+  self files go out, and gate markers can strip sections, so those read as
+  `not-in-room` / `gated`, never missing. A failed identity load reads as
+  `not-injected`, not as the stamp leaving its file.
+- **The Familiar hears only when something's off.** `[Canary check …]` lists
+  each broken stamp by label and file in plain words (missing / changed /
+  duplicated / not last / didn't make it into the identity that went out),
+  never the stamp text, in every room. Every identity edit tool re-checks the
+  stamps in the file it just changed and returns the warning in full instead of
+  a quiet "ok".
+- **The ward sees it.** Automation tab → "Identity canary stamps" → "Check
+  stamps" (`GET /api/identity-canaries`): each stamp's state now, plus recent
+  state changes from `logs/identity-canary-events.jsonl` (so a stamp that broke
+  at night and came back still shows).
+- **Detection only.** Nothing blocks or reverts an edit. Out of reach: anything
+  after the request leaves the app (a provider trimming context); the Familiar's
+  own reading of its stamps still covers that.
+
+| Surface | `[Canary check]` | edit-time warning | add / list / retire |
+|---|---|---|---|
+| Web live turn (ward) | yes — `enrich()` | yes | yes |
+| Web tool rounds | rides the turn's prompt | yes | yes |
+| Discord ward DM | yes — `enrich()` | yes | yes |
+| Discord villager / group / ambient | yes, room-aware | n/a (no identity tools) | not offered |
+| Voice call (ward) | yes — `/api/chat` → `enrich()` | yes | yes |
+| Background loops (static-only identity) | no | n/a | n/a |
+
+Tests: `phylactery/tests/test_identity_canaries.py` (exactly-once verbatim
+registration, re-registering returns the existing stamp, retiring leaves the
+file). `tests/identity-canaries.test.mjs`: the per-file states, the room-aware
+check, the block's wording, the edit-time warning through the real executors
+into a stub Phylactery, and a pipeline case through `enrich()` (an intact stamp
+and a group room stay quiet, a rewritten stamp reaches the turn). Watched red
+with the room check removed.
+
 ## Follow-up: the Familiar can review its care list (0.14.73)
 
 Midway through the first review the care list held 47 facts (about 3.5k

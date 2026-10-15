@@ -20,7 +20,7 @@ const execFileP = promisify(execFile);
 import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
-  listCareFacts, setIdentityBudget, setIdentityGraduationPaused, listCleanupProposals,
+  listCareFacts, setIdentityBudget, setIdentityGraduationPaused, listCleanupProposals, listIdentityCanaries,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, readMemoryById, getIdentityAll, villageRegistryGet, villageRegistrySet, stripVillageRegistry, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listUnresolvedAttributions,
@@ -55,6 +55,7 @@ import {
   listTrackers, readTracker, archiveTracker, dropTracker, trackerReflectionSeries,
   ensureTrackerFromTemplate, createTrackerFromTemplate, listTrackerTemplates, logTrackerEntry,
 } from './thalamus.js';
+import { checkCanaries, readCanaryEvents } from './src/memory/identity-canaries.js';
 // Mood → threat link (T-D.2, ward-signed): a distress mood-send gently raises
 // the threat tier, bounded so mood alone never reaches a crisis tier.
 import { applyMoodThreat } from './src/tracker/mood-threat.js';
@@ -4890,6 +4891,24 @@ app.get('/api/identity-cleanup-proposals', async (req, res) => {
     const all = req.query?.all === '1' || req.query?.all === 'true';
     res.json({ ok: true, items: await listCleanupProposals({ status: all ? 'all' : 'open' }) });
   } catch (err) { res.json({ ok: false, items: [], error: err?.message ?? 'list failed' }); }
+});
+
+// My Familiar's identity canary stamps (0.14.79), read-only for my human: each
+// registered stamp and whether it checks out right now — in its file and in
+// the identity block one of our own conversations would send — plus recent
+// state changes (a stamp that broke at 3am and came back still shows).
+app.get('/api/identity-canaries', async (_req, res) => {
+  try {
+    const canaries = await listIdentityCanaries({ force: true });
+    let results = [];
+    if (canaries.length) {
+      const [files, enriched] = await Promise.all([getIdentityAll(), enrich('', { staticOnly: true })]);
+      results = checkCanaries({ canaries, files, staticBlock: enriched?.static ?? '', layersIncluded: true });
+    }
+    res.json({ ok: true, items: results.map(r => ({ ...r.canary, state: r.state })), events: await readCanaryEvents({ limit: 50 }) });
+  } catch (err) {
+    res.json({ ok: false, items: [], events: [], error: err?.message ?? 'check failed' });
+  }
 });
 
 app.get('/api/memory-quarantine', async (req, res) => {

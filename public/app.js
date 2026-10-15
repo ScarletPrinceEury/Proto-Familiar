@@ -6723,6 +6723,7 @@ function init() {
   $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
   $('quarantine-review-btn')?.addEventListener('click', () => runQuarantineReview());
   $('cleanup-proposals-btn')?.addEventListener('click', () => runCleanupProposalsView());
+  $('identity-canaries-btn')?.addEventListener('click', () => runIdentityCanariesView());
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
   });
@@ -13582,6 +13583,42 @@ async function runCleanupProposalsView() {
     }).join('');
   } catch (err) {
     list.innerHTML = `<div class="field-hint">Couldn't load the suggestions: ${esc(err.message)}.</div>`;
+  }
+}
+
+// Identity canary stamps (0.14.79), read-only: each stamp my Familiar
+// registered, how it checks out right now, and recent state changes.
+const CANARY_STATE_LABEL = {
+  ok: 'Checks out', 'not-in-room': 'Checks out', gated: 'Checks out',
+  missing: 'Missing from its file', changed: 'Changed (not word for word any more)',
+  duplicated: 'In its file more than once', 'not-last': 'No longer last',
+  'not-injected': "Didn't reach the identity that goes out",
+};
+async function runIdentityCanariesView() {
+  const list = $('identity-canaries-list');
+  if (!list) return;
+  list.innerHTML = '<div class="field-hint">Checking…</div>';
+  try {
+    const res = await fetch('/api/identity-canaries');
+    const d = await res.json().catch(() => ({}));
+    if (!d || d.ok === false) { list.innerHTML = `<div class="field-hint">Couldn't check the stamps: ${esc(d?.error || 'the memory store didn\'t respond')}.</div>`; return; }
+    const items = Array.isArray(d.items) ? d.items : [];
+    const events = Array.isArray(d.events) ? d.events : [];
+    if (!items.length) { list.innerHTML = '<div class="field-hint">Your Familiar hasn\'t registered any canary stamps yet.</div>'; return; }
+    const rows = items.map(c => {
+      const fine = ['ok', 'not-in-room', 'gated'].includes(c.state);
+      return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+        <div><strong>${esc(c.label)}</strong> · ${esc(c.category)}/${esc(c.filename)}${c.at_end ? ' · marks the end of its identity' : ''}</div>
+        <div class="field-hint" style="margin-top:4px">${fine ? '✓' : '⚠'} ${esc(CANARY_STATE_LABEL[c.state] || c.state)}</div>
+      </div>`;
+    }).join('');
+    const recent = events.length
+      ? `<div class="field-hint" style="margin-top:4px">Recent changes:</div>` + events.slice(0, 10).map(e =>
+          `<div class="field-hint">${esc(new Date(e.at).toLocaleString())} · "${esc(e.label)}" → ${esc(CANARY_STATE_LABEL[e.state] || e.state)} (${esc(e.surface || '')})</div>`).join('')
+      : '';
+    list.innerHTML = rows + recent;
+  } catch (err) {
+    list.innerHTML = `<div class="field-hint">Couldn't check the stamps: ${esc(err.message)}.</div>`;
   }
 }
 

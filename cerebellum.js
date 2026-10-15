@@ -51,6 +51,7 @@ import {
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection, removeIdentityText, deleteIdentitySection,
   listCleanupProposals, applyCleanupProposal, dismissCleanupProposal,
+  listIdentityCanaries, addIdentityCanary, retireIdentityCanary,
   listMemories, readMemory, readMemoryById, moveMemoryDate, updateMemoryById, deleteMemoryById,
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
@@ -72,6 +73,7 @@ import {
 import { formatOrganStatus } from './organs.js';
 import { formatCareFactsBlock, careWeightFromFlag, formatCareFactsReview } from './src/safety/care-facts.js';
 import { formatCleanupProposalsReview } from './src/memory/cleanup-proposals.js';
+import { checkCanariesInFiles, formatCanaryEditNote, formatCanaryList, lastCanaryStates } from './src/memory/identity-canaries.js';
 import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
@@ -1763,6 +1765,44 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'add_identity_canary',
+      description: "I register one of my canary stamps: an exact line in one of my identity files that shows my identity loaded whole. From then on the app checks it every turn, against the file and against the identity that actually went out, and tells me when it's missing, changed, or (if it marks the end) no longer last. It has to be in the file exactly once, copied character for character. It never stops me editing the file.",
+      parameters: {
+        type: 'object',
+        properties: {
+          category:  { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename:  { type: 'string', description: 'The file the stamp lives in, e.g. my_persona.md.' },
+          stamp:     { type: 'string', description: 'The stamp line, copied exactly as the file has it.' },
+          label:     { type: 'string', description: 'A short name for it, e.g. persona or tail.' },
+          marks_end: { type: 'boolean', description: 'True if this stamp closes my whole identity block, so nothing may come after it.' },
+        },
+        required: ['category', 'filename', 'stamp'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_identity_canaries',
+      description: 'I look at the canary stamps I registered: where each lives, whether it checks out in its file right now, and how it looked in my identity last turn.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'retire_identity_canary',
+      description: 'I stop the app checking one of my canary stamps, e.g. after replacing it with a new one. The file is untouched.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The stamp id, from list_identity_canaries or when I registered it.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'apply_cleanup_proposal',
       description: 'I accept one of my identity cleanup proposals (the ids are in my [Cleanup proposals for my identity] block). The standing fact is saved first, in my own words if I give `fact`, and then exactly that passage is cut from the file. A snapshot is kept first. If the passage has changed since it was proposed, nothing happens and the result says so.',
       parameters: {
@@ -3221,6 +3261,25 @@ function renderTrackerRead(data) {
   return [head, ...lines].join('\n');
 }
 
+// After an identity edit lands: did it break one of my canary stamps in that
+// file? (0.14.79) The edit stands either way; I just hear about it right away,
+// with the full text instead of a quiet "ok".
+async function canaryEditNote(category, filename) {
+  try {
+    const mine = (await listIdentityCanaries()).filter(c => c.category === category && c.filename === filename);
+    if (!mine.length) return '';
+    return formatCanaryEditNote(checkCanariesInFiles({ canaries: mine, files: await getIdentityAll() }));
+  } catch (err) {
+    console.warn('[cerebellum] canary check after an identity edit failed:', err?.message ?? err);
+    return '';
+  }
+}
+
+async function identityEditResult(okText, category, filename) {
+  const note = await canaryEditNote(category, filename);
+  return note ? `${okText} ${note}` : quietOk(okText);
+}
+
 export const TOOL_EXECUTORS = {
   get_datetime: () => new Date().toLocaleString([], {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -3379,7 +3438,9 @@ export const TOOL_EXECUTORS = {
       let note = '';
       try { note = identityBudgetNote(await getIdentityAll(), category, identityBudgetTokens(readSettingsSync())); }
       catch { /* best-effort — the append itself succeeded */ }
-      return note ? `Identity file updated. ${note}` : quietOk('Identity file updated.');
+      if (!note) return identityEditResult('Identity file updated.', category, filename);
+      const canary = await canaryEditNote(category, filename);
+      return `Identity file updated. ${note}${canary ? ` ${canary}` : ''}`;
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
@@ -3862,7 +3923,7 @@ export const TOOL_EXECUTORS = {
           : (result.sections ? ' It has no ## headings, so I cut lines with remove_from_identity instead.' : '');
         return `Nothing rewritten: ${result.error ?? 'phylactery unavailable'}.${hint}`;
       }
-      return quietOk(`Section "${section}" of ${category}/${filename} rewritten.`);
+      return identityEditResult(`Section "${section}" of ${category}/${filename} rewritten.`, category, filename);
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
   },
 
@@ -3873,7 +3934,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await removeIdentityText({ category, filename, passage });
       if (!result.ok) return `Nothing removed: ${result.error ?? 'phylactery unavailable'}.`;
-      return quietOk(`Cut ${result.removedChars} characters from ${category}/${filename} (now ${result.chars}).`);
+      return identityEditResult(`Cut ${result.removedChars} characters from ${category}/${filename} (now ${result.chars}).`, category, filename);
     } catch (err) { return `Nothing removed: ${err.message}`; }
   },
 
@@ -3884,8 +3945,38 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteIdentitySection({ category, filename, section: section.trim() });
       if (!result.ok) return `Nothing deleted: ${result.error ?? 'phylactery unavailable'}.`;
-      return quietOk(`Section "${section.trim()}" removed from ${category}/${filename}.`);
+      return identityEditResult(`Section "${section.trim()}" removed from ${category}/${filename}.`, category, filename);
     } catch (err) { return `Nothing deleted: ${err.message}`; }
+  },
+
+  // Canary stamps (0.14.79): the app checks them every turn (enrich); these
+  // keep the list of what to look for. Detection only, never a lock.
+  add_identity_canary: async ({ category, filename, stamp, label, marks_end } = {}) => {
+    if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Nothing registered: invalid category.';
+    if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Nothing registered: invalid filename.';
+    if (typeof stamp !== 'string' || !stamp.trim()) return 'Nothing registered: I need the stamp, copied exactly from the file.';
+    const res = await addIdentityCanary({ category, filename, text: stamp, label, atEnd: marks_end === true || marks_end === 'true' });
+    if (!res.ok) return `Nothing registered: ${res.error}.`;
+    const c = res.canary;
+    if (res.existed) return `That stamp is already registered as "${c.label}" [id: ${c.id}].`;
+    return `Registered canary stamp "${c.label}" [id: ${c.id}] in ${c.category}/${c.filename}${c.at_end ? ', as the end of my identity' : ''}. The app checks it every turn from now on.`;
+  },
+
+  list_identity_canaries: async () => {
+    try {
+      const canaries = await listIdentityCanaries({ force: true });
+      if (!canaries.length) return formatCanaryList([]);
+      const results = checkCanariesInFiles({ canaries, files: await getIdentityAll() });
+      return formatCanaryList(results, { lastTurn: lastCanaryStates() });
+    } catch (err) { return `I couldn't read my canary stamps: ${err.message}`; }
+  },
+
+  retire_identity_canary: async ({ id } = {}) => {
+    const cid = String(id ?? '').trim();
+    if (!cid) return 'Nothing retired: I need the stamp id (list_identity_canaries shows it).';
+    const res = await retireIdentityCanary({ id: cid });
+    if (!res.ok) return `Nothing retired: ${res.error}.`;
+    return quietOk(`Retired canary stamp ${cid}; the app stops checking it. The file is untouched.`);
   },
 
   // Identity cleanup proposals (0.14.78): the automatic cleanup proposes, I
@@ -3901,7 +3992,8 @@ export const TOOL_EXECUTORS = {
           ? `The standing fact is saved (${result.memoryId}), but the passage wasn't cut: ${result.error}. I can cut it with remove_from_identity.`
           : `Nothing changed: ${result.error ?? 'phylactery unavailable'}.`;
       }
-      return quietOk(`Saved the standing fact (${result.memoryId}) and cut ${result.removedChars} characters from ${result.file}.`);
+      const [cat, ...rest] = String(result.file ?? '').split('/');
+      return identityEditResult(`Saved the standing fact (${result.memoryId}) and cut ${result.removedChars} characters from ${result.file}.`, cat, rest.join('/'));
     } catch (err) { return `Nothing changed: ${err.message}`; }
   },
 
