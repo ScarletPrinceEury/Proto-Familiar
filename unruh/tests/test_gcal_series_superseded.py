@@ -34,10 +34,12 @@ def conn():
     c.close()
 
 
-def _series_node(conn, uid=SERIES, resolutions=None):
+def _series_node(conn, uid=SERIES, resolutions=None, calendar_id=None):
     """A series node as the iCal-link sync left it: weekly, anchor in the past."""
     payload = {"source": "gcal", "gcal_uid": uid, "all_day": True,
                "recurrence": {"freq": "weekly"}, "resolutions": resolutions or {"2026-06-24": "done"}}
+    if calendar_id:
+        payload["gcal_calendar_id"] = calendar_id
     return sched.add_node(conn, type="event", label="Wash day", when="2024-07-24T00:00:00",
                           end="2024-07-25T00:00:00", payload=payload)
 
@@ -97,3 +99,14 @@ def test_unrelated_series_and_hand_made_nodes_are_left_alone(conn):
     gcal.gcal_ingest(conn, events=[_occurrence("2026-07-08")], now=NOW)
     assert "until" not in _payload(conn, other)["recurrence"]
     assert "until" not in _payload(conn, mine)["recurrence"]
+
+
+def test_a_series_filed_under_the_old_link_calendar_id_still_stops(conn):
+    # 0.14.81: the same shared calendar has one id under the iCal link and
+    # another under the Google account. The old series node sits under the
+    # link's id, which no snapshot uses any more; its occurrences arrive under
+    # the account's id. Scoped matching never saw it.
+    sid = _series_node(conn, calendar_id="old-link-calendar")
+    res = gcal.gcal_ingest(conn, events=[_occurrence("2026-07-08")], calendar_id="account-calendar", now=NOW)
+    assert res["series_capped"] == [sid]
+    assert _payload(conn, sid)["recurrence"]["until"] == "2026-07-07T23:59:59"

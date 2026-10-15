@@ -484,9 +484,14 @@ def gcal_ingest(
 
     # A series node whose occurrences now arrive as their own events stops
     # repeating (the doubled-events fix). Re-read so occurrences created this
-    # pass count; scoped like the rest of the reconcile.
-    refreshed, _ = dedupe_gcal_nodes(conn, calendar_id=calendar_id, include_legacy=include_legacy)
-    series_capped = cap_superseded_series(conn, refreshed, seen_uids)
+    # pass count. Deliberately NOT scoped to this calendar (0.14.81): the same
+    # shared calendar has one id under the iCal link and another under the
+    # Google account, so an old series node can sit under an id no snapshot
+    # uses any more. Google's series ids are globally unique, so matching a
+    # series to its own occurrences across calendar ids can't touch another
+    # calendar's events; deletion reconcile stays scoped.
+    every_gcal_node, _ = dedupe_gcal_nodes(conn)
+    series_capped = cap_superseded_series(conn, every_gcal_node, seen_uids)
 
     # Deletion reconcile — only on a confirmed-good full snapshot that parsed
     # at least one event, and only for still-future nodes (§1.3 guards).
