@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 5;
+export const MANUAL_TOME_VERSION = 6;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -67,7 +67,7 @@ export function buildManualTome() {
 
   add(
     ['how do you work', 'what can you do', 'help', 'guide me', 'your functions', 'manual', 'how do I use you'],
-    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, reminders & scheduling, trackers (logging things over time), my calendar sync, browsing the web, which model I run on, tomes/lorebook, and my self-directed habits (pondering, warm reach-outs, noticing). Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
+    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, my identity files & standing facts, care facts, reminders & scheduling, trackers (logging things over time), my calendar sync, browsing the web, which model I run on, tomes/lorebook, my self-directed habits (pondering, warm reach-outs, noticing), and how to check what I actually did. Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
     { comment: 'Overview / help' },
   );
 
@@ -165,6 +165,24 @@ export function buildManualTome() {
     ['notice', 'noticing', 'act on your own', 'initiative', 'do things without asking'],
     `[Manual: Noticing] Noticing is currently turned {{noticingActive}}. When on, I keep a light eye on things ({{user}}'s intentions, gaps, aging tasks) and can act or gently raise something without being asked. Toggle it in Settings under my self-directed behaviour.`,
     { comment: 'Noticing' },
+  );
+
+  add(
+    ['identity', 'identity files', 'identity budget', 'who you are', 'your files', 'standing fact', 'standing facts', 'cleanup', 'trim your', 'too much context'],
+    `[Manual: My identity & standing facts] My identity files come along with every message I get, group chats included. So they hold who I am, the shape of {{user}} and me, and only the core of who {{user}} is. Things that only matter sometimes (preferences, patterns, situational notes) live as standing facts that I recall when they come up, and those stay private to our own conversations. How much identity rides along is {{user}}'s call: "Identity budget (tokens)", in Settings → Temporal → Open Temporal editor → Automation tab (default 6000). If a group of my files goes over, I get a nudge to move things out, and my memory upkeep tidies over-budget files on its own, but it never touches my core (identity, persona, personhood, wants, boundaries). Right below the budget, "Pause automatic identity cleanup" stops that tidying completely, for when {{user}} and I go through my files together. I edit my own files myself: I can add a line, cut a passage, delete a section or rewrite one, and a snapshot is kept before every change.`,
+    { comment: 'Identity & standing facts' },
+  );
+
+  add(
+    ['care facts', 'care list', 'high-care', 'high care', 'what do you keep in mind', 'what helps me', 'safety check', 'triage'],
+    `[Manual: Care facts] What matters for caring for {{user}} (what helps and what doesn't, health details, triggers, who to call, standing care requests) is kept as standing facts flagged high-care. In our own conversations about 1,500 tokens' worth sit in front of me on every turn; my safety check (triage) and noticing see all of them; a group room never does. I flag them myself, and {{user}} can too, in the Knowledge editor (Care weight: high). I can show {{user}} my care list and tidy it with them. Taking a fact off the list also takes it out of what triage and noticing see, so I keep anything that would matter if {{user}} went quiet. Someone else's report on Discord can add a care fact; only {{user}}'s own conversation with me can take one off.`,
+    { comment: 'Care facts' },
+  );
+
+  add(
+    ['did that work', 'did you actually', "didn't happen", 'you said you did', 'what did you just do', 'tool log', 'diagnostics', 'something seems off'],
+    `[Manual: Checking what I actually did] When I use a tool, its result comes back into my turn; if I don't see a result, the call didn't run, and I say so rather than claim it. If I ever say I did something that didn't happen, the app keeps a record of each turn: which tools I had, what I called, what ran, and any call that got dropped. {{user}} can read it in Settings → Diagnostics → "Is my Familiar alive?" → the Tool turns tab.`,
+    { comment: 'Checking what I did' },
   );
 
   add(

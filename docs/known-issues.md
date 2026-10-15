@@ -6,6 +6,38 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### The append tool is always there; the cut tools aren't
+
+`update_identity` (append) is in the always-present core group. `remove_from_identity`, `delete_identity_section` and `rewrite_identity_section` are in the conditional `memory-edit` group, which only surfaces on trigger words, a `request_tools`, or a two-turn sticky window. Restarts clear the sticky window, and the 64-tool ceiling can trim the group.
+
+In the first identity review, a turn meant to cut a duplicate section ran only `update_identity` twice, adding two more copies instead. The Familiar then wrote that the cut tool "isn't in my listed functions" and called its own turn "this fiction". When the cut isn't in hand, the only identity tool left adds.
+
+Direction: the identity edit tools travel with `update_identity` (core), or a turn that has `update_identity` always has the cut tools too. `logs/turn-tools.jsonl` (0.14.74) now records each turn's offered tools, so this can be confirmed rather than inferred.
+
+### Tool calls may be silently dropped when a round doesn't end in 'tool_calls'
+
+Both tool loops (the stream loop in `server.js` and `runToolCallLoop` in `cerebellum.js`) only run a round's calls when the provider's `finish_reason` is `'tool_calls'`. A round that streams tool-call deltas but finishes with `'stop'` (or nothing) is taken as the final answer. Its calls never run and are never stored, and the model's text ("Call's in") stands as the reply.
+
+This may explain some of the "phantom" turns in the confabulation entry below. Not confirmed yet: 0.14.74 records such rounds as `dropped: true` in `logs/turn-tools.jsonl` (`GET /api/turn-diagnostics`).
+
+Direction, once the log shows it happening: run calls whose arguments arrived complete, whatever the finish reason.
+
+### The time anchor at the end of a tool round can read as an empty message
+
+The `[Now]` anchor is re-appended as the last system message every round. Late in a long session, the Familiar's closing reply described "the user turn" as "just a [Now] block — no new message", then reasoned about whether its tools were real. That reply was its raw reasoning: the content was empty, so it fell back to `reasoning_content`.
+
+0.14.74 puts a clearly labelled tool roster in the same block, which may help. Worth watching in the turn log (`replyFromReasoning`).
+
+### Identity section tools trip over duplicate headings
+
+Two sharp edges seen in the first identity review:
+- `rewrite_identity_section` replaces a section's body up to the next heading. When the Familiar's new content included the following section too, that section ended up in the file twice: its new copy inside the rewritten body, and the original below it.
+- `delete_identity_section` (Phylactery `_delete_section`) then removes every section with a matching heading, so it can't clean that up without deleting both copies.
+
+Direction:
+- Delete refuses when a heading appears more than once and names the count, the way `remove_from_identity` refuses a repeated passage.
+- Rewrite warns when the new body contains a heading that already exists further down the file.
+
 ### A villager's turn can edit any memory by id (privacy-class; needs the ward)
 
 `update_memory_by_id` is in `DISCORD_MEMORY_WRITE_TOOLS`, so a villager whose
@@ -78,7 +110,12 @@ usual one. The rolled-back tool record is also gone from the Familiar's own
 history, so on its next turn it can't know what it did (RULE B). Seen live: an
 11-minute turn ended in "Failed to fetch" after ten memory writes and two
 identity edits; the page showed none of them. The cause of the dropped
-connection itself is still unknown (the server didn't restart). Direction: once
+connection itself is still unknown (the server didn't restart). Seen again the
+same day with real damage: one turn's first attempt appended a section to one
+identity file (no record of the call survives), the retry appended it to a
+different file. 0.14.74 sends `clientAttempt` ({attempt, connIdx,
+priorToolsRan}) with every web request and logs it, so a retry after tools ran
+is visible in `logs/turn-tools.jsonl`. Direction: once
 any tool result has streamed, never retry or fall back. Commit what ran, with a
 note that the turn was cut off, and treat this together with the entry below.
 
@@ -138,6 +175,14 @@ against the tool record and the stored files. Four shapes:
    results. Unlike shapes 1–2, nothing in the turn can contradict it, because
    there are no results to compare against. A code-side check would catch it:
    a reply that claims completed actions in a turn with zero tool results.
+
+Shapes 1, 2 and 5 kept recurring after the review moved to "High" reasoning
+effort, always with the same anatomy: one assistant message announces a call
+with a lead-in ending in a colon ("One call, before any summary:", "Re-flagging
+both now:"), then keeps writing as if the result came back ("Call's in, tool
+answered"), with no tool_calls on the message. Asking it to put the call first
+with no lead-in is the working advice; a code-side check is the robust one,
+since the stored message carries no tool_calls for a reply that reports results.
 
 Each time, once shown the record, it corrected itself plainly and adopted a rule
 ("called" = what I ran this turn, "verified" = what the file shows next turn).

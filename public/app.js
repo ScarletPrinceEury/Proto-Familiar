@@ -4026,7 +4026,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * them back on a failed attempt before retrying. Throws on HTTP /
  * network / abort / loop errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null) {
+async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null, clientAttempt = null) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
   const toolUseEls  = domArtifacts; // shared array - caller can roll back on error
   let   shell       = null;
@@ -4045,6 +4045,9 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
       stream:      true,
+      // Diagnostics only (turn-log.js): which try this is, and whether an
+      // earlier try of this same message already ran tools on the server.
+      ...(clientAttempt ? { clientAttempt } : {}),
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
       // `userMessage` carries {{user}}'s actual input so the server
@@ -4178,6 +4181,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
   const maxRetries = Math.max(0, parseInt(state.maxEmptyRetries, 10) || 0);
 
   let lastError = null;
+  let priorToolsRan = false;   // a failed try of this message had already run tools (diagnostics)
 
   for (let connIdx = 0; connIdx < sequence.length; connIdx++) {
     const conn = sequence[connIdx];
@@ -4193,9 +4197,10 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag);
+        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag, { attempt, connIdx, priorToolsRan });
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
+        if (domArtifacts.length) priorToolsRan = true;
         // Roll back any tool-use blocks added during this failed attempt.
         for (const el of domArtifacts) el.remove?.();
         lastError = err;
@@ -4260,7 +4265,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null) {
+async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null, clientAttempt = null) {
   const pendingMsgs = [];
 
   abortController = new AbortController();
@@ -4276,6 +4281,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
       stream:      false,
+      ...(clientAttempt ? { clientAttempt } : {}),   // diagnostics only (turn-log.js)
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
       // `userMessage` carries {{user}}'s actual input — see
@@ -4337,6 +4343,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
   const maxRetries = Math.max(0, parseInt(state.maxEmptyRetries, 10) || 0);
 
   let lastError = null;
+  let priorToolsRan = false;   // a failed try of this message had already run tools (diagnostics)
 
   for (let connIdx = 0; connIdx < sequence.length; connIdx++) {
     const conn = sequence[connIdx];
@@ -4352,9 +4359,10 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag);
+        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag, { attempt, connIdx, priorToolsRan });
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
+        if (domArtifacts.length) priorToolsRan = true;
         for (const el of domArtifacts) el.remove?.();
         lastError = err;
         if (attempt < maxRetries) {
@@ -6712,6 +6720,7 @@ function init() {
   $('loops-search-triage')?.addEventListener('input',    () => renderLoopsLog('triage'));
   $('loops-search-pagewatch')?.addEventListener('input', () => renderLoopsLog('pagewatch'));
   $('loops-search-discord')?.addEventListener('input',   () => renderLoopsLog('discord'));
+  $('loops-search-turns')?.addEventListener('input',     () => renderLoopsLog('turns'));
 
   // Trigger tracer (regex/keyword diagnostic)
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
@@ -13465,13 +13474,14 @@ async function teLoadRounds() {
 // and a stuck one don't look the same from here. Each log's raw fetch is
 // cached so a per-log filter box re-renders instantly on every keystroke
 // instead of re-fetching (the shared list-search pattern).
-const LOOPS_TABS = ['noticing', 'reachout', 'triage', 'pagewatch', 'discord'];
+const LOOPS_TABS = ['noticing', 'reachout', 'triage', 'pagewatch', 'discord', 'turns'];
 const LOOPS_LOG_ENDPOINTS = {
   noticing:  '/api/noticing-events',
   reachout:  '/api/reachout-events',
   triage:    '/api/triage-events',
   pagewatch: '/api/page-watch-events',
   discord:   '/api/discord-writes',
+  turns:     '/api/turn-diagnostics',
 };
 // kind -> array (loaded) | null (failed — distinct from "loaded, empty") | undefined (not yet loaded)
 let _loopsLogCache = {};
@@ -13692,6 +13702,22 @@ function loopsRowSummary(kind, e) {
   }
   if (kind === 'discord') {
     return { at, label: `${e.villager || 'someone'} → ${e.tool || 'a tool'}`, meta: e.locationKey || '', reason: e.args || '' };
+  }
+  if (kind === 'turns') {
+    // One live turn's tool loop (turn-log.js): what ran, what was DROPPED (calls
+    // on a round that didn't end in 'tool_calls'), and whether it was a retry.
+    const rounds = Array.isArray(e.rounds) ? e.rounds : [];
+    const ran = rounds.filter(r => r.ran).reduce((n, r) => n + (r.calls?.length || 0), 0);
+    const dropped = rounds.filter(r => r.dropped).reduce((n, r) => n + (r.calls?.length || 0), 0);
+    const label = `${e.surface || 'turn'}: ${ran} call${ran === 1 ? '' : 's'} ran` + (dropped ? `, ${dropped} DROPPED` : '');
+    const bits = [`${Array.isArray(e.offered) ? e.offered.length : 0} tools offered`, e.outcome || ''];
+    if (Number.isFinite(e.ms)) bits.push(`${Math.round(e.ms / 1000)}s`);
+    if (e.retryAfterTools) bits.push('retry after tools had already run');
+    if (e.replyFromReasoning) bits.push('reply taken from reasoning');
+    if (e.error) bits.push(`error: ${e.error}`);
+    const reason = rounds.map(r => `${r.closing ? 'closing' : 'round ' + r.round}: ${r.finishReason || '—'}`
+      + (r.calls?.length ? ` (${r.dropped ? 'dropped' : 'ran'}: ${r.calls.join(', ')})` : '')).join(' · ');
+    return { at, label, meta: bits.filter(Boolean).join(' · '), reason };
   }
   return { at, label: '—', meta: '', reason: '' };
 }

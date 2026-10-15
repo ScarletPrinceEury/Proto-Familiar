@@ -151,7 +151,8 @@ import {
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
 import { expandWindow } from './src/schedule/recurrence.js';
-import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES, shouldSurface, toolCeiling, enforceToolCeiling } from './tool-surfacing.js';
+import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES, shouldSurface, toolCeiling, enforceToolCeiling, anchorWithToolRoster } from './tool-surfacing.js';
+import { logTurn, readTurns, describeRound, toolNames, turnLogEnabled } from './src/diagnostics/turn-log.js';
 import { readStewardshipState, recordRoutineReview } from './src/schedule/stewardship.js';
 import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './src/schedule/routine-review.js';
 import {
@@ -406,7 +407,7 @@ function malformedMessageIndex(messages) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag } = req.body;
+  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag, clientAttempt } = req.body;
   // Fires when the client goes away (tab closed, voice turn gave up, an external
   // client hung up) so every upstream request below stops with it. Attached
   // before any await — see upstream-abort.js for why it's the RESPONSE's close.
@@ -878,6 +879,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // ward has it on, only core + triggered modules are advertised; everything
   // stays reachable via request_tools (same-turn recovery). Default OFF.
   let surfacing = null;   // { selection:Set, used:Set } when active
+  let turnDiag = null;    // diagnostics record for this turn (turn-log.js), loop mode only
   if (loopMode) {
     const sset = readSettingsSync();
     // Compose the FULL set first, so the provider-safe ceiling can see how big
@@ -925,6 +927,29 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       payload.tools = activeTools;
       payload.tool_choice = 'auto';
     }
+    // Diagnostics (turn-log.js): what this turn offered, what each round sent
+    // and whether it ran or was dropped, and whether the client was retrying a
+    // turn that had already run tools. Written once, when the response closes
+    // (finished or my human's client gone). Never touches the turn itself.
+    if (turnLogEnabled()) {
+      turnDiag = {
+        surface: voiceMode ? 'voice' : 'web',
+        sessionId: sessionInfo?.sessionId ?? null,
+        model: model ?? null,
+        attempt: Number(clientAttempt?.attempt) || 0,
+        connIdx: Number(clientAttempt?.connIdx) || 0,
+        retryAfterTools: clientAttempt?.priorToolsRan === true,
+        surfaced: surfacing ? [...surfacing.selection] : null,
+        offered: toolNames(activeTools),
+        ofFull: fullTools.length,
+        requested: [],
+        rounds: [],
+      };
+      const startedAt = Date.now();
+      res.on('close', () => {
+        logTurn({ ...turnDiag, outcome: turnDiag.error ? 'error' : (res.writableFinished ? 'done' : 'client-gone'), ms: Date.now() - startedAt });
+      });
+    }
   } else {
     if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
     if (tool_choice !== undefined) payload.tool_choice = tool_choice;
@@ -953,6 +978,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // Growth-only within a turn; undefined = keep the current payload.tools.
     const recomposeTools = () => {
       if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
+      if (turnDiag) turnDiag.requested = [...toolCtx._requestedModules];
       const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
       const sset2 = readSettingsSync();
       return enforceToolCeiling(
@@ -1024,6 +1050,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
             return voiceMode ? Math.min(VOICE_CALL_MAX_TOOL_ROUNDS, web) : web;
           })(),
           getTools: recomposeTools,
+          rosterTools: () => payload.tools,
+          onRound: (r) => { turnDiag?.rounds.push(r); },
           callUpstream: async (msgs, roundTools, opts) => {
             // forceText (round-cap closing round): strip tools entirely so the
             // model must answer in text — a silent tool-hungry turn is worse
@@ -1179,8 +1207,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
     for (let round = 0; round <= liveMaxRounds + 1; round++) {
       if (clientGone() || clientSignal.aborted) break;
-      const payloadMessages = timeAnchor
-        ? [...currentMsgs, { role: 'system', content: timeAnchor }]
+      // The time anchor, with this round's tool roster under it, goes LAST
+      // (a closing text round has no tools, so no roster).
+      const anchor = anchorWithToolRoster(timeAnchor, forceTextRound ? [] : payload.tools);
+      const payloadMessages = anchor
+        ? [...currentMsgs, { role: 'system', content: anchor }]
         : currentMsgs;
 
       const { tools: _st, tool_choice: _stc, ...streamBase } = payload;
@@ -1192,6 +1223,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // legitimate, and my human can stop it) — only the client's disconnect.
       const failRound = (err) => {
         const f = upstreamFailure(err, { clientSignal, provider });
+        if (turnDiag && f.status !== 499) turnDiag.error = f.message;
         if (f.status === 499) { if (!res.writableEnded) res.end(); return; }
         if (!headersSent) return res.status(f.status).json({ error: f.message });
         res.write(`data: ${JSON.stringify({ _loopError: f.message })}\n\n`);
@@ -1293,12 +1325,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
             res.write(line + '\n\n');
           }
         }
-      } catch {
+      } catch (err) {
+        if (turnDiag) turnDiag.error = `stream read failed: ${err?.message ?? err}`;
         if (!res.writableEnded) res.end();
         return;
       }
 
       const toolCalls = Object.values(toolCallsAcc);
+      turnDiag?.rounds.push(describeRound({
+        round, finishReason, toolCalls,
+        ran: finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound,
+        content: fullContent, reasoning: fullReasoning, closing: forceTextRound,
+      }));
       if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound) {
         const timestamp = new Date().toISOString();
         const results = await Promise.all(toolCalls.map(async tc => ({
@@ -1351,6 +1389,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       if (!fullContent && finishReason !== 'length' && fullReasoning) {
         finalText = fullReasoning;
         recoveredReply = fullReasoning;
+        if (turnDiag) turnDiag.replyFromReasoning = true;
       }
       break;
     }
@@ -3042,6 +3081,13 @@ app.get('/api/discord-writes', async (_req, res) => {
   } catch {
     res.json([]);
   }
+});
+
+// Per-turn tool-loop diagnostics (turn-log.js): offered tools, each round's
+// finish reason and calls, ran vs dropped, client retries. Most recent first.
+app.get('/api/turn-diagnostics', async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query?.limit, 10) || 100));
+  res.json(await readTurns({ limit }));
 });
 
 // ── Browser (browser build spec §2, §5.6) — status + the action audit log ──
