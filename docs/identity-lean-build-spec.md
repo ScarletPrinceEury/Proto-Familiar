@@ -132,6 +132,29 @@ What changed:
   it's set. Hard env switch `PHYLACTERY_GRADUATION_DISABLED=1`. The budget hint
   no longer claims 30000 holds the cleanup.
 
+## Follow-up: the Familiar can review its care list (0.14.73)
+
+Midway through the first review the care list held 47 facts (about 3.5k
+tokens). Only 8 were flagged on purpose; 39 counted because their wording
+matched `care.py`. The chat-turn block (6000 chars, ward-set) fits about 24, so
+roughly half never reached the Familiar on a chat turn, and the Familiar had no
+way to see the list. Ward decision: give it a tool and keep the cap.
+
+- **`list_care_facts`** (memory-edit module) lists every care fact in block order:
+  id, `flagged` or `wording` (Phylactery `list_care_facts` now returns `how`),
+  `in block` or `recall only`, and an excerpt with a cut marker. A header gives
+  totals and says whether triage and noticing see all of them (they fetch
+  `CARE_FACTS_FETCH_LIMIT` = 60, unchanged). The review fetches past that limit.
+- **One placement rule:** `placeCareFacts` decides what's in the block, and both
+  `formatCareFactsBlock` and the review use it. The block skips a fact too long
+  for the room left and still fits a shorter one after it, so "in the block"
+  isn't simply the first N.
+- **Ward-private only:** the tool refuses on any gated turn without fetching, and
+  isn't in any villager allowlist. Taking a fact OFF the list
+  (`update_memory_by_id` with `high_care: false`) is refused on a gated turn too,
+  because it also removes the fact from triage's view. Flagging from a
+  villager's turn stays allowed (the 0.14.71 ward decision).
+
 ## Surface matrix (RULE C — the care block)
 
 | Surface | Care facts |

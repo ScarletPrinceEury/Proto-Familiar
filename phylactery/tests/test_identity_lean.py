@@ -202,3 +202,15 @@ def test_a_paused_cleanup_leaves_every_file_alone_budget_and_age_alike(conn, mon
     assert not grad.graduation_paused(conn)
     monkeypatch.setenv("PHYLACTERY_GRADUATION_DISABLED", "1")
     assert grad.graduation_paused(conn), "the hard env off-switch"
+
+
+def test_each_care_fact_says_how_it_got_on_the_list(conn):
+    """0.14.73: list_care_facts marks 'flagged' (care_weight high) vs 'wording'
+    (unflagged, counted by care.py) so the Familiar can review its care list."""
+    flagged = mem.create("Wants a nudge to eat before a long shift.", "significant",
+                         slug="eat", register="ward", care_weight="high", conn=conn)
+    wording = mem.create("Allergic to penicillin.", "significant", slug="pen", register="ward", conn=conn)
+    with conn:   # an older fact from before the auto-flag: unflagged, matched only by wording
+        conn.execute("UPDATE memories SET care_weight=NULL WHERE id=?", (wording["id"],))
+    how = {i["id"]: i["how"] for i in mem.list_care_facts(conn=conn)}
+    assert how == {flagged["id"]: "flagged", wording["id"]: "wording"}

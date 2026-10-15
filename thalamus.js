@@ -1763,7 +1763,7 @@ import {
 } from './src/pondering/surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
 import { recentElsewhere, buildRecentElsewhereBlock } from './src/memory/hippocampus.js';
-import { careFactsBlockForTurn } from './src/safety/care-facts.js';
+import { careFactsBlockForTurn, CARE_FACTS_FETCH_LIMIT } from './src/safety/care-facts.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
@@ -3179,7 +3179,7 @@ export async function listCareFacts({ force = false } = {}) {
   const now = Date.now();
   if (!force && now - _careFactsCache.at < CARE_FACTS_TTL_MS) return _careFactsCache.items;
   try {
-    const res = await callTool('memory_list_care_facts', { limit: 60 });
+    const res = await callTool('memory_list_care_facts', { limit: CARE_FACTS_FETCH_LIMIT });
     const items = Array.isArray(res?.items) ? res.items : [];
     _careFactsCache = { at: now, items };
     return items;
@@ -3187,6 +3187,16 @@ export async function listCareFacts({ force = false } = {}) {
     console.warn('[thalamus] listCareFacts failed:', err?.message ?? err);
     return _careFactsCache.items;   // keep the last good set rather than drop care facts
   }
+}
+
+/**
+ * The whole care list for my own review (list_care_facts), uncached and past
+ * the fetch limit, so I can see what triage and my chat block would miss.
+ * Throws on failure; the tool turns that into a plain "I couldn't".
+ */
+export async function listCareFactsForReview() {
+  const res = await callTool('memory_list_care_facts', { limit: 500 });
+  return Array.isArray(res?.items) ? res.items : [];
 }
 
 /** Push my human's identity budget (tokens) to Phylactery's graduation pass. */

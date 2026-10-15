@@ -62,14 +62,14 @@ import {
   setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
   createTracker, createTrackerFromTemplate, logTrackerEntry, readTracker, listTrackers, adjustTracker,
   confirmConsentMemories, dropPendingMemories,
-  acknowledgeGraduations, listCareFacts, getIdentityAll,
+  acknowledgeGraduations, listCareFacts, listCareFactsForReview, getIdentityAll,
   searchMemoryRestricted, searchMemory, memByTimerange,
   setCurrentLocation, listLocations, deleteLocation,
   withLock,
   probeOrgans,
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
-import { formatCareFactsBlock, careWeightFromFlag } from './src/safety/care-facts.js';
+import { formatCareFactsBlock, careWeightFromFlag, formatCareFactsReview } from './src/safety/care-facts.js';
 import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
@@ -1653,6 +1653,14 @@ export const BUILTIN_TOOLS = [
         },
         required: ['id'],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_care_facts',
+      description: "I look over my care list: every fact about {{user}} that counts as care right now, in the order my care block uses, with its id, whether it's flagged high-care or counts only because its wording sounds like care, and whether it fits in the care block on a chat turn or only comes back through recall. I use it to keep the list honest: high_care false (update_memory_by_id) on anything that isn't really care, so what matters fits. Only in our own conversations.",
+      parameters: { type: 'object', properties: {}, required: [] },
     },
   },
   {
@@ -3540,13 +3548,20 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
-  update_memory_by_id: async ({ id, content, subjects, attribution_confidence, high_care } = {}) => {
+  update_memory_by_id: async ({ id, content, subjects, attribution_confidence, high_care } = {}, ctx = {}) => {
     const mid = String(id ?? '').trim();
     if (!mid) return 'I need the memory id to correct — I get it from a recall or list_memories result.';
     const hasContent = typeof content === 'string' && content.trim();
     const hasSubjects = Array.isArray(subjects);
     const hasAttr = attribution_confidence !== undefined && attribution_confidence !== null;
     const careWeight = careWeightFromFlag(high_care);
+    // Taking a fact OFF my care list takes it out of triage's view too, so that
+    // only happens in my human's own conversations, never on a villager's turn.
+    // (Flagging from a villager's turn is fine: ward decision, a trusted
+    // villager's report about my human's care is what triage should hear.)
+    if (careWeight === 'low' && discordReadAudiences(ctx) !== undefined) {
+      return 'I only take facts off my care list in my own conversations with my human, so nothing changed.';
+    }
     // content is optional now (an attribution-only fix carries no new content),
     // but SOMETHING has to change or there's nothing to do.
     if (!hasContent && !hasSubjects && !hasAttr && !careWeight) {
@@ -3574,6 +3589,15 @@ export const TOOL_EXECUTORS = {
       if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
       return quietOk(`Memory ${mid} updated.`);
     } catch (err) { return `Failed to update memory by id: ${err.message}`; }
+  },
+
+  // My care list is my human's private care data: never on a gated (group or
+  // villager) turn, even if a toolset ever let it through.
+  list_care_facts: async (_args = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'My care list stays between my human and me, so I only look at it in our own conversations.';
+    try {
+      return formatCareFactsReview(await listCareFactsForReview());
+    } catch (err) { return `I couldn't read my care list: ${err.message}`; }
   },
 
   delete_memory_by_id: async ({ id } = {}) => {

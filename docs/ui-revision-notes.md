@@ -47,6 +47,20 @@ working, waiting on the provider, or stuck. In one case it was seven minutes.
 Direction: show what's happening and for how long ("checking memories… 2:10",
 "waiting on the model… 1:45"), and a Stop button once it passes a minute or so.
 
+### Escape doesn't close the Connections dialog
+
+Pressing Escape leaves "Connections & models" open; only the × closes it.
+Keyboard users expect Escape to close a dialog (and the WCAG line in
+CLAUDE.md is ours to hold). Worth checking every modal for the same.
+
+### Reasoning effort sits on each saved connection, not where you'd look first
+
+To change how hard the primary connection thinks, you open Connections &
+models, scroll past the active-connection fields (which have no reasoning
+setting) to the saved-connection cards, and find the "Reasoning effort" select
+on the card marked PRIMARY. Direction: show it in the active-connection block,
+since that's what people read as "the current setup".
+
 ### "Topics" look like separate conversations, but they aren't sessions
 
 The **Topic** control above the composer reads like a way to open a new
