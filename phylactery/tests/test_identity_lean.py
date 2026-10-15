@@ -143,6 +143,23 @@ def test_a_care_critical_ward_fact_is_high_care_whoever_writes_it(conn):
     assert cw[d["id"]] == "normal", "an explicit care_weight wins"
 
 
+def test_my_own_high_care_call_decides_whatever_the_wording(conn):
+    """0.14.71: the Familiar's high_care flag ('high'/'low', the Knowledge editor's
+    vocabulary) puts a plainly worded care request in the care list, or takes a
+    care-sounding one out, on create and on a later by-id update."""
+    shift = mem.create("Wants a nudge to eat before a long shift.",
+                       "significant", slug="shift", register="ward", care_weight="high", conn=conn)
+    water = mem.create("Likes a reminder to drink water mid-afternoon.",
+                       "significant", slug="water", register="ward", conn=conn)
+    joke = mem.create("Jokes that coffee is their medication.",
+                      "significant", slug="joke", register="ward", care_weight="low", conn=conn)
+    listed = lambda: {i["id"] for i in mem.list_care_facts(conn=conn)}
+    assert listed() == {shift["id"]}, "flagged by me, not by wording; the explicit low beats 'medication'"
+    mem.update_memory_by_id(water["id"], care_weight="high", conn=conn)
+    mem.update_memory_by_id(shift["id"], care_weight="low", conn=conn)
+    assert listed() == {water["id"]}
+
+
 def test_care_facts_list_reads_flagged_and_unflagged_care_facts_crisis_first(conn):
     with conn:
         for i, (content, cat, cw, pending) in enumerate([
