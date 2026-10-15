@@ -15,13 +15,13 @@ const { describeRound, toolNames } = await import('../src/diagnostics/turn-log.j
 const { runToolCallLoop } = await import('../cerebellum.js');
 
 const tool = (name) => ({ type: 'function', function: { name, description: '', parameters: { type: 'object', properties: {} } } });
-const TOOLS = [tool('recall'), tool('save_memory'), tool('update_identity'), tool('remove_from_identity'), tool('my_custom_thing')];
+const TOOLS = [tool('recall'), tool('save_memory'), tool('update_identity'), tool('find_graph_node'), tool('my_custom_thing')];
 
 test('the roster names this round\'s tools by group, what else I can pull in, and the one rule', () => {
   const r = formatToolRoster(TOOLS);
-  assert.match(r, /^\[Tools I can call right now \(core: recall, save_memory, update_identity; memory-edit: remove_from_identity; my own: my_custom_thing\)\./);
-  assert.match(r, /More I can pull in with request_tools: .*graph/);
-  assert.doesNotMatch(r, /request_tools: [^.]*memory-edit/, 'a group I already have is not offered again');
+  assert.match(r, /^\[Tools I can call right now \(core: recall, save_memory, update_identity; graph: find_graph_node; my own: my_custom_thing\)\./);
+  assert.match(r, /More I can pull in with request_tools: .*memory-edit/);
+  assert.doesNotMatch(r, /request_tools: [^.]*graph/, 'a group I already have is not offered again');
   assert.match(r, /A tool only runs when I actually call it\. If I don't see its result in this turn, it didn't run\.\]$/);
 });
 
