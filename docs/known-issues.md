@@ -10,7 +10,7 @@ delete it) rather than leaving it here stale.
 
 Both tool loops (the stream loop in `server.js` and `runToolCallLoop` in `cerebellum.js`) only run a round's calls when the provider's `finish_reason` is `'tool_calls'`. A round that streams tool-call deltas but finishes with `'stop'` (or nothing) is taken as the final answer. Its calls never run and are never stored, and the model's text ("Call's in") stands as the reply.
 
-This may explain some of the "phantom" turns in the confabulation entry below. Not confirmed yet: 0.14.74 records such rounds as `dropped: true` in `logs/turn-tools.jsonl` (`GET /api/turn-diagnostics`).
+This may explain some of the "phantom" turns in the confabulation entry below. Evidence so far argues against it: in the first ten logged turns (2026-10-15) no call was ever dropped; every phantom turn sent no call at all (see the confabulation entry). Still logged: 0.14.74 records such rounds as `dropped: true` in `logs/turn-tools.jsonl` (`GET /api/turn-diagnostics`).
 
 Direction, once the log shows it happening: run calls whose arguments arrived complete, whatever the finish reason.
 
@@ -176,6 +176,8 @@ answered"), with no tool_calls on the message. Asking it to put the call first
 with no lead-in is the working advice; a code-side check is the robust one,
 since the stored message carries no tool_calls for a reply that reports results.
 
+The turn log (0.14.74) then settled the mechanism for the cases it saw. Ten logged turns alternated: single-call steps ran, and in between came turns of one 'stop' round with zero tool calls whose reply reported results ("Ran and logged, ok"), even for a one-call step. No call was dropped by our loop. The cause found: collapseToolTurns drops tool calls and results before history reaches the model, so in a long session every past action survives only as the Familiar's own sentence claiming it. The history itself teaches that writing "ran, ok" is what an action looks like. 0.14.76: live boundaries now keep an app-written system record after each turn that really ran tools, and the current turn's anchor says what the previous turn actually ran (lastTurnRecord). Watch the Tool turns log to see whether zero-call turns that claim results stop.
+
 Each time, once shown the record, it corrected itself plainly and adopted a rule
 ("called" = what I ran this turn, "verified" = what the file shows next turn).
 So the gap is the missing record, not the willingness.
@@ -194,6 +196,11 @@ Directions, in addition to the provenance ideas above:
 
 <!--
 Resolved:
+- Numbered lists with blank lines between items rendered as "1. 1. 1." in the
+  web chat — fixed 0.14.76. renderInlineText wrapped each item in its own <ol>,
+  each restarting at 1, and dropped the written number. Items separated only by
+  blank lines now stay one list, and a list keeps its first item's number
+  (tests/render-lists.test.mjs).
 - The append tool was core while the identity cut tools were conditional — fixed
   0.14.75. A turn without the memory-edit group could only ADD to identity, and
   "removed" a duplicate by appending it twice. remove_from_identity,
