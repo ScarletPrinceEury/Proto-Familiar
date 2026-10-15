@@ -1765,6 +1765,7 @@ import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from '.
 import { recentElsewhere, buildRecentElsewhereBlock } from './src/memory/hippocampus.js';
 import { careFactsBlockForTurn, CARE_FACTS_FETCH_LIMIT } from './src/safety/care-facts.js';
 import { formatCleanupProposalsBlock } from './src/memory/cleanup-proposals.js';
+import { checkCanaries, formatCanaryBlock, recordCanaryStates } from './src/memory/identity-canaries.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
@@ -2287,6 +2288,29 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (userContent)   staticSections.push(`---\nFiles on my human (from identity/ward/ directory):\n\n${userContent}`);
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
+
+    // ── Canary stamps (0.14.79) ───────────────────────────────────────────
+    // Each stamp I've registered is checked against its file and against the
+    // identity block this turn actually sends, room-aware (a file or section
+    // this room doesn't get isn't "missing"). Every room: a broken stamp means
+    // my identity isn't whole wherever I am. Silent when everything checks out.
+    let canaryBlock = '';
+    if (!staticOnly) {
+      try {
+        const canaries = await listIdentityCanaries();
+        if (canaries.length) {
+          const results = checkCanaries({
+            canaries, files: id, staticBlock: staticSections.join('\n'),
+            layersIncluded: !gated || isGranted('identityBasic', audience),
+            stripGated: (s) => stripGatedSections(s, audience),
+          });
+          canaryBlock = formatCanaryBlock(results);
+          recordCanaryStates(results, { surface: gated ? 'shared room' : 'own conversation' }).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('[thalamus] canary check failed:', err?.message ?? err);
+      }
+    }
 
     // ── Recent ponderings (local tome read; honesty loop for step 3') ────
     // Best-effort, never blocks: a bad read or missing tome silently
@@ -2820,6 +2844,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
 
     const dynamicSections = [];
     if (organStatusBlock)       dynamicSections.push(organStatusBlock);
+    if (canaryBlock)            dynamicSections.push(canaryBlock);
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (recentElsewhereBlock)   dynamicSections.push(recentElsewhereBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
@@ -2874,6 +2899,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       consentPendingBlock    ? 'consent'    : null,
       graduationBlock        ? 'graduation' : null,
       cleanupBlock           ? 'cleanup'    : null,
+      canaryBlock            ? 'canary'     : null,
       careBlock              ? 'care'       : null,
       stewardshipBlock       ? 'stewardship' : null,
       temporalLines          ? 'temporal'   : null,
@@ -3299,6 +3325,52 @@ export async function dismissCleanupProposal({ id } = {}) {
     return { ok: true };
   } catch (err) {
     console.error('[thalamus] dismissCleanupProposal failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Identity canary stamps (0.14.79) ─────────────────────────────────────────
+// The registry of my stamps lives in Phylactery; the check runs here every turn
+// (src/memory/identity-canaries.js). Cached briefly, cleared when I add or
+// retire one; on a failed read the last good list stands, so the check keeps
+// running rather than going quiet.
+const CANARY_TTL_MS = 5 * 60 * 1000;
+let _canaryCache = { at: 0, items: [] };
+
+export async function listIdentityCanaries({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - _canaryCache.at < CANARY_TTL_MS) return _canaryCache.items;
+  try {
+    const res = await callTool('identity_canary_list', {});
+    const items = Array.isArray(res?.items) ? res.items : [];
+    _canaryCache = { at: now, items };
+    return items;
+  } catch (err) {
+    console.warn('[thalamus] listIdentityCanaries failed:', err?.message ?? err);
+    return _canaryCache.items;
+  }
+}
+
+export async function addIdentityCanary({ category, filename, text, label, atEnd = false } = {}) {
+  try {
+    const args = { category, filename, text, at_end: atEnd === true };
+    if (typeof label === 'string' && label.trim()) args.label = label.trim();
+    const res = await callTool('identity_canary_add', args);
+    _canaryCache = { at: 0, items: _canaryCache.items };
+    if (!res || res.ok !== true) return { ok: false, error: res?.error ?? 'add failed' };
+    return { ok: true, canary: res.canary, existed: res.existed === true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function retireIdentityCanary({ id } = {}) {
+  try {
+    const res = await callTool('identity_canary_remove', { id });
+    _canaryCache = { at: 0, items: _canaryCache.items };
+    if (!res || res.ok !== true) return { ok: false, error: res?.error ?? 'retire failed' };
+    return { ok: true };
+  } catch (err) {
     return { ok: false, error: err.message };
   }
 }

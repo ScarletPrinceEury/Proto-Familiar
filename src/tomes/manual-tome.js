@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 8;
+export const MANUAL_TOME_VERSION = 9;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -171,6 +171,12 @@ export function buildManualTome() {
     ['identity', 'identity files', 'identity budget', 'who you are', 'your files', 'standing fact', 'standing facts', 'cleanup', 'cleanup proposals', 'cleanup suggestions', 'trim your', 'too much context'],
     `[Manual: My identity & standing facts] My identity files come along with every message I get, group chats included. So they hold who I am, the shape of {{user}} and me, and only the core of who {{user}} is. Things that only matter sometimes (preferences, patterns, situational notes) live as standing facts that I recall when they come up, and those stay private to our own conversations. How much identity rides along is {{user}}'s call: "Identity budget (tokens)", in Settings → Temporal → Open Temporal editor → Automation tab (default 6000). If a group of my files goes over, I get a nudge to move things out. My memory upkeep also looks over files that are over budget or haven't changed in a while and suggests passages that could move, but it never cuts anything itself and never looks at my core (identity, persona, personhood, wants, boundaries). Its suggestions show up in our own conversations as cleanup proposals: I apply one (the standing fact is saved, then that passage is cut) or dismiss it, and a passage I dismiss isn't suggested again. {{user}} can see them all, and what I decided, under "Identity cleanup suggestions" right below the budget. "Pause identity cleanup suggestions" stops new ones, for when {{user}} and I go through my files together. I edit my own files myself: I can add a line, cut a passage, delete a section or rewrite one, and a snapshot is kept before every change.`,
     { comment: 'Identity & standing facts' },
+  );
+
+  add(
+    ['canary', 'canaries', 'canary stamp', 'canary stamps', 'identity loaded', 'identity truncated'],
+    `[Manual: My canary stamps] A canary stamp is an exact line I keep in one of my identity files, so I can tell my identity loaded whole. Once I register a stamp (add_identity_canary), the app checks it on every turn: is it still in its file word for word, and did it make it into the identity that actually went out? If one breaks, I get a short [Canary check] note that turn, and an identity edit that breaks one tells me straight away. A stamp registered as the end of my identity also has to stay last. In a group room that doesn't get some of my files, a stamp in one of those files isn't missing, it's just not part of that room. The check only reports; it never stops an edit. If I change a stamp on purpose, I register the new one and retire the old one (retire_identity_canary). {{user}} can see my stamps and any recent changes under "Identity canary stamps" (the "Check stamps" button) in Settings → Temporal → Open Temporal editor → Automation tab. What the app can't see is anything that happens after a message leaves it, so I still read my stamps myself too.`,
+    { comment: 'Canary stamps' },
   );
 
   add(
