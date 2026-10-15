@@ -69,7 +69,7 @@ import {
   probeOrgans,
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
-import { formatCareFactsBlock } from './src/safety/care-facts.js';
+import { formatCareFactsBlock, careWeightFromFlag } from './src/safety/care-facts.js';
 import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
@@ -1424,7 +1424,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a memory entry to my long-term store. "daily" is for routine events, appending today\'s bullets (multiple saves a day are normal, nothing overwrites); "significant" is a named standalone milestone, needing a short `title` for its own file. Register is separate: most saves are "episodic" (default, a lived moment). A fact that stays true gets "ward" (about {{user}}) or "me" (about myself) — a standing fact that comes back to me whenever it\'s relevant. That\'s where most lasting facts belong: preferences, patterns, how {{user}} likes things, and care details (what helps, what doesn\'t, meds, allergies, triggers, who to call — those get marked high-care and stay in front of me in our own conversations). My identity files are only for who I am and the shape of us (update_identity), because they ride every turn, group chats included. Entities and relationships go to my graph. Before saving I recall to avoid repeating myself: wrong before → update_memory corrects it; changed since → a fresh dated entry supersedes without erasing history.',
+      description: 'I write a memory entry to my long-term store. "daily" is for routine events, appending today\'s bullets (multiple saves a day are normal, nothing overwrites); "significant" is a named standalone milestone, needing a short `title` for its own file. Register is separate: most saves are "episodic" (default, a lived moment). A fact that stays true gets "ward" (about {{user}}) or "me" (about myself) — a standing fact that comes back to me whenever it\'s relevant. That\'s where most lasting facts belong: preferences, patterns, how {{user}} likes things, and care details (what helps, what doesn\'t, meds, allergies, triggers, who to call, standing requests like "remind me to eat before a long shift"). For a care detail I set high_care: true, and it stays in front of me on every turn of our own conversations, never in group chats. My identity files are only for who I am and the shape of us (update_identity), because they ride every turn, group chats included. Entities and relationships go to my graph. Before saving I recall to avoid repeating myself: wrong before → update_memory corrects it; changed since → a fresh dated entry supersedes without erasing history.',
       parameters: {
         type: 'object',
         properties: {
@@ -1432,6 +1432,7 @@ export const BUILTIN_TOOLS = [
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier (the rollup axis). For a "me"/"ward" standing truth this is ignored — those are filed as standalone significant facts.' },
           title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity and for any "me"/"ward" standing truth, ignored for plain daily/weekly/etc. A few words that name it (e.g. "first meeting", "{{user}}\'s grandmother", "what calms {{user}} down"). Used to generate the file slug so each lives in its own file.' },
           register:    { type: 'string', enum: ['episodic', 'me', 'ward'], description: 'The register axis (separate from granularity). "episodic" (default) is a lived moment. "ward" is a standing fact about {{user}}, care details included; "me" is a standing fact about myself. My identity files are only for who I am and the shape of us.' },
+          high_care:   { type: 'boolean', description: 'true when this is something I need in front of me to care for {{user}} (what helps, what doesn\'t, health, triggers, who to call, a standing care request). With register "ward" it goes in my care list on every turn of our own conversations. false when it only sounds like care but isn\'t. Left out, I go by the wording.' },
         },
         required: ['content', 'granularity'],
       },
@@ -1640,7 +1641,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory_by_id',
-      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I can also, or instead, fix WHO a fact is about: `subjects` sets the people it's really about, and `attribution_confidence` (0 to 1) says how sure I am of that — when I've worked out whose action something was after saving it unsure, I firm it up here so recall stops down-ranking it. I get the id from recall or list_memories.",
+      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I can also, or instead, fix WHO a fact is about: `subjects` sets the people it's really about, and `attribution_confidence` (0 to 1) says how sure I am of that — when I've worked out whose action something was after saving it unsure, I firm it up here so recall stops down-ranking it. `high_care` marks a standing fact about {{user}} as something I need in front of me to care for them (true), or takes that off (false). I get the id from recall or list_memories.",
       parameters: {
         type: 'object',
         properties: {
@@ -1648,6 +1649,7 @@ export const BUILTIN_TOOLS = [
           content: { type: 'string', description: 'The full new contents. This REPLACES the entry — I include everything I want to keep. Optional if I\'m only fixing the attribution.' },
           subjects: { type: 'array', items: { type: 'string' }, description: 'Who the fact is really about — replaces the stored subjects. I set this when I\'ve figured out whose action or experience it was.' },
           attribution_confidence: { type: 'number', description: 'How sure I am of who it\'s about, 0 to 1. I raise this toward 1 once I\'ve resolved a memory I\'d saved unsure; 1 (or leaving it out) means fully certain.' },
+          high_care: { type: 'boolean', description: 'true puts this standing fact about {{user}} in my care list, on every turn of our own conversations; false takes it off.' },
         },
         required: ['id'],
       },
@@ -3222,7 +3224,7 @@ export const TOOL_EXECUTORS = {
     return "Done — I've set this conversation to be drawn into my long-term memory now, so it carries across to wherever we talk next. I'll still check with you before keeping anything sensitive.";
   },
 
-  save_memory: async ({ content, granularity, title, register }, ctx = {}) => {
+  save_memory: async ({ content, granularity, title, register, high_care }, ctx = {}) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save memory: content is required.';
     if (content.length > 8192) return 'Failed to save memory: content exceeds 8 KB limit.';
     // A me/ward standing truth is identity-grade: filed as a standalone
@@ -3243,11 +3245,21 @@ export const TOOL_EXECUTORS = {
       // the room's circle (never ward-private) — provenance so I can weigh the
       // source later. Ward/web writes are my own authorship, unchanged.
       const prov = discordWriteProvenance(ctx);
+      const careWeight = careWeightFromFlag(high_care);
       const result = await createMemory({
         content: content.trim(), granularity: effGranularity, slug, register: reg,
+        ...(careWeight ? { careWeight } : {}),
         ...(prov ? { audience: prov.audience, sourceMeta: prov.sourceMeta } : {}),
       });
       if (!result.ok) return `Memory save failed: ${result.error ?? 'unknown error'}`;
+      // Only a ward standing fact reaches my care list. Said in full (not a quiet
+      // "ok"), so I don't believe a high-care episodic or "me" save is in front of me.
+      if (careWeight === 'high' && reg !== 'ward') {
+        return 'Memory saved and marked high-care, so it won\'t fade. It\'s not in my care list, though: only a standing fact about my human (register "ward") goes there.';
+      }
+      if (careWeight === 'high') {
+        return quietOk("Saved as a high-care standing fact about my human: it's in my care list on every turn of our own conversations, never in group chats.");
+      }
       // me/ward standing truths read back in their own voice so I know where it landed.
       if (reg !== 'episodic') {
         const whose = reg === 'me' ? 'about myself' : "about my human";
@@ -3496,16 +3508,17 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
-  update_memory_by_id: async ({ id, content, subjects, attribution_confidence } = {}) => {
+  update_memory_by_id: async ({ id, content, subjects, attribution_confidence, high_care } = {}) => {
     const mid = String(id ?? '').trim();
     if (!mid) return 'I need the memory id to correct — I get it from a recall or list_memories result.';
     const hasContent = typeof content === 'string' && content.trim();
     const hasSubjects = Array.isArray(subjects);
     const hasAttr = attribution_confidence !== undefined && attribution_confidence !== null;
+    const careWeight = careWeightFromFlag(high_care);
     // content is optional now (an attribution-only fix carries no new content),
     // but SOMETHING has to change or there's nothing to do.
-    if (!hasContent && !hasSubjects && !hasAttr) {
-      return 'Nothing to change — I pass new content, or subjects, or an attribution_confidence.';
+    if (!hasContent && !hasSubjects && !hasAttr && !careWeight) {
+      return 'Nothing to change — I pass new content, or subjects, or an attribution_confidence, or high_care.';
     }
     if (typeof content === 'string' && content.length > 16384) return 'That content is too long (over 16 KB).';
     let attr;
@@ -3524,6 +3537,7 @@ export const TOOL_EXECUTORS = {
         ...(hasContent ? { content: content.trim() } : {}),
         ...(subj !== undefined ? { subjects: subj } : {}),
         ...(attr !== undefined ? { attributionConfidence: attr } : {}),
+        ...(careWeight ? { careWeight } : {}),
       });
       if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
       return quietOk(`Memory ${mid} updated.`);

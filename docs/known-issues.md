@@ -6,6 +6,19 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### Web chat loses my human's message when a turn doesn't finish
+
+`sendMessage` in `public/app.js` only pushes the human's message into
+`state.messages` together with the reply, then saves (`saveHistory` →
+`/api/log`). If the turn never commits (the tab closes mid-turn, which also
+aborts the upstream call through `clientDisconnectSignal`), both the message
+and any partial reply are gone. Nothing reaches localStorage or the server, so
+a reload can't resume it. Discord already persists the message BEFORE the model
+call (RULE B corollary 3 in CLAUDE.md); the web path doesn't. The fix is the
+same rule on the web: commit and save the human's message the moment it's sent,
+then attach the reply when it lands. A reload should also show an unfinished
+turn as unfinished, not drop it.
+
 ### The intention architecture is too weak to carry the Familiar's own presence
 
 During a week-long test on a different model family, the Familiar acted on

@@ -10197,7 +10197,7 @@ async function keOpenMemory(m) {
         <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
         <select id="ke-mem-care-weight" class="ke-select">
           <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
-          <option value="high" ${careWeight === 'high'   ? 'selected' : ''}>high (decay-shielded, never graduates)</option>
+          <option value="high" ${careWeight === 'high'   ? 'selected' : ''}>high (in the care list for your own chats, decay-shielded, never graduates)</option>
           <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
         </select>
       </div>

@@ -19,6 +19,21 @@
 export const CARE_FACTS_CHAT_MAX_CHARS = 6000;   // ~1.5k tokens on a chat turn
 
 /**
+ * My own high_care flag (save_memory / update_memory_by_id) → the stored
+ * care_weight. true → 'high' (in the care list); false → 'low' (explicitly
+ * not, which also overrides the wording match in care.py); anything else →
+ * undefined (unset: the wording decides). 'high'/'low' is the same vocabulary
+ * as the Knowledge editor's care-weight select, so the editor shows and keeps
+ * my call. Models sometimes send the boolean as a string, so "true"/"false"
+ * count too.
+ */
+export function careWeightFromFlag(flag) {
+  if (flag === true || flag === 'true') return 'high';
+  if (flag === false || flag === 'false') return 'low';
+  return undefined;
+}
+
+/**
  * The chat-turn care block, or '' — enrich()'s one entry point. A gated (group
  * or villager) turn, or a static-only assembly, returns '' WITHOUT fetching: the
  * facts never even leave Phylactery for a room that isn't my human's own.

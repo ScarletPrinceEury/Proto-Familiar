@@ -66,6 +66,34 @@ graduation audit prompt.
   a quiet ok). Settings → "Identity budget (tokens)", synced, pushed to
   Phylactery at boot and on change.
 
+## Follow-up: the Familiar marks care facts itself (0.14.71)
+
+Found during the first identity review with a live Familiar. A fact only became
+high-care if its wording matched `care.py`, and the Familiar had no way to say
+so itself. A plainly worded standing care request ("a nudge to eat before a long shift")
+would never reach the care list, which made it unsafe to move care lines out of
+identity at all. That failed the "every capability reachable by the Familiar"
+rule.
+
+- `save_memory` and `update_memory_by_id` take `high_care` (boolean).
+  `careWeightFromFlag` (`care-facts.js`) maps true → `'high'`, false → `'low'`
+  (an explicit no, which beats a wording match), and unset → nothing sent, so
+  the wording still decides. `'high'`/`'low'` is the Knowledge editor's own
+  care-weight vocabulary, so the editor shows the Familiar's call and keeps it
+  on save.
+- `thalamus.createMemory` passes `careWeight` through as `care_weight`.
+  Phylactery needed no change: an explicit care weight already won on create
+  and on a by-id update.
+- A high-care save that isn't `register: "ward"` returns its full text, not a
+  quiet ok, saying it won't fade but isn't in the care list. Only ward standing
+  facts go there.
+- Ward decision (2026-10-15): the care list doesn't look at where a fact came
+  from, and that stays. A `ward` fact written on a villager's Discord turn
+  (save_memory is a villager write tool when their grants allow it) can be a
+  care fact, on my human's own turns and in triage. What a trusted villager
+  reports about my human's care is exactly what triage should hear. Don't
+  filter villager-sourced facts out of `list_care_facts` without the ward.
+
 ## Surface matrix (RULE C — the care block)
 
 | Surface | Care facts |
@@ -85,4 +113,8 @@ graduation audit prompt.
 flag, care list) + the two updated cases in `test_graduation.py`;
 `tests/identity-lean.test.mjs` (care block + group-room gate, budget note,
 JS↔Python parity, steering text, rubric register). Each guard was watched red
-with its old behaviour reintroduced.
+with its old behaviour reintroduced. 0.14.71 adds `tests/care-flag.test.mjs`,
+which runs the real `save_memory` / `update_memory_by_id` executors through the
+real thalamus wrapper into a stub Phylactery client
+(`__setPhylacteryClientForTest`), and a Phylactery case pinning that the
+explicit weight decides over the wording on create and on update.

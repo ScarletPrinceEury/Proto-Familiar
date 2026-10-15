@@ -1665,6 +1665,18 @@ export async function recordHandoff({ intent, threads, sessionId } = {}) {
  * its first call instead of getting a silent empty fallback.
  */
 let _startPromise = null;
+
+/**
+ * Tests only: stand in a stub Phylactery client so a test can run a real tool
+ * executor through the real thalamus wrapper and see exactly what reaches the
+ * MCP. Marks thalamus started so nothing tries to spawn a child. Never called
+ * by runtime code.
+ */
+export function __setPhylacteryClientForTest(client) {
+  mcpClient = client;
+  _startPromise = Promise.resolve();
+}
+
 export function startThalamus() {
   if (_startPromise) return _startPromise;
   _startPromise = (async () => {
@@ -2938,7 +2950,7 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
  * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-export async function createMemory({ content, granularity = 'daily', date, slug, register = 'episodic', audience, sourceMeta, instanceId = 'proto-familiar' }) {
+export async function createMemory({ content, granularity = 'daily', date, slug, register = 'episodic', careWeight, audience, sourceMeta, instanceId = 'proto-familiar' }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2946,6 +2958,8 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
     const args = { content, granularity, date: date ?? today, instanceId };
     if (slug) args.slug = slug;
     if (register && register !== 'episodic') args.register = register;
+    // My own high_care call ('high' / 'low'); unset → Phylactery goes by the wording.
+    if (careWeight) args.care_weight = careWeight;
     // Audience clamp + provenance for a write caused by someone acting through me
     // (a villager on Discord) — the record then carries WHO caused it and lands in
     // the room's circle, not ward-private.
