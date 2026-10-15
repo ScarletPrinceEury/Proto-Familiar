@@ -98,7 +98,7 @@ import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } fr
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './src/pondering/surface-context.js';
 import { rekeyCueState } from './src/gcal/gcal-projection.js';
-import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules, anchorWithToolRoster } from './tool-surfacing.js';
+import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules, anchorWithToolRoster, toolCeiling, shouldSurface } from './tool-surfacing.js';
 import { describeRound } from './src/diagnostics/turn-log.js';
 import { rekeyPonderingUids } from './src/pondering/pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
@@ -5599,48 +5599,63 @@ const SET_NEXT_CHECK_TOOL = {
   },
 };
 
-// The existing (registry) tools the noticing turn may use: act on intentions
-// + a few reads. Names only — schemas pulled from BUILTIN_TOOLS, macro-
-// resolved, so their first-person descriptions stay consistent.
-const NOTICING_REGISTRY_TOOL_NAMES = [
-  'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
-  'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
-  // Close an overdue outcome the wake surfaced: record how it actually went on
-  // the graph (calibrate the forecast) and mark the event done. Without these
-  // the noticing turn could ask "how did it go?" but never write the answer —
-  // so it asked again next tick. The whole loop-closing hinges on them.
+// My noticing turn is me, so it reaches for what my live turns reach for
+// (ward decision 0.14.82: a background turn without my memory, graph and
+// identity tools was a fragmented brain — an intention set in a full turn got
+// inherited by one that couldn't see the toolbox). Same composition as a live
+// turn: core, plus the modules this turn's own text surfaces, plus whatever
+// request_tools pulls in.
+//
+// The few non-core tools my noticing turn's own wake conditions rely on —
+// closing an overdue outcome, fixing a fuzzy attribution, the sky over a due
+// outside intention — are always there, like core, so nothing it could do
+// before goes missing. Whole modules would blow the tool ceiling before
+// anything else surfaced.
+//
+// Two ward-signed differences: the crisis tools stay with triage (my noticing
+// turn hands an alarming read over with flag_distress, so escalation has one
+// path), and my two noticing-only tools are added.
+export const NOTICING_ALWAYS_TOOLS = new Set([
+  'schedule_availability', 'schedule_export', 'schedule_set_lead',
   'schedule_resolve', 'schedule_calibrate_link',
-  // Look back through the raw transcript for how an outcome actually went —
-  // esp. an answer my human gave that scrolled out of the look-back window. The
-  // reliable "did they already tell me?" check before I ask again.
-  'search_conversation',
-  // Re-resolving fuzzy attribution (the unresolved_attribution wake): recall/
-  // read the memory and my history to work out whose action a fact really was,
-  // then update_memory_by_id to fix the subjects + firm up attribution_confidence
-  // (or leave it if I still can't tell). Without the write tool the sweep could
-  // notice a shaky memory but never correct it.
-  'recall', 'read_memory_by_id', 'update_memory_by_id',
-  // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
-  // NOT a wake condition — weather only flavours a turn already happening).
+  'read_memory_by_id', 'update_memory_by_id',
   'weather_today',
-  // The noticing turn's route for a genuinely alarming read (ward-signed):
-  // it hands distress to triage rather than answering a crisis itself.
-  'flag_distress',
-];
+]);
+export const NOTICING_EXCLUDED_TOOLS = new Set(['contact_trusted_person', 'show_crisis_resources']);
 
 /**
- * Compose the noticing turn's bounded toolset (schemas, macro-resolved).
- * The two noticing-scoped tools are appended; the loop's executeTool handles
- * them inline and delegates the registry tools to executeToolCall.
+ * Compose the noticing turn's toolset (schemas, macro-resolved).
+ * @param {object} settings
+ * @param {object} [opts]
+ * @param {Iterable<string>} [opts.modules]    modules this turn's own text surfaced
+ * @param {Iterable<string>} [opts.requested]  modules request_tools pulled in this turn
  */
-export function composeNoticingTools(settings = readSettingsSync()) {
-  const allow = new Set(NOTICING_REGISTRY_TOOL_NAMES);
-  const weatherOn = weatherEnabled(settings);
-  const picked = BUILTIN_TOOLS.filter(t =>
-    allow.has(t.function?.name) &&
-    (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)));
-  picked.push(REACH_OUT_TO_WARD_TOOL, SET_NEXT_CHECK_TOOL);
-  return picked.map(t => substituteToolMacros(t, settings));
+export function composeNoticingTools(settings = readSettingsSync(), { modules = null, requested = null } = {}) {
+  const pulled = new Set(requested ?? []);
+  const surfaced = new Set([...(modules ?? []), ...pulled]);
+  // Surfacing switched off → the full registry, as my live turns get it.
+  const surfacingOn = shouldSurface({ settings, fullCount: BUILTIN_TOOLS.length });
+  const inTurn = new Set(
+    composeActiveTools([], settings, { modules: surfacingOn ? surfaced : null, visionCapable: false })
+      .map(t => t.function?.name),
+  );
+  // The full registry, gated exactly as a live turn gates it (web, weather,
+  // trackers, calendar write, …), filtered to what this turn carries.
+  const picked = composeActiveTools([], settings, { visionCapable: false }).filter(t => {
+    const name = t.function?.name;
+    return !NOTICING_EXCLUDED_TOOLS.has(name) && (inTurn.has(name) || NOTICING_ALWAYS_TOOLS.has(name));
+  });
+  // Under the ceiling: core and my always-tools first, then what I asked for,
+  // then what surfaced (stable sort keeps registry order within each).
+  const rank = (t) => {
+    const name = t.function?.name;
+    if (TOOL_MODULES[name] === CORE || NOTICING_ALWAYS_TOOLS.has(name)) return 0;
+    return pulled.has(TOOL_MODULES[name]) ? 1 : 2;
+  };
+  const ordered = [...picked].sort((a, b) => rank(a) - rank(b));
+  const floor = ordered.filter(t => rank(t) === 0).length;
+  const registry = ordered.slice(0, Math.max(floor, toolCeiling(settings)));
+  return [...registry, ...[REACH_OUT_TO_WARD_TOOL, SET_NEXT_CHECK_TOOL].map(t => substituteToolMacros(t, settings))];
 }
 
 export function composeActiveTools(customTools, settings = readSettingsSync(), opts = {}) {

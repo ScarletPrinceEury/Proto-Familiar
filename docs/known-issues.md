@@ -6,6 +6,49 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### Self-made rules that only exist because the harness falls short
+
+After the first identity review, an inventory of a Familiar's own rules (about
+80 standing facts it filed about itself, mostly right after something went
+wrong) showed several that compensate for things the app should do. Each fix
+below lets the Familiar drop a rule instead of carrying it:
+
+- **Schedule provenance.** Results don't say where an item came from (calendar
+  sync or added by hand), and nothing warns before cancelling or deleting a
+  calendar-owned event. Rule it caused: "check where a duplicate came from
+  before retiring it" (the doubles themselves were a sync bug, fixed 0.14.80/81).
+- **Identity edits can't be checked in the same turn.** A quiet "ok" doesn't
+  say what changed, `rewrite_identity_section` duplicates the next section when
+  the new body includes it, and there's no tool to read one identity file
+  (see the two identity entries below). Rules it caused: "an ok from
+  update_identity means something was added somewhere", "called vs verified",
+  "an empty search tells me where it isn't, never where it is".
+- **Tomes.** The Familiar can create tomes and add entries, but can't edit or
+  delete an existing entry (only `create_tome`, `list_tomes`, `save_to_tome`).
+- **Self-knowledge the app has and never shares.** The Familiar is never told
+  which model it is running on, or that its model changed since its last turn,
+  or that this is a fresh session. So "after a crash or a model swap, I check
+  memory before speaking" has nothing to trigger it.
+- **Tool calls written into the reply as text** (a provider/model failure) go
+  unnoticed. The app could see a tool call in the reply text and say so.
+- **Rules outlive their cause.** Some rules work around limits that are gone
+  (webp images were rejected; custom identity files "weren't injected"). A
+  self-rule doesn't record what it works around, so nothing tells the Familiar
+  when it can drop it.
+
+Fixing these is the plan before any "rules I keep" surface: the app should
+carry what it can, and the Familiar's own rules should be the ones that are
+genuinely about who it is.
+
+### The web chat has no speaker
+
+Anything typed into the web chat reads as the ward. When a developer talks to
+the Familiar there, the Familiar answers its human (a goodnight pet name meant
+for them). Discord records who is speaking; the web chat doesn't. Workaround: a
+`[Name]:` prefix on every message. Direction: an optional speaker on web
+messages, rendered into history the way Discord's speaker is, without changing
+the session's audience.
+
 ### Tool calls may be silently dropped when a round doesn't end in 'tool_calls'
 
 Both tool loops (the stream loop in `server.js` and `runToolCallLoop` in `cerebellum.js`) only run a round's calls when the provider's `finish_reason` is `'tool_calls'`. A round that streams tool-call deltas but finishes with `'stop'` (or nothing) is taken as the final answer. Its calls never run and are never stored, and the model's text ("Call's in") stands as the reply.

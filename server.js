@@ -7539,7 +7539,15 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
   // a completion with no user turn at all. (Assembly is a pure helper so the role
   // decision is pinned by a test.)
   const messages = noticingMessages({ identity, body: noticingBody });
-  const tools = composeNoticingTools(s);
+  // My noticing turn reaches for what my live turns reach for (0.14.82, ward
+  // decision): core + whatever this turn's own text surfaces + request_tools.
+  // request_tools grows the set for the next round (growth-only), as live.
+  const surfacedModules = selectModules({ turnText: noticingBody });
+  const toolCtx = { noticing: true, wardPrivate: true, apiKey: conn.apiKey, _requestedModules: new Set() };
+  const tools = composeNoticingTools(s, { modules: surfacedModules });
+  const getTools = () => (toolCtx._requestedModules.size
+    ? composeNoticingTools(readSettingsSync(), { modules: surfacedModules, requested: toolCtx._requestedModules })
+    : tools);
 
   let nextCheckInMs = null;
   const effectiveNames = [];
@@ -7596,8 +7604,10 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
   // whole-loop failure throws → deliberation_failed upstream.
   const loop = await runNoticingToolLoop({
     runLoop: runToolCallLoop, callRaw: callChatRaw,
-    conn, settings: s, messages, tools, executeTool,
-    toolCtx: { noticing: true, wardPrivate: true, apiKey: conn.apiKey },
+    conn, settings: s, messages, tools, executeTool, toolCtx, getTools,
+    // The same round budget as my live turns (ward decision 0.14.82): a sweep
+    // needs more than the old 5, and a cut-off still gets the closing note.
+    maxRounds: toolRoundsPerTurn(s),
   });
   if (loop.timedOut) {
     console.warn(`[noticing] deliberation cut short — ${loop.error}; already ran: ${effectiveNames.join(', ') || 'nothing'}`);
