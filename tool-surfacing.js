@@ -350,6 +350,42 @@ export function tickSticky(sessionId, surfacedModules, stickyTurns = 2) {
 
 export function resetSticky() { _sticky.clear(); }
 
+// ── Tool roster at depth (0.14.74) ─────────────────────────────────────────
+// Providers put the tools schema at the very top of the prompt. Deep into a
+// long conversation the model loses track of what it actually has: in the first
+// identity review it narrated calls it never made, and "called" a tool that
+// wasn't in its set that turn. The schema stays where providers want it (the
+// model needs it to call anything); this is a short, names-only reminder that
+// rides the time anchor at the END of the context every round, where the model
+// is actually reading. Hard off-switch PROTO_FAMILIAR_TOOL_ROSTER_DISABLED=1.
+
+/**
+ * This round's tools as one short first-person block, grouped by module, plus
+ * the groups I could still pull in, plus the one rule that stops narrated calls.
+ * '' when there are no tools (a closing text round) or the roster is off.
+ */
+export function formatToolRoster(tools) {
+  if (process.env.PROTO_FAMILIAR_TOOL_ROSTER_DISABLED === '1') return '';
+  const names = (Array.isArray(tools) ? tools : []).map(t => t?.function?.name).filter(Boolean);
+  if (!names.length) return '';
+  const byModule = new Map();
+  for (const n of names) {
+    const m = TOOL_MODULES[n] ?? 'my own';
+    if (!byModule.has(m)) byModule.set(m, []);
+    byModule.get(m).push(n);
+  }
+  const groups = [...byModule].map(([m, ns]) => `${m}: ${ns.join(', ')}`).join('; ');
+  const more = ALL_MODULES.filter(m => m !== CORE && !byModule.has(m));
+  return `[Tools I can call right now (${groups}).`
+    + (more.length ? ` More I can pull in with request_tools: ${more.join(', ')}.` : '')
+    + " A tool only runs when I actually call it. If I don't see its result in this turn, it didn't run.]";
+}
+
+/** The time anchor with this round's tool roster under it (either may be empty). */
+export function anchorWithToolRoster(timeAnchor, tools) {
+  return [timeAnchor, formatToolRoster(tools)].filter(Boolean).join('\n\n');
+}
+
 /** Validate request_tools input → known module names ('all' → every one). */
 export function normalizeRequestedModules(raw) {
   const asked = (Array.isArray(raw) ? raw : String(raw ?? '').split(/[\s,]+/))

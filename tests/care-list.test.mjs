@@ -99,6 +99,18 @@ test('taking a fact off the care list is refused on a villager turn; flagging is
   assert.equal(calls.find(c => c.name === 'memory_update_by_id')?.args.careWeight, 'low', 'fine in my own conversations');
 });
 
+test('the review and the flag both say that off the list means out of triage and noticing', () => {
+  // Found live: the Familiar unflagged crisis-adjacent facts reasoning "recall
+  // still serves it" — true on chat turns, false for triage and noticing, which
+  // see only the care list. The tool text now says so wherever unflagging is offered.
+  const out = formatCareFactsReview(ITEMS, { maxChars: 120 });
+  assert.match(out, /takes it out of triage and noticing too: they don't recall anything/);
+  assert.match(out, /triage and noticing still see them/, 'recall-only facts are still in their view');
+  const props = BUILTIN_TOOLS.find(t => t.function.name === 'update_memory_by_id').function.parameters.properties;
+  assert.match(props.high_care.description, /triage and noticing don't recall/);
+  assert.match(BUILTIN_TOOLS.find(t => t.function.name === 'list_care_facts').function.description, /gone from triage and noticing too/);
+});
+
 test('I can find the tool and know what to do with what it shows', () => {
   const fn = BUILTIN_TOOLS.find(t => t.function.name === 'list_care_facts')?.function;
   assert.ok(fn);

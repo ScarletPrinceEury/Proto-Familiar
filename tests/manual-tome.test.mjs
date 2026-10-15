@@ -199,3 +199,23 @@ test('every server tome macro is mirrored in app.js applyNameVars', async () => 
   assert.ok(TOME_MACRO_NAMES.includes('visionActive'));
   assert.equal(typeof TOME_MACROS.visionActive, 'function');
 });
+
+// 0.14.74: the identity-lean, care-list and tool-diagnostics features are in the
+// manual, and every UI label the manual sends my human to is a real label — so a
+// renamed or moved setting fails here instead of leaving the manual pointing at
+// nothing.
+test('the manual covers identity, care facts and checking what I did, with real UI labels', async () => {
+  const entries = Object.values(buildManualTome().entries);
+  const find = (key) => entries.find(e => e.keys.includes(key));
+  const identity = find('identity budget');
+  const care = find('care list');
+  const check = find('tool log');
+  assert.ok(identity && care && check, 'the three entries exist');
+  assert.match(care.content, /takes it out of what triage and noticing see/);
+  const html = await fsp.readFile(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  for (const label of ['Identity budget (tokens)', 'Pause automatic identity cleanup', 'Open Temporal editor', 'Is my Familiar alive?', 'Tool turns']) {
+    assert.ok(identity.content.includes(label) || check.content.includes(label), `the manual names "${label}"`);
+    assert.ok(html.includes(label), `"${label}" is a real label in the UI`);
+  }
+  assert.ok(html.includes('>Automation<') || /data-[a-z-]*tab="automation"/i.test(html) || html.includes('Automation'), 'the Automation tab exists');
+});

@@ -43,6 +43,7 @@ import { buildVillagePresenceBlock, villagePresenceOn } from '../village/village
 import { buildVillagerContextBlock } from '../warmth/villager-context.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
 import { selectModules, stickyModulesFor, tickSticky, shouldSurface, toolCeiling, enforceToolCeiling, TOOL_MODULES } from '../../tool-surfacing.js';
+import { logTurn, toolNames, turnLogEnabled } from '../diagnostics/turn-log.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
@@ -3074,6 +3075,15 @@ async function handleTurn(gw, msg, decision, turn = null) {
       : executeToolCall;
     let turnRounds = [];
     let closingErr = null;   // last provider failure on the tool/closing path → honest note
+    // Diagnostics (turn-log.js, web parity): offered tools, each round's finish
+    // reason and calls, ran vs dropped. Written after the loop; never touches the turn.
+    const turnDiag = turnLogEnabled() ? {
+      surface: 'discord', sessionId: session.sessionId ?? null, model: conn?.model ?? null,
+      speaker: decision.isWard ? 'ward' : (isVillager ? 'villager' : 'other'),
+      surfaced: surfacedModules ? [...surfacedModules] : null,
+      offered: toolNames(discordTools), rounds: [],
+    } : null;
+    const turnDiagStart = Date.now();
     try {
       const { data, toolRounds } = await runToolCallLoop({
         // opts.forceText (round-cap closing round): call WITHOUT tools so the
@@ -3086,6 +3096,8 @@ async function handleTurn(gw, msg, decision, turn = null) {
         baseMessages: apiMessages,
         timeAnchor:   discordTimeAnchor,   // re-appended last every round (web parity)
         getTools:     recomposeDiscordTools,
+        rosterTools:  discordTools,         // the end-of-context tool roster (web parity)
+        onRound:      (r) => { turnDiag?.rounds.push(r); },
         executeTool,
         toolCtx,
         // My human's own turns get the ward-configurable round budget ("check
@@ -3119,6 +3131,15 @@ async function handleTurn(gw, msg, decision, turn = null) {
         console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
         rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings, signal: turnSignal }).catch(e => { closingErr = e; return ''; });
       }
+    }
+    if (turnDiag) {
+      logTurn({
+        ...turnDiag,
+        requested: [...(toolCtx._requestedModules ?? [])],
+        outcome: closingErr ? 'error' : 'done',
+        ...(closingErr ? { error: String(closingErr?.message ?? closingErr).slice(0, 200) } : {}),
+        ms: Date.now() - turnDiagStart,
+      });
     }
     // Persist this turn's modules to sticky AFTER the loop — the modules used
     // AND any pulled via request_tools — so a recovered module stays available

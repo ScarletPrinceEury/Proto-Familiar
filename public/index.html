@@ -1032,6 +1032,7 @@
           <button class="ke-tab"               data-loops-tab="triage"   role="tab">Triage</button>
           <button class="ke-tab"               data-loops-tab="pagewatch" role="tab">Page watch</button>
           <button class="ke-tab"               data-loops-tab="discord"  role="tab">Discord writes</button>
+          <button class="ke-tab"               data-loops-tab="turns"    role="tab">Tool turns</button>
         </div>
 
         <div class="ke-pane ke-pane-active" id="loops-pane-noticing">
@@ -1053,6 +1054,11 @@
         <div class="ke-pane" id="loops-pane-discord">
           <input type="search" id="loops-search-discord" class="vl-search" placeholder="Filter Discord writes…" aria-label="Filter Discord writes log" autocomplete="off">
           <div id="loops-list-discord" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-turns">
+          <input type="search" id="loops-search-turns" class="vl-search" placeholder="Filter tool turns…" aria-label="Filter tool turns log" autocomplete="off">
+          <p class="field-hint">What each live turn's tools actually did: which calls ran, and any that were dropped. Useful when your Familiar says it did something that didn't happen.</p>
+          <div id="loops-list-turns" class="loops-log-list"></div>
         </div>
       </div>
       <div class="modal-footer">

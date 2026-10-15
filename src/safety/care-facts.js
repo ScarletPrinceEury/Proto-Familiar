@@ -54,7 +54,7 @@ export function formatCareFactsReview(items, { maxChars = CARE_FACTS_CHAT_MAX_CH
   const byWording = placed.filter(p => p.item?.how === 'wording').length;
   const head = [
     `My care list: ${placed.length} facts, about ${tok(total)} tokens. ${placed.length - byWording} are flagged high-care; ${byWording} count only because their wording sounds like care.`,
-    `On a chat turn with my human my care block holds about ${tok(maxChars)} tokens: ${inBlock} of these. The rest come back only through recall.`,
+    `On a chat turn with my human my care block holds about ${tok(maxChars)} tokens: ${inBlock} of these. The rest reach me on chat turns only through recall, but triage and noticing still see them.`,
     placed.length > fetchLimit
       ? `Triage and noticing see the first ${fetchLimit}; the last ${placed.length - fetchLimit} reach neither.`
       : 'Triage and noticing see all of them.',
@@ -65,7 +65,8 @@ export function formatCareFactsReview(items, { maxChars = CARE_FACTS_CHAT_MAX_CH
     return `${i + 1}. [${how}, ${where}] ${p.item?.id ?? '?'}: ${excerpt(String(p.item?.content ?? '').trim(), 220)}`;
   });
   return [...head, '', ...lines, '',
-    'To take one off the list: update_memory_by_id with high_care: false. To keep a wording one for sure: high_care: true. read_memory_by_id shows a whole fact.',
+    'Taking a fact off this list takes it out of triage and noticing too: they don\'t recall anything, they only see this list, and they run when my human has gone quiet. So before I take one off I ask whether triage would need it then.',
+    'To take one off: update_memory_by_id with high_care: false. To keep a wording one for sure: high_care: true. read_memory_by_id shows a whole fact.',
   ].join('\n');
 }
 

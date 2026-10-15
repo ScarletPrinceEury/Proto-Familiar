@@ -386,6 +386,7 @@ multi-calendar panel.
 - `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
 - `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, a `fatal` flag (token/intents rejected — the UI shows red instead of a perpetual "reconnecting"), plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
 - `POST /api/discord/apply` — apply the saved Discord settings and (re)connect immediately (the Settings "Apply & connect" button), clearing any fatal state; returns the resulting status. Saves the ward waiting for the 30s supervisor tick or reloading the page
+- `GET /api/turn-diagnostics?limit=N` — per-turn tool-loop diagnostics (`src/diagnostics/turn-log.js` → `logs/turn-tools.jsonl`, rotated past 2 MB, 0.14.74): per live turn (web, voice, Discord) the tools offered and surfaced/requested modules, per round the finish reason, the calls the model sent, whether they ran or were **dropped** (calls on a round that didn't end with `finish_reason: 'tool_calls'`), and whether the web client was retrying after tools had already run (`clientAttempt` in the `/api/chat` body). Newest first. Diagnostics only; off-switch `PROTO_FAMILIAR_TURN_LOG_DISABLED=1`.
 - `GET /api/discord-writes` — the villager-write audit trail (`discord-write-log.js` → `logs/discord-writes.jsonl`): every state-mutating tool a villager triggered through the Familiar on Discord, with who caused it. Newest first.
 
 **Web search (the Settings "Configure search backend" modal):**
@@ -2420,7 +2421,9 @@ Tool calls?  (server-side loop since 0.4.0-alpha)
    ├── YES → cerebellum.executeToolCall() per call → append results →
    │         re-call provider (up to 5 rounds, all inside the one
    │         /api/chat request; the [Now] time anchor is re-appended
-   │         as the LAST message every round). Each round is streamed
+   │         as the LAST message every round, with a names-only roster of
+   │         this round's tools under it: `anchorWithToolRoster`, 0.14.74,
+   │         off-switch PROTO_FAMILIAR_TOOL_ROSTER_DISABLED=1). Each round is streamed
    │         to the client as a `_toolRound` SSE event (or returned as
    │         the `_toolRounds` array when non-streaming) so the chat
    │         renders the collapsible tool blocks without executing

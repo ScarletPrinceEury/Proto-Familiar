@@ -94,7 +94,8 @@ import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } fr
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './src/pondering/surface-context.js';
 import { rekeyCueState } from './src/gcal/gcal-projection.js';
-import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules } from './tool-surfacing.js';
+import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules, anchorWithToolRoster } from './tool-surfacing.js';
+import { describeRound } from './src/diagnostics/turn-log.js';
 import { rekeyPonderingUids } from './src/pondering/pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
 import {
@@ -1641,7 +1642,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory_by_id',
-      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I can also, or instead, fix WHO a fact is about: `subjects` sets the people it's really about, and `attribution_confidence` (0 to 1) says how sure I am of that — when I've worked out whose action something was after saving it unsure, I firm it up here so recall stops down-ranking it. `high_care` marks a standing fact about {{user}} as something I need in front of me to care for them (true), or takes that off (false). I get the id from recall or list_memories.",
+      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I can also, or instead, fix WHO a fact is about: `subjects` sets the people it's really about, and `attribution_confidence` (0 to 1) says how sure I am of that — when I've worked out whose action something was after saving it unsure, I firm it up here so recall stops down-ranking it. `high_care` marks a standing fact about {{user}} as something I need in front of me to care for them (true), or takes that off (false). Off means out of my care block AND out of what triage and noticing see, since they don't recall. I get the id from recall or list_memories.",
       parameters: {
         type: 'object',
         properties: {
@@ -1649,7 +1650,7 @@ export const BUILTIN_TOOLS = [
           content: { type: 'string', description: 'The full new contents. This REPLACES the entry — I include everything I want to keep. Optional if I\'m only fixing the attribution.' },
           subjects: { type: 'array', items: { type: 'string' }, description: 'Who the fact is really about — replaces the stored subjects. I set this when I\'ve figured out whose action or experience it was.' },
           attribution_confidence: { type: 'number', description: 'How sure I am of who it\'s about, 0 to 1. I raise this toward 1 once I\'ve resolved a memory I\'d saved unsure; 1 (or leaving it out) means fully certain.' },
-          high_care: { type: 'boolean', description: 'true puts this standing fact about {{user}} in my care list, on every turn of our own conversations; false takes it off.' },
+          high_care: { type: 'boolean', description: 'true puts this standing fact about {{user}} in my care list, on every turn of our own conversations and in triage and noticing; false takes it off all three (triage and noticing don\'t recall, they only see the care list).' },
         },
         required: ['id'],
       },
@@ -1659,7 +1660,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'list_care_facts',
-      description: "I look over my care list: every fact about {{user}} that counts as care right now, in the order my care block uses, with its id, whether it's flagged high-care or counts only because its wording sounds like care, and whether it fits in the care block on a chat turn or only comes back through recall. I use it to keep the list honest: high_care false (update_memory_by_id) on anything that isn't really care, so what matters fits. Only in our own conversations.",
+      description: "I look over my care list: every fact about {{user}} that counts as care right now, in the order my care block uses, with its id, whether it's flagged high-care or counts only because its wording sounds like care, and whether it fits in the care block on a chat turn or only comes back through recall. I use it to keep the list honest: high_care false (update_memory_by_id) on anything that isn't really care, so what matters fits. A fact I take off is gone from triage and noticing too (they don't recall), so I keep anything they'd need when my human has gone quiet. Only in our own conversations.",
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -5810,27 +5811,40 @@ export async function runToolCallLoop({
   toolCtx     = {},
   maxRounds   = MAX_TOOL_ROUNDS,
   getTools    = null,
+  // The tools this turn advertises when getTools() hasn't grown them (array or
+  // () => array): what the end-of-context roster names. Omitted → no roster.
+  rosterTools = null,
+  // Diagnostics (turn-log.js): called with describeRound()'s record each round.
+  onRound     = null,
   signal,
 }) {
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
   let currentMsgs    = baseMessages;
   const toolRounds   = [];
   let   data         = null;
+  const report = (r) => { try { onRound?.(describeRound(r)); } catch { /* diagnostics never break a turn */ } };
 
   for (let round = 0; round <= maxRounds; round++) {
     if (signal?.aborted) break;
-    const payloadMessages = timeAnchor
-      ? [...currentMsgs, { role: 'system', content: timeAnchor }]
-      : currentMsgs;
     // Surfacing growth: request_tools may have widened the module set last
     // round — recompose so the pulled tools are present THIS round. The set
     // only ever grows within a turn (a chain never loses a tool mid-reach).
-    data = await callUpstream(payloadMessages, getTools ? getTools() : undefined);
+    const grownTools = getTools ? getTools() : undefined;
+    const roundTools = grownTools ?? (typeof rosterTools === 'function' ? rosterTools() : rosterTools);
+    // The time anchor, with this round's tool roster under it, goes LAST so
+    // both sit where the model is reading, however long the context has grown.
+    const anchor = anchorWithToolRoster(timeAnchor, roundTools);
+    const payloadMessages = anchor
+      ? [...currentMsgs, { role: 'system', content: anchor }]
+      : currentMsgs;
+    data = await callUpstream(payloadMessages, grownTools);
 
     const choice  = data?.choices?.[0];
     const message = choice?.message;
     const isToolTurn = choice?.finish_reason === 'tool_calls'
       && Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+    report({ round, finishReason: choice?.finish_reason, toolCalls: message?.tool_calls,
+      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: message?.reasoning_content });
     if (!isToolTurn || round >= maxRounds) break;
 
     const toolCalls = message.tool_calls;
@@ -5871,6 +5885,9 @@ export async function runToolCallLoop({
     ];
     try {
       data = await callUpstream(closingMsgs, undefined, { forceText: true });
+      const c = data?.choices?.[0];
+      report({ round: 'closing', finishReason: c?.finish_reason, toolCalls: c?.message?.tool_calls, ran: false,
+        content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true });
       console.log('[tools] round cap reached with tools still pending — forced a closing text round');
     } catch (err) {
       console.warn('[tools] round-cap closing round failed (keeping tool_calls response):', err?.message ?? err);

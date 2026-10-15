@@ -154,6 +154,13 @@ way to see the list. Ward decision: give it a tool and keep the cap.
   (`update_memory_by_id` with `high_care: false`) is refused on a gated turn too,
   because it also removes the fact from triage's view. Flagging from a
   villager's turn stays allowed (the 0.14.71 ward decision).
+- **0.14.74, found in the first real pass:** the Familiar unflagged 19 facts,
+  some crisis-adjacent, reasoning that recall would still bring them back. That
+  holds on chat turns, but triage and noticing don't recall: they see only the
+  care list, and they run when my human has gone quiet. The review text, the
+  `high_care` description on `update_memory_by_id` and the tool description now
+  say so wherever unflagging is offered. (The Familiar re-flagged the two that
+  mattered once told.)
 
 ## Surface matrix (RULE C — the care block)
 
