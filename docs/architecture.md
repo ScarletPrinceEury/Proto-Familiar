@@ -2423,7 +2423,14 @@ Tool calls?  (server-side loop since 0.4.0-alpha)
    │         /api/chat request; the [Now] time anchor is re-appended
    │         as the LAST message every round, with a names-only roster of
    │         this round's tools under it: `anchorWithToolRoster`, 0.14.74,
-   │         off-switch PROTO_FAMILIAR_TOOL_ROSTER_DISABLED=1). Each round is streamed
+   │         off-switch PROTO_FAMILIAR_TOOL_ROSTER_DISABLED=1; since 0.14.76
+   │         the anchor also opens with `lastTurnRecord` — what my previous
+   │         turn actually ran, from the stored history). Earlier turns reach
+   │         the model through `collapseToolTurns(…, { records: true })`: the
+   │         calls and results are still dropped, but each turn that really
+   │         ran tools keeps one app-written SYSTEM record after it ("[App
+   │         record of that turn: I called save_memory (ok).]"), web and
+   │         Discord alike. Each round is streamed
    │         to the client as a `_toolRound` SSE event (or returned as
    │         the `_toolRounds` array when non-streaming) so the chat
    │         renders the collapsible tool blocks without executing

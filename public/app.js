@@ -2363,13 +2363,23 @@ function renderInlineText(text) {
       .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
       .replace(/^# (.+)$/gm,   '<h1>$1</h1>');
 
+    // Lists. Models often leave blank lines between items; that is still ONE
+    // list (CommonMark's "loose" list). Items separated only by blank lines are
+    // grouped into one list, so a blank line no longer splits it into many
+    // lists that each restart at 1 ("1. 2. 3." showing as "1. 1. 1.").
     // Unordered lists (lines starting with - or *)
     s = s.replace(/^[*\-] (.+)$/gm, '<li>$1</li>');
-    s = s.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+    s = s.replace(/(?:<li>.*<\/li>(?:\n+(?=<li>)|\n?))+/g, m => `<ul>${m.replace(/\n+/g, '')}</ul>`);
 
-    // Ordered lists — use a temporary tag to avoid re-wrapping unordered <li> items
-    s = s.replace(/^\d+\. (.+)$/gm, '<oli>$1</oli>');
-    s = s.replace(/(<oli>.*<\/oli>\n?)+/g, m => `<ol>${m.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>')}</ol>`);
+    // Ordered lists — a temporary tag (so unordered <li> items aren't re-wrapped)
+    // that keeps each item's own number; the list starts at its first item's
+    // number, so a list that genuinely begins at 4 still says 4.
+    s = s.replace(/^(\d+)\. (.+)$/gm, '<oli data-n="$1">$2</oli>');
+    s = s.replace(/(?:<oli data-n="\d+">.*<\/oli>(?:\n+(?=<oli )|\n?))+/g, m => {
+      const first = m.match(/data-n="(\d+)"/)?.[1] ?? '1';
+      const items = m.replace(/\n+/g, '').replace(/<oli data-n="\d+">/g, '<li>').replace(/<\/oli>/g, '</li>');
+      return `<ol${first !== '1' ? ` start="${first}"` : ''}>${items}</ol>`;
+    });
 
     // Paragraphs: double newline → </p><p>
     s = s.replace(/\n\n+/g, '</p><p>');

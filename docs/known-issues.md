@@ -192,8 +192,25 @@ Directions, in addition to the provenance ideas above:
 - A per-turn "what I actually did" record, built from the tool calls that ran,
   that the Familiar can read before it summarises its turn.
 
+Diagnosed with the turn log (0.14.74), and partly addressed in 0.14.76. Across
+the logged turns, every phantom was a single round with finish reason `stop`
+and zero tool calls; no call was ever dropped by the loop. Successes and
+phantoms alternated whatever the step size. The likely cause was history: the
+collapse removed every past call and result, so each past action survived only
+as the Familiar's own "ran — ok" sentence, which it then reproduced. 0.14.76
+keeps an app-written system record after each turn that really ran tools, and
+opens each turn's anchor with what the previous turn actually ran
+(`collapseToolTurns(…, { records: true })`, `lastTurnRecord`). Watch the
+Tool turns log to see whether phantoms drop off; if they don't, the next step
+is a code-side check on the turn itself.
+
 <!--
 Resolved:
+- Numbered lists showed "1. 1. 1." when items had blank lines between them —
+  fixed 0.14.76. The chat renderer wrapped every such item in its own <ol>
+  (each restarting at 1) and dropped the written number. Items separated only
+  by blank lines are now one list, and a list keeps its first item's number
+  via start= (tests/render-lists.test.mjs).
 - The append tool was core while the identity cut tools were conditional — fixed
   0.14.75. A turn without the memory-edit group could only ADD to identity, and
   "removed" a duplicate by appending it twice. remove_from_identity,

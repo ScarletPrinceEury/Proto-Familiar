@@ -93,7 +93,7 @@ function sessionUnifyEnabled() {
 import { substituteMacros } from '../../macros.js';
 import { coreSystemSegment, postHistoryMessage } from '../../core-prompts.js';
 import { recordOutgoingPrompt } from '../sessions/prompt-capture.js';
-import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth } from '../../message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord, isToolRecord } from '../../message-sanitize.mjs';
 import { buildTimeAnchorBlock } from '../../relative-time.js';
 import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mirror.js';
 import { sanitizeExternal } from '../../injection-guard.js';
@@ -187,11 +187,12 @@ function formatMsgTime(isoString) {
 // collapsed (collapseToolTurns), capped at HISTORY_LIMIT, each line timestamp-
 // stamped and carrying its speaker + any media attachments. The live turn and
 // the [later:…] revisit path built this identically — one builder now.
-function buildHistoryForPrompt(session) {
-  return collapseToolTurns(session.messages ?? [])
-    .filter(m => m.role === 'user' || m.role === 'assistant')
+export function buildHistoryForPrompt(session) {
+  return collapseToolTurns(session.messages ?? [], { records: true })   // app records of real tool runs ride along (web parity)
+    .filter(m => m.role === 'user' || m.role === 'assistant' || isToolRecord(m))
     .slice(-HISTORY_LIMIT)
     .map(m => {
+      if (isToolRecord(m)) return { role: 'system', content: m.content };
       const clean = stripLlmTimestamps(m.content);
       return {
         role: m.role,
@@ -2888,14 +2889,19 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // sense of "now" was one server-zone line buried in the dynamic block. Weather
   // detail is ward-private only (vague tier on any gated room, so a precise value
   // can't leak a location). Empty string when it can't be built — never blocks.
-  const discordTimeAnchor = buildTimeAnchorBlock({
-    now: Date.now(),
-    lastUserMessageAt: null,  // Discord doesn't track the client-side gap clock web has
-    timeZone: settings?.wardTimeZone || null,
-    weatherLine: audienceTag === 'ward-private'
-      ? readWeatherNowLine({ unit: settings?.weatherUnit })
-      : readWeatherVagueLine(),
-  }) || '';
+  const discordTimeAnchor = [
+    buildTimeAnchorBlock({
+      now: Date.now(),
+      lastUserMessageAt: null,  // Discord doesn't track the client-side gap clock web has
+      timeZone: settings?.wardTimeZone || null,
+      weatherLine: audienceTag === 'ward-private'
+        ? readWeatherNowLine({ unit: settings?.weatherUnit })
+        : readWeatherVagueLine(),
+    }) || '',
+    // What my previous turn here actually ran (web parity). session.messages is
+    // prior history only, so a placeholder marks where this turn begins.
+    lastTurnRecord([...(session.messages ?? []), { role: 'user' }]),
+  ].filter(Boolean).join('\n\n');
   // The tool loop re-appends the anchor per round on its own; the direct
   // (non-loop) fallback calls below use this to keep [Now] last there too.
   const withAnchor = (msgs) => discordTimeAnchor ? [...msgs, { role: 'system', content: discordTimeAnchor }] : msgs;

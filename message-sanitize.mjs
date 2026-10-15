@@ -38,7 +38,38 @@ export function stripLlmTimestamps(text) {
 // genuinely independent assistant messages (e.g. proactive banners, with no
 // tool_calls and no tool run between them) are never merged. Pure; tolerates a
 // vision-era array `content` (keeps its text part).
-export function collapseToolTurns(messages = []) {
+//
+// With `{ records: true }` (the live provider boundaries, 0.14.76), each turn
+// that really ran tools also gets one app-written SYSTEM record right after it,
+// built from the stored calls and results: "[App record of that turn: I called
+// save_memory (ok).]". Without it, collapsing left every past action as nothing
+// but my own sentence saying it happened — so over a long session my history
+// taught me that writing "ran — ok" IS an action, and in the first identity
+// review I started producing exactly that text with no call behind it. A turn
+// that only narrated gets no record, so history shows the difference. A record
+// is a system message (the model writes assistant text, not these), and it is
+// never merged into an assistant turn.
+export const TOOL_RECORD_PREFIX = '[App record of that turn:';
+
+export function isToolRecord(m) {
+  return !!m && m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(TOOL_RECORD_PREFIX);
+}
+
+function resultLabel(result) {
+  if (result == null) return 'no result came back';
+  const s = String(typeof result === 'string' ? result : JSON.stringify(result)).replace(/\s+/g, ' ').trim();
+  if (/^ok\b/i.test(s)) return 'ok';
+  if (s.length <= 60) return `returned: ${s}`;
+  const cut = s.slice(0, 60);
+  const sp = cut.lastIndexOf(' ');
+  return `returned: ${(sp > 30 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '')}…`;   // whole words, so the clip reads as a clip
+}
+
+function describeCalls(calls, results) {
+  return calls.map(c => `${c.name || '?'} (${resultLabel(results[c.id])})`).join(', ');
+}
+
+export function collapseToolTurns(messages = [], { records = false } = {}) {
   if (!Array.isArray(messages)) return messages;
   const textOf = (m) => {
     const c = m?.content;
@@ -49,9 +80,14 @@ export function collapseToolTurns(messages = []) {
   const out = [];
   for (const m of messages) {
     if (!m || typeof m !== 'object') { out.push(m); continue; }
-    if (m.role === 'tool') continue;                    // tool results never re-enter history
+    if (m.role === 'tool') {                            // tool results never re-enter history…
+      const run = out[out.length - 1];
+      if (run && run.role === 'assistant' && run._calls) run._results[m.tool_call_id] = m.content;  // …but the record keeps what they said
+      continue;
+    }
     if (m.role === 'assistant') {
       const isCarrier = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+      const calls = isCarrier ? m.tool_calls.map(tc => ({ id: tc?.id, name: tc?.function?.name })) : [];
       const text = textOf(m);
       const prev = out[out.length - 1];
       // Merge only within a tool-scaffolding run: the previous emitted turn was a
@@ -59,27 +95,64 @@ export function collapseToolTurns(messages = []) {
       if (prev && prev.role === 'assistant' && (prev._carrier || isCarrier)) {
         prev.content = [prev.content, text].map(s => String(s ?? '').trim()).filter(Boolean).join('\n\n');
         prev._carrier = isCarrier;   // still mergeable mid-run; sealed once a plain final lands
+        if (calls.length) { prev._calls = [...(prev._calls ?? []), ...calls]; prev._results ??= {}; }
         continue;
       }
       const { tool_calls, ...rest } = m;               // drop tool_calls from history
-      out.push({ ...rest, content: text, _carrier: isCarrier });
+      out.push({ ...rest, content: text, _carrier: isCarrier, ...(calls.length ? { _calls: calls, _results: {} } : {}) });
       continue;
     }
     out.push(m);                                        // user / system / anything else
   }
-  return out
+  const withRecords = [];
+  for (const m of out) {
+    withRecords.push(m);
+    if (records && m && m.role === 'assistant' && m._calls?.length) {
+      withRecords.push({ role: 'system', content: `${TOOL_RECORD_PREFIX} I called ${describeCalls(m._calls, m._results)}.]` });
+    }
+  }
+  return withRecords
     .map(m => {
       if (!m || typeof m !== 'object') return m;
-      // Drop the internal merge marker AND `moodTag` (mood-send, §6, INVARIANT
-      // T1). A mood tag is metadata for the Mood tracker + the memorization
-      // calibration corpus ONLY — it must never reach a live provider prompt.
-      // This is THE provider-history boundary (web /api/chat + Discord), so
-      // stripping here guarantees a tagged message's assembled payload is
+      // Drop the internal merge/record markers AND `moodTag` (mood-send, §6,
+      // INVARIANT T1). A mood tag is metadata for the Mood tracker + the
+      // memorization calibration corpus ONLY — it must never reach a live provider
+      // prompt. This is THE provider-history boundary (web /api/chat + Discord),
+      // so stripping here guarantees a tagged message's assembled payload is
       // byte-free of it, whatever a client sends (belt to the client's suspenders).
-      const { _carrier, moodTag, ...rest } = m;
+      const { _carrier, _calls, _results, moodTag, ...rest } = m;
       return rest;
     })
     .filter(m => !(m && m.role === 'assistant' && !String(m.content ?? '').trim()));
+}
+
+/**
+ * One line for the CURRENT turn's end-of-context anchor: what my previous turn
+ * actually ran, read from the stored history (raw, before collapse). `messages`
+ * ends with the current user message. '' when there's no previous turn yet.
+ * The truth arrives at the start of the next turn from the record, not from my
+ * memory of what I meant to do (0.14.76).
+ */
+export function lastTurnRecord(messages = []) {
+  if (!Array.isArray(messages)) return '';
+  const userIdx = [];
+  messages.forEach((m, i) => { if (m?.role === 'user') userIdx.push(i); });
+  if (userIdx.length < 2) return '';
+  const from = userIdx[userIdx.length - 2] + 1;
+  const to = userIdx[userIdx.length - 1];
+  const turn = messages.slice(from, to);
+  if (!turn.some(m => m?.role === 'assistant')) return '';
+  const calls = [];
+  const results = {};
+  for (const m of turn) {
+    if (m?.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) calls.push({ id: tc?.id, name: tc?.function?.name });
+    }
+    if (m?.role === 'tool') results[m.tool_call_id] = m.content;
+  }
+  return calls.length
+    ? `[Last turn, from the app's record: I called ${describeCalls(calls, results)}.]`
+    : "[Last turn, from the app's record: I made no tool calls.]";
 }
 
 // The dynamic-context depth: how many turns from the END the dynamic block sits,
