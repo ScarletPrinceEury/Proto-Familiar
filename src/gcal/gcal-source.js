@@ -149,6 +149,12 @@ export function normalizeCliEvents(raw) {
     const start = e.start?.dateTime ?? e.start?.date ?? e.start ?? e.when ?? e.begin ?? null;
     const end = e.end?.dateTime ?? e.end?.date ?? e.end ?? null;
     const allDay = !!(e.all_day ?? e.allDay ?? (e.start && e.start.date && !e.start.dateTime));
+    // An expanded occurrence of a recurring series (Google's singleEvents
+    // shape) names its series: recurringEventId, and an iCalUID shared with the
+    // series. Carried so Unruh can tell which series an occurrence belongs to
+    // (a series node left over from an iCal-link sync must stop repeating once
+    // its occurrences arrive one by one — the doubled-events fix).
+    const seriesUid = (e.recurringEventId || e.recurring_event_id) ? (e.iCalUID ?? e.ical_uid ?? null) : null;
     out.push({
       uid: String(uid),
       summary: e.summary ?? e.title ?? e.text ?? '(untitled)',
@@ -160,6 +166,7 @@ export function normalizeCliEvents(raw) {
       description: e.description ?? e.details ?? null,
       status: String(e.status ?? '').toLowerCase() === 'cancelled' ? 'cancelled' : 'confirmed',
       last_modified: e.last_modified ?? e.updated ?? e.lastModified ?? null,
+      ...(seriesUid ? { series_uid: String(seriesUid) } : {}),
     });
   }
   return out;
