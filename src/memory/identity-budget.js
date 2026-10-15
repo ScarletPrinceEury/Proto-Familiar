@@ -31,10 +31,10 @@ export function categoryBudgetChars(category, tokens) {
 
 // What I do when a category is over — said plainly, once, in my own voice.
 const OVER_NOTE = {
-  self: 'My core (identity, persona, personhood, wants, boundaries) is mine to shape; notes about myself that only matter sometimes I move to standing facts (save_memory, register me), and I tighten sections that sprawl (rewrite_identity_section).',
-  ward: "What only matters sometimes — preferences, patterns, care details like what helps, meds or triggers — I move to standing facts about my human (save_memory, register ward), and I tighten what's left (rewrite_identity_section).",
-  relationship: 'Specific episodes and details I move to standing facts (save_memory, register ward), and I keep the shape of us tight (rewrite_identity_section).',
-  custom: "What doesn't need to be in front of me every turn I move to standing facts (save_memory), and I tighten what's left (rewrite_identity_section).",
+  self: 'My core (identity, persona, personhood, wants, boundaries) is mine to shape; notes about myself that only matter sometimes I move to standing facts (save_memory, register me, then remove_from_identity cuts the line), and I tighten sections that sprawl (rewrite_identity_section).',
+  ward: "What only matters sometimes — preferences, patterns, care details like what helps, meds or triggers — I move to standing facts about my human (save_memory, register ward, high_care for care details, then remove_from_identity cuts the line), and I tighten what's left (rewrite_identity_section).",
+  relationship: 'Specific episodes and details I move to standing facts (save_memory, register ward, then remove_from_identity cuts the line), and I keep the shape of us tight (rewrite_identity_section).',
+  custom: "What doesn't need to be in front of me every turn I move to standing facts (save_memory, then remove_from_identity cuts the line), and I tighten what's left (rewrite_identity_section).",
 };
 const CATEGORY_NAME = { self: 'My self files', ward: 'My files about my human', relationship: 'My files about us', custom: 'My custom files' };
 

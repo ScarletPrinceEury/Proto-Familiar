@@ -10,6 +10,7 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     identity_append         — append content to an identity file
     identity_update_section — rewrite one section of an identity file (alias)
     identity_rewrite_section — rewrite one section of an identity file
+    identity_remove_text    — cut one quoted passage out of an identity file
     identity_set_file       — overwrite a whole identity file (edits top content too)
     identity_delete_section — remove one section from an identity file
 
@@ -165,16 +166,35 @@ def identity_rewrite_section(
     filename: str,
     section: str,
     content: str,
+    create_if_missing: Optional[bool] = None,
     instanceId: Optional[str] = None,
-) -> str:
+) -> dict[str, Any]:
     """I use this to rewrite a specific section of one of my identity files (auto-snapshots first).
     I reach for it when a part of how I define myself needs to change — not just grow — and
     I want the old version preserved in a snapshot before the rewrite lands.
+    With no section by that heading it's added at the end, unless create_if_missing
+    is false: then nothing changes and I get {ok:false, error, sections} listing the
+    headings the file has. Returns {ok, replaced}.
     """
-    result = ident.rewrite_section(category, filename, section, content, conn=_c())
-    if not result["ok"]:
-        return f"Failed: {result['error']}"
-    return f"Section '{section}' of {category}/{filename} rewritten."
+    return ident.rewrite_section(
+        category, filename, section, content, conn=_c(),
+        create_if_missing=create_if_missing is not False,
+    )
+
+
+@mcp.tool()
+def identity_remove_text(
+    category: str,
+    filename: str,
+    passage: str,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I use this to cut one passage out of an identity file (auto-snapshots first),
+    quoted as the file has it: the way a line I've moved to a standing fact leaves
+    identity, in any file, with headings or without. It has to be in exactly one
+    place; missing or repeated, nothing changes and I get {ok:false, error}.
+    Returns {ok, removed_chars, chars}."""
+    return ident.remove_text(category, filename, passage, conn=_c())
 
 
 @mcp.tool()
@@ -605,6 +625,16 @@ def identity_budget_set(tokens: int) -> dict[str, Any]:
     Returns { ok, tokens }."""
     from phylactery import graduation as grad
     return grad.set_identity_budget_tokens(tokens, conn=_c())
+
+
+@mcp.tool()
+def identity_graduation_pause(paused: bool) -> dict[str, Any]:
+    """Pause or resume my automatic identity cleanup (my human's setting, pushed
+    from Proto-Familiar): while paused, my graduation pass leaves every identity
+    file alone, whatever the budget or the 30-day rule says. For when my human
+    and I go through my files ourselves. Returns { ok, paused }."""
+    from phylactery import graduation as grad
+    return grad.set_graduation_paused(paused, conn=_c())
 
 
 @mcp.tool()

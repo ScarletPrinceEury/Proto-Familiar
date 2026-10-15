@@ -56,7 +56,8 @@ export const TOOL_MODULES = {
   delete_memory: 'memory-edit', delete_memory_by_id: 'memory-edit',
   list_memories: 'memory-edit', move_memory_date: 'memory-edit',
   memorize_now: 'memory-edit',
-  rewrite_identity_section: 'memory-edit',
+  rewrite_identity_section: 'memory-edit', remove_from_identity: 'memory-edit',
+  delete_identity_section: 'memory-edit',
 
   create_graph_node: 'graph', find_graph_node: 'graph',
   update_graph_node: 'graph', delete_graph_node: 'graph',
@@ -131,7 +132,7 @@ export const ALL_MODULES = [...new Set(Object.values(TOOL_MODULES))];
 export const MODULE_INDEX =
   'schedule-write (add/re-time/snooze/resolve/delete/link calendar items, requirement templates, push to Google), ' +
   'schedule-read (export an item as .ics/link, list requirement templates), ' +
-  'memory-edit (read/update/delete/list/move my memories, memorize-now, rewrite identity sections), ' +
+  'memory-edit (read/update/delete/list/move my memories, memorize-now, rewrite identity sections, cut lines or sections out of identity), ' +
   'graph (my knowledge web: nodes + relationships), ' +
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +
@@ -170,7 +171,7 @@ const TRIGGERS = {
     blocks: [],
   },
   'memory-edit': {
-    text: /\b(memor(y|ies)|remember(ed)?\b|forget|you (said|told|mentioned)|last (time|week|month)|back (then|when)|journal|diary|wrong date|that day)\b/i,
+    text: /\b(memor(y|ies)|remember(ed)?\b|forget|you (said|told|mentioned)|last (time|week|month)|back (then|when)|journal|diary|wrong date|that day|identity (files?|sections?)|standing facts?)\b/i,
     blocks: [],
   },
   graph: {
