@@ -50,6 +50,12 @@ tomes/.surface-events.json.tmp
 # Safety net: any runtime tomes/ dir that a mis-resolved __dirname path creates
 # under src/ (e.g. the pre-fix src/pondering/tomes/ stray — §2). Never a source dir.
 src/**/tomes/
+# …except src/tomes/ itself, which IS a source dir (the tome modules). `**`
+# matches zero directories, so the line above hid it too: new modules there were
+# silently never committed (0.14.90 shipped imports of an uncommitted
+# room-lore.js). A stray src/tomes/tomes/ is still caught above.
+# tests/no-ignored-source.test.mjs guards this class.
+!/src/tomes/
 # Discord gateway runtime state — conversation map, rate-limit buckets, revisit queue.
 tomes/.discord-map.json
 tomes/.discord-map.json.tmp
