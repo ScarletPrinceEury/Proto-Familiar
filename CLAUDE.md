@@ -277,6 +277,14 @@ expensive, and they repeat, so they are law now.
    manifest field (`upstreamAsset`) that never existed. `docs/pockettts-reference.md`
    exists because of this; the habit it encodes generalises.
 
+10. **A green local suite says nothing about files git never saw (0.14.91).**
+   `.gitignore`'s `src/**/tomes/` (meant for stray runtime dirs) also matched
+   the source dir `src/tomes/`, so a new module there was never committed
+   while the code importing it was. Every test passed — locally the file
+   existed — and main would have crashed at boot on the next pull.
+   `tests/no-ignored-source.test.mjs` now fails when any source file is
+   ignored; `git status` listing fewer files than I created is the tell.
+
 ### What the research actually supports about prompting (use this, don't over-claim)
 
 These guidelines are backed by the literature, not folklore. Each is tagged with how solid the evidence is, because *overstating* the case (point 6) undermines the rest.
