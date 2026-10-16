@@ -104,6 +104,18 @@ sources:
   - id: own-files
     type: file
     path: own-files.js
+  - id: excerpt-js
+    type: file
+    path: src/util/excerpt.js
+  - id: hippocampus-js
+    type: file
+    path: src/memory/hippocampus.js
+  - id: memory-module
+    type: file
+    path: phylactery/src/phylactery/memory.py
+  - id: excerpt-test
+    type: file
+    path: tests/excerpt.test.mjs
 ---
 
 # Engineering Conventions
@@ -537,6 +549,54 @@ X written out as text, which doesn't run it." for anything written but never cal
 a fact about what happened, not as a mistake — and a real call of the same name in the same turn
 clears the note. The turn log records `textToolCalls` per round so the pattern is visible outside
 the live prompt too.
+
+## A clipped view of your own past words reads as an unfinished sentence (0.14.69-alpha)
+
+A silent fixed-length cut on text the Familiar reads back about itself produces a specific,
+recurring misread: a reply that went out complete reads back as one that broke off, and the
+Familiar apologizes for an unfinished sentence it actually finished. This shipped independently
+on three surfaces, each clipping a different way, before the shared fix: the hippocampus kept a
+stored reply's first 279 characters plus `"…"` [@hippocampus-js]; `formatRecentMessagesForContext`
+(noticing's and warm reach-out's recent-lines rendering) stopped silently at 300 characters,
+sometimes mid-word [@cerebellum-js]; and triage's recent-lines rendering stopped silently at 400
+— which meant a crisis sentence placed at the END of a long message never reached triage at all
+[@cerebellum-js].
+
+This shipped across three call sites feeding [Memory and knowledge](../architecture/memory-and-knowledge)'s episodic-memory surface (the hippocampus) and [Noticing](../architecture/noticing)'s recent-conversation rendering; see those pages for what each surface is for. `src/util/excerpt.js`'s `excerpt(text, max)` is the shared fix: text over budget keeps its START
+and its real END, both cut at a word boundary, joined by an explicit `EXCERPT_MARKER`
+(`[… cut for length …]`) rather than a trailing `"…"` that reads as mid-thought [@excerpt-js]. The
+real ending is what proves the message was complete; the marker is what says the *display* was
+shortened, not the message itself. `headAt`/`tailAt` only snap to a word boundary when doing so
+does not throw away more than 30% of the side being cut (`BOUNDARY_SLACK`) — one long unbroken
+run (a URL, a run-on word) is cut hard instead of searching indefinitely for a space that is not
+there [@excerpt-js]. Text within budget returns untouched.
+
+**Not every surface gets the same budget, because not every surface carries the same cost of a
+cut.** The hippocampus and the noticing/warm-reach-out renderer kept their existing 300-ish
+character budgets, now excerpted instead of silently truncated [@hippocampus-js] [@cerebellum-js].
+Triage is different: `renderTriageSliceBody` (`cerebellum.js`) shows its newest
+`TRIAGE_UNCUT_LATEST` (5) lines of a slice **whole, at any length** — they are the context a
+safety decision actually rests on, so nothing about them may be shortened — and only an *older*
+line is excerpted, and only past `TRIAGE_LINE_CEILING` (10,000 characters), so a single
+pathological paste earlier in the conversation cannot push the whole prompt past the model's
+context window and fail every deliberation on that slice [@cerebellum-js]. This is a direct
+instance of the robust-over-cheap ordering elsewhere on this page: the cheap fix (apply the same
+300-character excerpt everywhere) would have reintroduced the exact bug triage needed fixed,
+since a crisis sentence sitting past character 300 of a long message is the failure this surface
+cannot afford.
+
+`tests/excerpt.test.mjs` pins the helper directly, a hippocampus round-trip (a long reply renders
+with its real ending), legacy entries stored before the fix (which still end in `"…"` and render
+with the marker appended until they age out of retention), the noticing/reach-out formatter, and
+triage's newest-whole/older-capped split [@excerpt-test].
+
+**The same clipping shape is still open on a surface this fix did not reach.** Phylactery's
+`recall` tool builds its result excerpts as a bare `content[:300]` in four places in `memory.py`,
+with no cut marker at all [@memory-module]. A ward-facing identity review hit exactly the
+predicted failure: the Familiar read a cut-off recall as "this fact isn't saved yet," saved a
+near-duplicate, then found the full text with `read_memory_by_id` and deleted its own duplicate.
+Phylactery needs the same start-and-real-end excerpting `src/util/excerpt.js` already gives the
+Node side; until then, treat any `memory.py` excerpt as unmarked and possibly cut mid-word.
 
 ## Safety-critical sign-off
 

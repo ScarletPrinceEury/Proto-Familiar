@@ -110,6 +110,26 @@ the app's own gap, turning into self-blame and a new self-imposed rule. See [Pla
 limits, never a verdict](../decisions/plain-facts-about-limits) for the incident and the decision
 this line, the round-cap note, and the last-turn record all now share.
 
+## A tool's own description can contradict what it's actually offered
+
+Surfacing and the ceiling both decide *whether* a tool is offered; neither one checks whether a
+tool's own description still describes the turn it is being offered on. The browser-vs-plain-reader
+choice (0.14.65-alpha) is the case that exposed this gap: with browsing on, `composeActiveTools`
+already removed `read_webpage` and offered `browse_open` in its place, but `web_search`'s
+description still told the Familiar its results were links "I can then open with `read_webpage`",
+and `browse_open`'s own description added "`read_webpage` is cheaper for plain reading, so I try
+that first" — both strings kept steering the model toward a tool that was not in that turn's list
+at all, so it kept reaching for the wrong one regardless of what composition had actually decided
+[@tool-surfacing-js]. See [Browser](browser)'s "The browser becomes how the Familiar reads pages"
+section for the fix: `browser-gate.js`'s `browserReadsPages(settings)` is now the single predicate
+both the tool filter and the tool descriptions read, so the two can no longer drift apart, and
+`withPageReaderModule` keeps whichever reader is actually in play riding alongside the `web`
+surfacing trigger so a search-then-open never burns a `request_tools` round just to reach a tool
+that was always going to be offered. The general lesson for this page: a tool description is part
+of the contract composition enforces, not just documentation — a description that recommends a
+tool the current composition will never offer is a bug in the same family as an unreachable
+capability, even though the tool itself is reachable.
+
 ## Consequences and constraints
 
 - A turn's tool list is now determined by context, not just request, and changes from turn to turn. A feature expecting a specific tool present every turn must either land in CORE or work with `request_tools` recovery.
@@ -118,6 +138,8 @@ this line, the round-cap note, and the last-turn record all now share.
 
 ## Related
 
+- [Browser](browser) — the one-page-reader-per-turn rule (0.14.65) that is this page's worked
+  example of a tool description drifting from what composition actually offers.
 - [Noticing](noticing) — `composeNoticingTools` (0.14.82) rebuilds the background noticing turn's toolset from this same module-surfacing and `request_tools` growth mechanism, replacing an earlier fixed tool list that silently fell behind live-turn capabilities.
 - [Trackers](trackers) — applies surfacing to bring tracker modules into scope based on vocabulary and tracker labels.
 - [Weather](weather) — surfaces the weather module based on leaving-the-house language and readiness blocks.
