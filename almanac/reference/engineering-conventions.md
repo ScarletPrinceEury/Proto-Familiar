@@ -372,6 +372,39 @@ voice notes, `ensureTranscribed` in `voice-transcribe.js`, was built with the le
 applied: both surfaces gained it in the same change, and its own doc comment names
 `ensureDescribed` as the reason it exists [@voice-transcribe-js].
 
+## A gap is reported as a plain fact, never a verdict
+
+RULE B above requires that budget exhaustion is never silence; a 0.14.83-alpha pass tightened
+*how* that report reads, after an identity-verification review showed the Familiar turning any
+mention of a limit — even one that was the app's own fault — into self-blame and a new
+self-imposed rule. See [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits)
+for the incident and the decision; this section is the mechanism.
+
+The round-cap note RULE B's reference implementation reads is now one shared string,
+`ROUND_CAP_NOTE` in `cerebellum.js`, used at both places a turn's tool-round budget can run
+out — `server.js`'s chat proxy and `cerebellum.js`'s own tool loop — instead of being
+copy-pasted into each call site [@cerebellum-js]. Its wording states what happened and what happens
+next ("my tool budget for this turn is used up, so the calls I just asked for didn't run... If
+they tell me to go on, I get a fresh budget and carry on") with no caps-lock verdict.
+
+`message-sanitize.mjs`'s `lastTurnRecord(messages)` builds the companion fact for the *next*
+turn: a one-line record of what the previous turn's assistant messages actually ran, read from
+stored history rather than from the model's own memory of what it meant to do [@message-sanitize].
+It renders `[Last turn, tools used: ...]` or `[Last turn: no tools used.]` — plain record, not
+the audit-voiced "from the app's record" phrasing an earlier version used.
+
+**Text tool calls get named too (0.14.86-alpha).** Some models, some of the time, write a tool
+call out as literal text instead of invoking it — a `<tool_call>` tag, a `<function=name>` tag, a
+bare `{"name": "...", "arguments": {...}}` blob, or a line starting `snake_case({` — and nothing
+runs, even though it reads like it did. `findTextToolCalls(text)` in `message-sanitize.mjs`
+matches exactly these shapes, deliberately narrow enough that ordinary prose mentioning a tool by
+name never trips it [@message-sanitize]. `lastTurnRecord` diffs the names it finds against the
+names that actually ran (`tool_calls` on the same assistant message) and appends "My reply had
+X written out as text, which doesn't run it." for anything written but never called — stated as
+a fact about what happened, not as a mistake — and a real call of the same name in the same turn
+clears the note. The turn log records `textToolCalls` per round so the pattern is visible outside
+the live prompt too.
+
 ## Safety-critical sign-off
 
 Behavioral changes (not relocations, comments, or renames) to `crisis-signals.js`,

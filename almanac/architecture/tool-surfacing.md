@@ -87,6 +87,29 @@ Discord turns previously always surfaced the full registry (never surfaced), cre
 
 The off-switch `PROTO_FAMILIAR_SURFACING_DISABLED=1` turns off surfacing logic entirely, but the hard ceiling still applies — surfacing auto-trim is bypassed, but `enforceToolCeiling` remains a non-negotiable guard [@tool-surfacing-js].
 
+## The tool roster: a names-only reminder, and saying "I can't" plainly
+
+Deep into a long conversation, the model loses track of which tools it actually has this
+round — the provider puts the full tools schema at the very top of the prompt, far from where
+the model is actually reading by the time a conversation has grown long, and it has been
+observed narrating calls it never made or "calling" a tool that was not even in that turn's set
+[@tool-surfacing-js]. `formatToolRoster(tools)` is a short, names-only, first-person block that
+rides at the END of the context every round instead, grouped by module, naming which other
+modules could still be pulled in with `request_tools`, with a hard off-switch
+(`PROTO_FAMILIAR_TOOL_ROSTER_DISABLED=1`) [@tool-surfacing-js]. `anchorWithToolRoster` appends it
+under the turn's time anchor; it renders as `''` on a closing text round (no tools) or when the
+roster is disabled.
+
+The roster's closing line is a deliberate, plain statement of the structural fact "a tool only
+runs when I actually call it" [@tool-surfacing-js], and, since 0.14.83-alpha, an explicit
+permission to say so without self-blame: "If something I'd need isn't here, I just say I can't do
+that from here, in my own voice, and move on. A missing tool is a gap in my kit, nothing I did
+wrong" [@tool-surfacing-js]. That wording exists because an identity-verification review showed
+the opposite habit shipping by default — any mention of a limit, including one that was plainly
+the app's own gap, turning into self-blame and a new self-imposed rule. See [Plain facts about
+limits, never a verdict](../decisions/plain-facts-about-limits) for the incident and the decision
+this line, the round-cap note, and the last-turn record all now share.
+
 ## Consequences and constraints
 
 - A turn's tool list is now determined by context, not just request, and changes from turn to turn. A feature expecting a specific tool present every turn must either land in CORE or work with `request_tools` recovery.
@@ -95,8 +118,10 @@ The off-switch `PROTO_FAMILIAR_SURFACING_DISABLED=1` turns off surfacing logic e
 
 ## Related
 
+- [Noticing](noticing) — `composeNoticingTools` (0.14.82) rebuilds the background noticing turn's toolset from this same module-surfacing and `request_tools` growth mechanism, replacing an earlier fixed tool list that silently fell behind live-turn capabilities.
 - [Trackers](trackers) — applies surfacing to bring tracker modules into scope based on vocabulary and tracker labels.
 - [Weather](weather) — surfaces the weather module based on leaving-the-house language and readiness blocks.
 - [Providers and Connection Readiness](providers) — handles which connection/model is used; surfacing/ceiling is orthogonal (both are necessary for provider compatibility).
-- [Engineering conventions](../reference/engineering-conventions) — the exact-values and graceful-degradation rules that tool composition follows.
+- [Engineering conventions](../reference/engineering-conventions) — the exact-values and graceful-degradation rules that tool composition follows, plus the companion `ROUND_CAP_NOTE`/`lastTurnRecord`/`findTextToolCalls` plain-fact self-report mechanisms.
+- [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the decision behind the tool roster's missing-tool line.
 - request_tools — the toolbox-lid mechanism (a CORE tool always advertised) that provides recovery when surfacing trims a needed module, letting the Familiar request any module for the next round.
