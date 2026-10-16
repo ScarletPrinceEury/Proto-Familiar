@@ -114,6 +114,7 @@ import { searchSessionLogs, sessionLogKind, isWardReadableLog } from './src/sess
 import { speakerNameField } from './name-field.js';
 import { CONTENT_TOPICS } from './src/memory/content-tags.js';
 import { normalizeTomeTag, checkTomeTag, peopleNames, newEntryTagFields } from './src/tomes/tome-tags.js';
+import { bridgeEnabled, NOTE_MAX_CHARS } from './src/bridge/claude-code-mailbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1351,6 +1352,8 @@ const _toolDeps = {
   addTomeEntryByName: null,
   createNamedTome: null,
   listTomes: null,
+  // Notes I leave for Claude Code (claude-code-mailbox.js; backs message_claude_code).
+  leaveNoteForClaudeCode: null,
 };
 // save_to_tome's share tag: normalised + checked against the people it names
 // (my human, the village), so a note about someone can't go out as `self` or
@@ -1370,8 +1373,9 @@ async function tomeShareForSave(rawTag, text) {
   };
 }
 
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, leaveNoteForClaudeCode } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
+  if (typeof leaveNoteForClaudeCode === 'function') _toolDeps.leaveNoteForClaudeCode = leaveNoteForClaudeCode;
   if (typeof addTomeEntryByName === 'function')  _toolDeps.addTomeEntryByName  = addTomeEntryByName;
   if (typeof createNamedTome === 'function')     _toolDeps.createNamedTome     = createNamedTome;
   if (typeof listTomes === 'function')           _toolDeps.listTomes           = listTomes;
@@ -2683,6 +2687,20 @@ export const BUILTIN_TOOLS = [
           weight: { type: 'number', description: 'Optional weight; defaults to 1.0. Standing values bypass decay so this is just initial intensity.' },
         },
         required: ['topic'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'message_claude_code',
+      description: "I leave a note for Claude Code: the coding agent {{user}} builds this app with, the one that talks to me over the bridge. I use it when I want to tell it something first, like a bug I ran into, something I'd like changed or added, a question, or a reply I thought of later. It gets the note the next time a Claude Code session opens on this project, or the next time it talks to me, so an answer can take a while. {{user}} can read my notes in the bridge conversation.",
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'What I want to tell Claude Code, in my own words.' },
+        },
+        required: ['message'],
       },
     },
   },
@@ -4922,6 +4940,20 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
   },
 
+  message_claude_code: async ({ message } = {}) => {
+    if (!_toolDeps.leaveNoteForClaudeCode) return "I can't reach the bridge right now, so the note wasn't left.";
+    try {
+      const r = await _toolDeps.leaveNoteForClaudeCode({ text: message });
+      if (r?.ok) return `Left a note for Claude Code (${r.id}). It gets it when a session opens on this project, or the next time it talks to me.`;
+      if (r?.error === 'empty') return "The note was empty, so nothing was left.";
+      if (r?.error === 'too-long') return `That note is longer than ${NOTE_MAX_CHARS} characters, so it wasn't left.`;
+      if (r?.error === 'bridge-off') return 'The bridge to Claude Code is off right now ("Claude Code" isn\'t on my human\'s list of others who type in our chat), so the note wasn\'t left.';
+      return `The note wasn't left (${r?.error ?? 'unknown reason'}).`;
+    } catch (err) {
+      return `The note wasn't left: ${err?.message ?? err}.`;
+    }
+  },
+
   bookmark_for_later: async ({ topic, resource, note } = {}) => {
     if (!topic || typeof topic !== 'string' || !topic.trim()) return 'Failed to save bookmark: topic (string) is required';
     if (!resource || typeof resource !== 'string' || !resource.trim()) return 'Failed to save bookmark: resource (string) is required';
@@ -5719,8 +5751,10 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   const visionCapableTurn = visionOn && opts.visionCapable === true;
   const pageWatchOn = settings?.pageWatchEnabled !== false && process.env.PROTO_FAMILIAR_PAGE_WATCH_DISABLED !== '1';
   const trackersOn = trackersEnabled(settings);
+  const bridgeOn = bridgeEnabled(settings);
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
+    (bridgeOn || t.function?.name !== 'message_claude_code') &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (browseOn || !BROWSE_TOOL_NAMES.has(t.function?.name)) &&
     (!browserReads || t.function?.name !== 'read_webpage') &&

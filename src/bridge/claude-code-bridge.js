@@ -19,27 +19,27 @@
  * The turn itself is the ordinary /api/chat path (tools, enrichment, the [Now]
  * line, the turn log), the same seam voice-chat-turn.js uses — never a second
  * copy of the chat machinery.
+ *
+ * The other direction — notes I leave for Claude Code — is
+ * claude-code-mailbox.js, which also owns the conversation's bookkeeping (its
+ * session id, its stored history) so both directions share one conversation.
+ * Each reply carries any notes Claude Code hasn't been handed yet (`notes`).
  */
-import path from 'path';
-import { promises as fsp, mkdirSync } from 'fs';
-import { REPO_ROOT } from '../../repo-root.js';
 import { extractTurnReply } from '../../llm-call.js';
 import { connectionReady } from '../../providers.js';
 import { stripLlmTimestamps } from '../../message-sanitize.mjs';
-import { sessionSlugId } from '../../slug-ids.js';
 import { writeSessionLog } from '../sessions/session-log.js';
-import { speakerOf } from '../village/web-speakers.js';
+import {
+  BRIDGE_SPEAKER, BRIDGE_LOCATION, BRIDGE_OFF_MESSAGE, bridgeEnabled, createClaudeCodeMailbox, DEFAULT_STATE_FILE,
+} from './claude-code-mailbox.js';
 
-export const BRIDGE_SPEAKER = 'Claude Code';
-export const BRIDGE_LOCATION = { platform: 'bridge', label: 'Claude Code bridge' };
+export { BRIDGE_SPEAKER, BRIDGE_LOCATION };
 
 // A thinking model on high effort can take minutes per turn, and a turn may run
 // several tool rounds. Long, but finite.
 const BRIDGE_TURN_TIMEOUT_MS = 9 * 60_000;
 // RULE A: thinking models bill reasoning against max_tokens.
 const BRIDGE_MAX_TOKENS = 8000;
-
-const STATE_FILE = path.join(REPO_ROOT, 'tomes', '.claude-code-bridge.json');
 
 /**
  * What one bridge turn stores: Claude Code's message, each tool round in the
@@ -75,46 +75,24 @@ function toApiHistory(messages) {
 
 export function createClaudeCodeBridge({
   port, readSettings, connectionForFeature, logsDir,
-  fetchFn = fetch, stateFile = STATE_FILE, log = (...a) => console.log('[bridge]', ...a),
+  fetchFn = fetch, stateFile = DEFAULT_STATE_FILE, log = (...a) => console.log('[bridge]', ...a),
+  mailbox = createClaudeCodeMailbox({ logsDir, readSettings, stateFile, log }),
 } = {}) {
-  async function currentSessionId(fresh) {
-    if (!fresh) {
-      try {
-        const st = JSON.parse(await fsp.readFile(stateFile, 'utf8'));
-        if (st?.sessionId) return { sessionId: st.sessionId, isNew: false };
-      } catch { /* none yet */ }
-    }
-    const sessionId = sessionSlugId();
-    try {
-      mkdirSync(path.dirname(stateFile), { recursive: true });
-      await fsp.writeFile(stateFile, JSON.stringify({ sessionId, startedAt: new Date().toISOString() }, null, 2));
-    } catch (err) { log('could not save the bridge session id:', err?.message ?? err); }
-    return { sessionId, isNew: true };
-  }
-
-  async function readHistory(sessionId) {
-    try {
-      const logData = JSON.parse(await fsp.readFile(path.join(logsDir, `${sessionId}.json`), 'utf8'));
-      return { messages: Array.isArray(logData?.messages) ? logData.messages : [], startedAt: logData?.startedAt ?? null };
-    } catch { return { messages: [], startedAt: null }; }
-  }
-
   /**
-   * One message from Claude Code, my reply back.
-   * @returns {Promise<{ok:true, reply:string, toolsUsed:string[], sessionId:string} | {ok:false, error:string}>}
+   * One message from Claude Code, my reply back, plus any notes I left it that
+   * it hasn't been handed yet.
+   * @returns {Promise<{ok:true, reply:string, toolsUsed:string[], sessionId:string, notes:object[]} | {ok:false, error:string}>}
    */
   async function send({ message, newConversation = false } = {}) {
     const text = String(message ?? '').trim();
     if (!text) return { ok: false, error: 'an empty message' };
     const s = readSettings() || {};
-    if (!speakerOf({ role: 'user', speaker: BRIDGE_SPEAKER }, s)) {
-      return { ok: false, error: `"${BRIDGE_SPEAKER}" isn't on the list of others who may type in the web chat (Open Knowledge editor → Prompts), so the bridge is off.` };
-    }
+    if (!bridgeEnabled(s)) return { ok: false, error: BRIDGE_OFF_MESSAGE };
     const conn = connectionForFeature(s, 'chat');
     if (!connectionReady(conn)) return { ok: false, error: 'no usable chat connection' };
 
-    const { sessionId } = await currentSessionId(newConversation === true);
-    const { messages: history, startedAt } = await readHistory(sessionId);
+    const { sessionId } = await mailbox.sessionId({ fresh: newConversation === true });
+    const { messages: history, startedAt } = await mailbox.readHistory(sessionId);
     const at = new Date().toISOString();
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), BRIDGE_TURN_TIMEOUT_MS);
@@ -148,8 +126,9 @@ export function createClaudeCodeBridge({
         messages: [...history, ...turn],
       }, { logsDir, merge: true });
       if (!saved.ok) log('could not save the bridge turn:', saved.reason);
-      if (!reply) return { ok: false, error: 'no reply came back (an empty turn)', toolsUsed, sessionId };
-      return { ok: true, reply, toolsUsed, sessionId };
+      const notes = await mailbox.takeNotes({ via: 'bridge' }).catch(() => []);
+      if (!reply) return { ok: false, error: 'no reply came back (an empty turn)', toolsUsed, sessionId, notes };
+      return { ok: true, reply, toolsUsed, sessionId, notes };
     } catch (err) {
       return { ok: false, error: err?.name === 'AbortError' ? `no reply within ${BRIDGE_TURN_TIMEOUT_MS / 60000} minutes` : (err?.message ?? String(err)) };
     } finally {

@@ -249,7 +249,8 @@ test('composeActiveTools appends custom tool objects after the built-ins', () =>
   // present; visionCapable so the capability-gated view_image is advertised too.
   // Browsing on with plain reading pinned is the one setup that offers BOTH
   // the browse_* tools and read_webpage (otherwise only one page reader is).
-  const on = { webSearchEnabled: true, gcalWriteEnabled: true, gcalWriteCommand: 'x', browseEnabled: true, webReadBackend: 'static' };
+  // "Claude Code" listed turns the bridge on, which offers message_claude_code.
+  const on = { webSearchEnabled: true, gcalWriteEnabled: true, gcalWriteCommand: 'x', browseEnabled: true, webReadBackend: 'static', webSpeakers: ['Claude Code'] };
   const opts = { visionCapable: true };
   const tools = composeActiveTools(custom, on, opts);
   assert.equal(tools.length, BUILTIN_TOOLS.length + 1);
