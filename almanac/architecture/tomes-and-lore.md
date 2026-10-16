@@ -35,6 +35,30 @@ sources:
   - id: tool-surfacing-js
     type: file
     path: tool-surfacing.js
+  - id: room-lore-js
+    type: file
+    path: src/tomes/room-lore.js
+  - id: tome-tags-js
+    type: file
+    path: src/tomes/tome-tags.js
+  - id: tome-tagging-loop-js
+    type: file
+    path: src/tomes/tome-tagging-loop.js
+  - id: gitignore
+    type: file
+    path: .gitignore
+  - id: no-ignored-source-test
+    type: file
+    path: tests/no-ignored-source.test.mjs
+  - id: adhd-tome-json
+    type: file
+    path: tomes/ADHD-Tome.json
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
+  - id: content-tags-js
+    type: file
+    path: src/memory/content-tags.js
 ---
 
 # Tomes And Keyword Lore
@@ -47,9 +71,10 @@ kept deliberately separate: a Tome entry fires because a keyword matched, not be
 Familiar decided the fact was relevant [@tomes-doc]. [Session memorization](session-memorization)
 is the automated writer that populates one particular Tome (`Session Memories`) with this
 shape of entry; this page covers the activation engine and entry format that every Tome, hand-authored
-or auto-written, is scanned and injected through, plus the three features built directly on top
-of it: live tome macros, the self-documenting Familiar Manual tome (0.11.22-alpha), and the
-Familiar's own named tomes (0.12.18-alpha).
+or auto-written, is scanned and injected through, plus the four features built directly on top
+of it: live tome macros, the self-documenting Familiar Manual tome (0.11.22-alpha), the
+Familiar's own named tomes (0.12.18-alpha), and the room-scoped content gate and share tags
+(0.14.89–0.14.92) that decide what lore reaches a turn with someone other than the ward.
 
 ## Storage and the activation engine
 
@@ -183,6 +208,123 @@ on how many named tomes the Familiar can keep; the tool descriptions themselves 
 expected to keep it checking `list_tomes` and reusing a collection before starting another one
 [@tool-surfacing-js] [@cerebellum-js].
 
+## The room gate: lore now passes the same content gate as memories (0.14.89–0.14.92)
+
+Through 0.14.88-alpha, the activation engine described above had no audience awareness at all:
+every enabled tome's entries were scanned and injected into every turn, Discord DMs and guild
+channels included, with no distinction between the ward's own room and a shared one
+[@discord-gateway-js]. The shipped condition tomes (`ADHD-Tome.json`, `Depression-Tome.json`,
+and three siblings) ship each diagnosis as a `constant: true`, `enabled` entry — SillyTavern's
+"always fire" flag — so a ward's diagnosis line (`"{{user}} has clinical depression"`) was
+injected into the prompt the Familiar used to reply to a villager or a guild channel on *every*
+turn, not just the ward's own [@adhd-tome-json] [@claude-md]. [Content-based memory
+gating](content-gating) already solved exactly this problem for Phylactery memories — a
+per-topic sensitivity tag plus per-tier grants — but Tomes, being a separate keyword-triggered
+surface, had never been wired into it. The fix landed in two steps because the two concerns are
+genuinely different code paths.
+
+**Step 1 (0.14.89): gate the leak at the entry and tome level.** `tome-lore.js` gained
+`filterByAudience(activated, { wardPrivate })`, a pure helper that strips any entry tagged
+`wardOnly: true` from an already-activated result unless the turn is ward-private
+[@tome-lore-js]. The five shipped diagnosis constants were each tagged `wardOnly: true` directly
+in their tracked JSON (symptom entries were left untagged, since the guidance itself is neutral
+and the ward decided it should still reach people the ward has opened up to) [@adhd-tome-json]
+[@claude-md]. A whole tome can carry the same flag — `tomeIsWardOnly` treats a tome as private
+either because it is marked `wardOnly: true` or because its name is in `PRIVATE_TOME_NAMES`
+(today just `Session Memories`) — so the Familiar's own session-summary tome never needed
+per-entry tagging to stay out of shared rooms [@room-lore-js]. The web chat path, assumed at
+first to be single-audience (the ward's own session), turned out not to be once a session could
+have others present; `app.js` mirrors the same gate server-side before assembling the prompt
+[@claude-md].
+
+**Step 2 (0.14.90): gate by content, and gate before activation.** `src/tomes/room-lore.js` is
+the server-side gate that actually replaced the entry-level patch above: `tomesForRoom(tomes, {
+topicGrants })` filters every tome's entries for the room **before** keyword activation runs, not
+after — a hidden entry filtered out after activation could still have woken a visible one through
+recursion, so filtering has to happen first [@room-lore-js]. The gate reuses
+`memoryVisibleToVillager` from `content-tags.js`, the exact same per-topic grant check memories
+use: an entry tagged `self` (the Familiar's own thinking, not about the ward) reaches any room; an
+entry with a `topic:level` content tag reaches a room whose grants cover that tag; an untagged
+entry defaults to `general:sensitive`, same fail-closed default as an untagged memory; and a
+`wardOnly` entry never reaches a shared room regardless of grants [@room-lore-js]
+[@content-tags-js]. `topicGrants === null` is the existing recall convention for "this is the
+ward's own room, no content filter at all" [@room-lore-js] [@content-tags-js].
+
+A tome's own `roomShare` setting (`'content'` default, `'always'`, or `'never'`, set by the ward
+in the Tomes modal) overrides the per-entry check for that whole tome; the shipped condition
+tomes and the Familiar Manual are both `roomShare: 'always'` — their symptom/reference content is
+meant to travel, while their `wardOnly`-tagged diagnosis constants still never do, because the
+`wardOnly` check in `entryReachesRoom` runs before the `'always'` override is consulted
+[@room-lore-js]. A private tome (`tomeIsWardOnly`) is forced to `'never'` regardless of its own
+`roomShare` field [@room-lore-js].
+
+Discord's `activeDiscordLore` now calls `loreForTurn` with the room's grants instead of the raw
+activation engine [@room-lore-js] [@discord-gateway-js]. On the web, a session with others present
+sends `serverLore: true` and builds no lore of its own; `/api/chat` is the only place that knows
+the room's grants, so it calls `loreForTurn` plus `placeRoomLore` (which places the lead/tail/
+at-depth blocks exactly where the browser's own lore placement would have) [@room-lore-js]. This
+replaced both the 0.14.89 browser-side mirror and the post-activation `filterByAudience` patch —
+`tome-lore.js`'s activation engine is audience-agnostic again, with the room gate owned entirely by
+`room-lore.js` as a layer in front of it [@room-lore-js].
+
+## Share tags: sorting individual entries into what a room may see (0.14.92)
+
+The room gate above needs every entry to already carry a content tag to be useful; before
+0.14.92, only the shipped condition tomes had been hand-tagged. `tome-tags.js` defines the share-
+tag vocabulary an entry can carry: `contentTag: 'self'` (the Familiar's own thinking or general
+knowledge, not about the ward — any room), a memory-style `contentTag: 'topic:level'` pair, `wardOnly:
+true` (private, same as the room gate's own flag), or no tag at all, which both the gate above and
+`entryShareKind` treat as unsorted and therefore `general:sensitive` [@tome-tags-js]. `checkTomeTag`
+holds a tag the Familiar picked for itself: a note that mentions the ward or a registered villager
+by name cannot be filed `self` or at the `:open` level — it is pulled to `:sensitive` instead, and
+the fact that it was held (and by whom) is recorded rather than silently applied, so the result of
+`save_to_tome` tells the caller what the tag actually became instead of a quiet "ok"
+[@tome-tags-js]. A ward's own choice in the entry editor is never second-guessed this way
+[@tome-tags-js].
+
+`save_to_tome` now accepts an optional `content_tag` argument, checked through this same code
+before it is written [@tome-tags-js] [@claude-md]. For the backlog of notes written before share
+tags existed, `tome-tagging-loop.js` is an opt-in background worker (default off — the ward enables
+"Sort my tome notes for shared rooms" in Settings) that reviews one batch of up to 12 unsorted
+notes every 10 minutes on the memorization connection, in the Familiar's own voice, and only writes
+a tag back if the note is still unsorted at write time (an edit by the ward mid-pass wins)
+[@tome-tagging-loop-js]. It has the same hard off-switch shape as the rest of the loop set,
+`PROTO_FAMILIAR_TOME_TAGGING_DISABLED=1`, and defers while a voice call is active
+[@tome-tagging-loop-js]; see [Autonomous loops](autonomous-loops) for where it sits alongside the
+rest of the background worker set.
+
+## Two gotchas from shipping the room gate
+
+**A `.gitignore` glob can hide a source file, not just stray runtime output.** The safety net
+`src/**/tomes/` was added to catch a runtime `tomes/` directory mis-created under `src/` by a
+mis-resolved `__dirname` path (it had happened once before, under `src/pondering/`). Glob `**`
+matches zero directories as well as more than zero, so the same pattern also matched the real
+source directory `src/tomes/` itself — the folder `room-lore.js` lives in. `room-lore.js` was
+never committed in the 0.14.90 commit even though `server.js` and `discord-gateway.js`, which
+import it, were: the local test suite passed because the file still existed on disk locally, but
+`main` would have failed to boot for anyone who pulled [@gitignore] [@claude-md]. The fix adds an
+explicit negation, `!/src/tomes/`, directly under the broader pattern, and
+`tests/no-ignored-source.test.mjs` now fails whenever any tracked-looking source file is
+git-ignored, specifically to catch this class of mistake again [@gitignore]
+[@no-ignored-source-test]. A green local suite proves nothing about a file git never saw; `git
+status` listing fewer files than were actually created is the tell.
+
+**The shipped condition tomes are tracked JSON, but installs are expected to customize them
+locally.** `tomes/ADHD-Tome.json` and its four siblings ship as ordinary git-tracked files, not
+git-ignored runtime state, specifically so an update can still carry future improvements to their
+wording [@adhd-tome-json]. A ward who edits one of those files' content directly in their own
+install (rewording an entry to match how they actually want the Familiar to describe their
+condition) is expected to mark it `skip-worktree` locally, the standard git mechanism for
+"treat my local edits to this tracked file as intentional and don't flag them dirty." That
+convention cuts the other way for this repository's own history: an upstream commit that edits
+`tomes/*.json` content directly — which is exactly how the `wardOnly` tag above was added to the
+five diagnosis constants — will not reach, and can conflict with, an install that has marked that
+file `skip-worktree` to protect its own customization. The condition tomes are effectively frozen
+content from the maintainer's side once shipped; any further change to their *behavior* (new
+gating flags, new defaults) should be expressed in code that keys off the tome's name or a stable
+field — the same pattern `PRIVATE_TOME_NAMES` and `roomShare` already use — rather than by hand-
+editing the shipped JSON again.
+
 ## Where this fits
 
 - [Session memorization](session-memorization) — the automated writer that populates the
@@ -197,9 +339,11 @@ expected to keep it checking `list_tomes` and reusing a collection before starti
 - [Autonomous loops](autonomous-loops) — `tome-graduation-loop.js`, the opt-in loop that
   promotes ordinary Tome facts into Phylactery, and which `graduationExempt` opts the manual
   tome out of.
-- [Content-based memory gating](content-gating) — the per-topic sensitivity tag that
-  memorization-written Tome entries carry, layered on top of the plain keyword match this page
-  describes.
+- [Content-based memory gating](content-gating) — the per-topic sensitivity tag and grant model
+  the room gate above (`room-lore.js`) reuses wholesale (`memoryVisibleToVillager`) so a Tome
+  entry and a memory are gated by the same rule.
+- [Autonomous loops](autonomous-loops) — also lists `tome-tagging-loop.js`, the opt-in share-tag
+  sorting pass this page's share-tags section describes.
 - [Ward Discord console](ward-console) — the `!queue`/`!connection` menus that sit alongside
   the Discord tome-lore path described above in the same gateway module.
 - [Tome multi-writer merge policy](../decisions/tome-multi-writer-merge-policy) — a proposed,
