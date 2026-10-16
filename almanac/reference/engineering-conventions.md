@@ -68,6 +68,21 @@ sources:
   - id: voice-chat-turn-js
     type: file
     path: src/voice/voice-chat-turn.js
+  - id: settings-store-js
+    type: file
+    path: settings-store.js
+  - id: contact-baselines-js
+    type: file
+    path: src/safety/contact-baselines.js
+  - id: wait-streak-js
+    type: file
+    path: src/safety/wait-streak.js
+  - id: audit-wiring-script
+    type: file
+    path: scripts/audit-wiring.mjs
+  - id: voice-notes-test
+    type: file
+    path: tests/voice-notes.test.mjs
 ---
 
 # Engineering Conventions
@@ -669,3 +684,81 @@ so the names no longer collide on the `intention_set` prefix; only the model-fac
 MCP call kept its own name [@cerebellum-js]. The convention: when two Familiar-facing tools are
 siblings, make sure neither name is a prefix of the other — the model picks by name, and a
 shared prefix is a selection hazard, not just a cosmetic overlap.
+
+## Second full-codebase audit (2026-09-29): one open gap, settings-access dedup
+
+A second full-tree re-audit (pass 2, following the 0.9.0 one referenced throughout this page)
+re-ran the original review questions across the whole codebase plus a dedicated
+optimization/clarity pass. Its headline finding was positive: every background loop still holds
+the hard-off-switch invariant from
+[Autonomous loops](../architecture/autonomous-loops)' shared contract, and no other systemic
+issue turned up. The one real, actionable finding is that an earlier dedup pass did not fully
+land, and it is still open as of this writing.
+
+A prior pass ("dedup extractions pt.1") pulled the inlined `JSON.parse(readFileSync(SETTINGS_FILE))`
+pattern into one leaf module, `settings-store.js`, exporting `readSettingsSync` and
+`SETTINGS_FILE` for both `cerebellum.js` (which owns the write path and re-exports
+`readSettingsSync` for its many callers) and `thalamus.js` (which sits below `cerebellum.js` and
+would otherwise create an import cycle) [@settings-store-js]. The second audit found the
+extraction reached thalamus and its downstream callers, but not every direct reader: as of this
+writing, `contact-baselines.js` and `wait-streak.js` each still define their own local
+`SETTINGS_FILE` constant and read the file independently rather than importing the shared reader
+[@contact-baselines-js] [@wait-streak-js]. On the write side, `writeSettingsPatch` in
+`cerebellum.js` is the one function that performs the locked, atomic tmp-write-then-rename against
+`settings.json`, but `discord-gateway.js`'s ward-console settings path (`patchWardSettings`)
+re-implements the same lock-plus-atomic-rename sequence against its own local
+`WARD_SETTINGS_FILE` constant instead of calling it [@discord-gateway-js]. Neither duplication is
+a correctness bug on its own — both copies read and write the same file correctly — but every
+module that keeps its own `SETTINGS_FILE` constant or its own write sequence is a copy that can
+silently diverge from the canonical one the next time the write contract changes. This is the
+"no copy-paste of substantial logic" rule above, caught by audit rather than by the original
+build: the fix proposed is to make `settings-store.js` the single home for the path, the read, and
+the write, with every remaining direct reader and the Discord write path importing it rather than
+re-declaring it.
+
+The audit's other action was a routine dead-code and stale-documentation sweep rather than new
+findings: a batch of confirmed-zero-caller symbols (an unused re-exported constant, a shadowed
+module-level helper whose only "call site" was dead by construction, an orphaned Python function)
+was removed after verifying no callers first, and a batch of comments and docstrings that still
+described retired designs (a renamed in-tree store, a "deferred to v2" feature that had since
+shipped, a pre-local-naive-time description of the temporal model) was corrected to match current
+behavior. Neither batch changed runtime behavior; both are the kind of drift that accumulates
+between audits and is cheapest to fix in the same pass that finds it.
+
+## A check that reads a stripped copy of the source can pass green on nothing
+
+The second audit also retired an existing wiring check rather than fixing it, for a reason worth
+keeping as a general lesson. `scripts/audit-wiring.mjs` had a check asserting that every setting
+synced from the client is actually read somewhere server-side. The check was dead on arrival: it
+matched key names against a comment-and-literal-stripped copy of `app.js` it built for a different
+purpose, so it always found zero keys and printed a passing checkmark regardless of what the real
+code did [@audit-wiring-script]. A check that evaluates a transformed or filtered copy of the
+source, instead of the source itself, can pass vacuously — the green result proves the copy was
+empty, not that the property holds.
+
+Fixing the check's plumbing would not have made it a good check, though. "Synced but unread
+server-side" is the normal shape of a client-only setting kept in sync for device portability (a
+UI preference like a theme toggle, say), not a bug signal — of the settings actually synced from
+the client, the large majority that showed up as server-unread were confirmed legitimately
+client-only. A correctly-wired version of this check would still be almost entirely false
+positives. The direction that actually causes bugs — a server read with no setting anywhere
+providing it, silently returning `undefined` — is a different check already covered elsewhere in
+the same script. The check was deleted with a tombstone comment recording why, so it is not
+reintroduced by someone who only notices it is missing [@audit-wiring-script]. The general lesson:
+before resurrecting or fixing a removed check, confirm what it would actually flag in the
+passing case, not only whether its plumbing could be made to run.
+
+## An assertion on a literal tests nothing, even when the test passes
+
+`tests/voice-notes.test.mjs` had a test named "a temp dir is not left behind" whose body asserted
+`assert.ok(true)` after an `fs.rm` call — syntactically a test, but verifying nothing about the
+code under test; a passing result told a reader only that `true` is truthy. The fix makes the
+test assert the actual claim in its name: it checks that a specific stray `os.tmpdir()` path the
+store must never write to is absent, proving the save path exercised by the write tests above it
+never leaked outside the real media store, with a `before` hook that clears any prior-run leftovers
+first so the assertion cannot pass by accident from a previous run's state [@voice-notes-test].
+This is the same family as the "Test discipline: assert, not narrate" rule above, in a sharper
+form: a test with an assertion that is a tautology (asserting a literal, or asserting a value the
+test itself just set) is indistinguishable from a comment at review time, and it rots exactly like
+an unasserted narration does — it just takes longer to notice because the test suite stays green, rather than reading plainly as
+a no-op on review.
