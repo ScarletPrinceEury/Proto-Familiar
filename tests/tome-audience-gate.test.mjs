@@ -1,114 +1,116 @@
+// Tome lore by room: the audience gate (0.14.63 #521 → 0.14.89 → content-aware 0.14.90).
+//
+// Tome lore skipped the audience gate memories go through: every enabled tome
+// could fire into a villager DM or a guild channel by keyword — the ward's
+// diagnosis constants (constant entries, so every turn) and Session Memories
+// included. room-lore.js now gates lore for the room the way memories are gated:
+// the ward's own room has all of it; a shared room gets the Familiar's own lore
+// (`self`), whatever its grants cover by content tag, and nothing wardOnly or
+// from a private tome. Entries are filtered BEFORE activation, so a hidden entry
+// can't wake a visible one through recursion. Synthetic content only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { promises as fs } from 'node:fs';
+import { promises as fs, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { activateLore, filterByAudience, foldLoreForPrompt } from '../src/tomes/tome-lore.js';
+import { activateLore } from '../src/tomes/tome-lore.js';
+import {
+  tomesForRoom, entryReachesRoom, tomeRoomShare, tomeIsWardOnly, loreForTurn, placeRoomLore, TOME_SELF_TAG,
+} from '../src/tomes/room-lore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
 
-// A synthetic condition tome: a wardOnly diagnosis constant + an un-marked,
-// actionable symptom entry. No private content — SYNTH stands in for the ward.
-const synthTomes = () => ([{
-  name: 'Synthetic Condition', enabled: true,
-  entries: {
-    diag:    { uid: 'diag',    constant: true, enabled: true, wardOnly: true,
-               content: 'SYNTH has a condition.', position: 'sys_top', keys: [] },
-    symptom: { uid: 'symptom', enabled: true,
-               content: 'When SYNTH is tired: rest helps.', position: 4, keys: ['tired'] },
-  },
-}]);
+// A friend's circle: everyday facts open, nothing medical.
+const FRIENDS = { general: 'open', work: 'open' };
+const OWN_ROOM = null;   // null = the ward's own room (the recall convention)
 
-// ── filterByAudience unit ─────────────────────────────────────────────────────
+const e = (uid, extra = {}) => ({ uid, enabled: true, content: `entry ${uid} about the week`, position: 4, keys: ['week'], ...extra });
+const tomes = () => ([
+  { name: 'My own lore', enabled: true, entries: {
+    mine:    e('mine', { contentTag: TOME_SELF_TAG }),
+    workish: e('workish', { contentTag: 'work:open' }),
+    medical: e('medical', { contentTag: 'medical:sensitive' }),
+    untagged: e('untagged'),
+    diag:    e('diag', { wardOnly: true, constant: true }),
+  } },
+  { name: 'Session Memories', enabled: true, entries: { s1: e('s1', { contentTag: TOME_SELF_TAG }) } },
+  { name: 'Shared guide', enabled: true, roomShare: 'always', entries: { g1: e('g1'), g2: e('g2', { wardOnly: true }) } },
+  { name: 'Kept close', enabled: true, roomShare: 'never', entries: { k1: e('k1', { contentTag: TOME_SELF_TAG }) } },
+]);
+const uids = (a) => ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth'].flatMap(k => (a[k] ?? []).map(x => x.uid)).sort();
+const activateIn = (topicGrants) => activateLore(tomesForRoom(tomes(), { topicGrants }), 'how was the week', { messages: [], opts: {}, env: {} });
 
-test('filterByAudience drops wardOnly entries on a non-ward turn, keeps them for the ward', () => {
-  const activated = { sys_top: [{ uid: 'a', wardOnly: true }], at_depth: [{ uid: 'b' }] };
-  const villager = filterByAudience(activated, { wardPrivate: false });
-  assert.deepEqual(villager.sys_top.map(e => e.uid), [], 'wardOnly dropped for a villager');
-  assert.deepEqual(villager.at_depth.map(e => e.uid), ['b'], 'unmarked entry kept');
-
-  const ward = filterByAudience(activated, { wardPrivate: true });
-  assert.deepEqual(ward.sys_top.map(e => e.uid), ['a'], 'ward sees the wardOnly entry');
+test("the ward's own room has all of it", () => {
+  assert.deepEqual(uids(activateIn(OWN_ROOM)), ['diag', 'g1', 'g2', 'k1', 'medical', 'mine', 's1', 'untagged', 'workish']);
 });
 
-test('filterByAudience does not mutate its input', () => {
-  const activated = { sys_top: [{ uid: 'a', wardOnly: true }] };
-  filterByAudience(activated, { wardPrivate: false });
-  assert.equal(activated.sys_top.length, 1, 'original slot untouched');
+test('a shared room gets my own lore and what its grants cover, nothing private', () => {
+  assert.deepEqual(uids(activateIn(FRIENDS)), ['g1', 'mine', 'workish'],
+    'self flows; work:open is granted; medical is not; untagged is unsure; wardOnly, Session Memories and a never-share tome stay out; an always-share tome comes along minus its wardOnly entry');
+  assert.deepEqual(uids(activateIn({})), ['g1', 'mine'], 'a room with no grants still has me and the always-share tome');
 });
 
-// ── pipeline through the real engine ─────────────────────────────────────────
-
-test('pipeline: a villager turn gets the symptom entry but NOT the diagnosis constant', () => {
-  const activated = activateLore(synthTomes(), 'i am so tired', { messages: [], opts: {}, env: {} });
-  const gated = filterByAudience(activated, { wardPrivate: false });
-  const folded = foldLoreForPrompt(gated);
-  const all = `${folded.lead}\n${folded.tail}\n${folded.atDepth}`;
-  assert.ok(!all.includes('has a condition'), 'the diagnosis constant must not reach a villager turn');
-  assert.ok(all.includes('rest helps'), 'the actionable symptom entry still injects');
+test('the per-entry rule, one case at a time', () => {
+  assert.equal(entryReachesRoom({ contentTag: 'medical:sensitive' }, { topicGrants: { medical: 'sensitive' } }), true, 'a circle trusted with it sees it');
+  assert.equal(entryReachesRoom({}, { topicGrants: { general: 'sensitive' } }), true, 'untagged needs general:sensitive, as with memories');
+  assert.equal(entryReachesRoom({}, { topicGrants: FRIENDS }), false);
+  assert.equal(entryReachesRoom({ wardOnly: true }, { share: 'always', topicGrants: FRIENDS }), false, 'wardOnly beats always');
+  assert.equal(tomeRoomShare({ name: 'Session Memories', roomShare: 'always' }), 'never', 'a private tome is never shared');
+  assert.equal(tomeRoomShare({ roomShare: 'bogus' }), 'content');
+  assert.equal(tomeIsWardOnly({ name: 'x', wardOnly: true }), true);
 });
 
-test('pipeline: a ward-private turn gets both the diagnosis constant and the symptom entry', () => {
-  const activated = activateLore(synthTomes(), 'i am so tired', { messages: [], opts: {}, env: {} });
-  const gated = filterByAudience(activated, { wardPrivate: true });
-  const folded = foldLoreForPrompt(gated);
-  const all = `${folded.lead}\n${folded.tail}\n${folded.atDepth}`;
-  assert.ok(all.includes('has a condition'), 'the ward sees their own diagnosis context');
-  assert.ok(all.includes('rest helps'), 'and the symptom entry');
+test("a hidden entry can't wake a visible one through recursion", () => {
+  const t = [{ name: 'Chain', enabled: true, entries: {
+    secret: { uid: 'secret', enabled: true, constant: true, content: 'mentions the garden', position: 4, contentTag: 'medical:sensitive' },
+    garden: { uid: 'garden', enabled: true, content: 'garden notes', position: 4, keys: ['garden'], contentTag: TOME_SELF_TAG },
+  } }];
+  const opts = { messages: [], opts: { recursive: true }, env: {} };
+  assert.deepEqual(uids(activateLore(tomesForRoom(t, { topicGrants: OWN_ROOM }), 'hello', opts)), ['garden', 'secret']);
+  assert.deepEqual(uids(activateLore(tomesForRoom(t, { topicGrants: FRIENDS }), 'hello', opts)), [], 'the secret never ran, so it woke nothing');
 });
 
-// ── guard: the shipped condition constants stay tagged (survives the §4 rewrite) ──
+test('pipeline: loreForTurn reads real files and gates them for the room; placeRoomLore puts it where web lore sits', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'room-lore-'));
+  writeFileSync(path.join(dir, 'Mine-Tome.json'), JSON.stringify({ name: 'Mine', enabled: true, entries: {
+    top: { uid: 'top', enabled: true, content: 'TOP {{char}}', position: 'sys_top', keys: ['week'], contentTag: TOME_SELF_TAG },
+    deep: { uid: 'deep', enabled: true, content: 'DEEP', position: 4, keys: ['week'], contentTag: 'medical:sensitive' },
+  } }));
+  const settings = { charName: 'Synth' };
+  const own = await loreForTurn({ content: 'the week', settings, topicGrants: OWN_ROOM, tomesDir: dir });
+  assert.equal(own.count, 2);
+  assert.match(own.lead, /TOP Synth/, 'macros resolve');
+  const room = await loreForTurn({ content: 'the week', settings, topicGrants: FRIENDS, tomesDir: dir });
+  assert.equal(room.count, 1);
+  assert.equal(room.atDepth, '', 'the medical entry stays out');
+
+  const placed = placeRoomLore([{ role: 'system', content: 'SYS' }, { role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' }],
+    { lead: 'LEAD', tail: 'TAIL', atDepth: 'DEPTH' });
+  assert.equal(placed[0].content, 'LEAD\n\n---\n\nSYS\n\n---\n\nTAIL');
+  assert.deepEqual(placed.slice(-2), [{ role: 'system', content: 'DEPTH' }, { role: 'user', content: 'c' }]);
+});
+
+// ── guards on the shipped tomes ──────────────────────────────────────────────
+
+const CONDITION_TOMES = ['ADHD-Tome.json', 'Depression-Tome.json', 'Agoraphobia-Tome.json', 'OCD-Tome.json', 'Bipolar-Tome.json'];
 
 test('every shipped condition-tome constant is tagged wardOnly (diagnosis never leaks)', async () => {
-  const files = ['ADHD-Tome.json', 'Depression-Tome.json', 'Agoraphobia-Tome.json', 'OCD-Tome.json', 'Bipolar-Tome.json'];
-  for (const f of files) {
+  for (const f of CONDITION_TOMES) {
     const tome = JSON.parse(await fs.readFile(path.join(REPO, 'tomes', f), 'utf8'));
-    const constants = Object.values(tome.entries).filter(e => e.constant === true);
+    const constants = Object.values(tome.entries).filter(x => x.constant === true);
     assert.ok(constants.length > 0, `${f} should have a constant entry`);
-    for (const e of constants) {
-      assert.equal(e.wardOnly, true, `${f} constant ${e.uid?.slice(0, 8)} must be wardOnly`);
-    }
+    for (const x of constants) assert.equal(x.wardOnly, true, `${f} constant ${x.uid?.slice(0, 8)} must be wardOnly`);
   }
 });
 
-// ── whole private tomes (0.14.89) ────────────────────────────────────────────
-// Session Memories holds summaries of the ward's own conversations: no entry of
-// it belongs in a shared room, tagged or not. A tome marked wardOnly behaves the
-// same. Other tomes are untouched.
-import { tomeIsWardOnly } from '../src/tomes/tome-lore.js';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import { extractFunctionSource } from './_vm-extract.mjs';
-
-const roomTomes = () => ([
-  { name: 'Session Memories', enabled: true, entries: {
-    s1: { uid: 's1', enabled: true, content: 'We talked about the hard week.', position: 4, keys: ['week'] } } },
-  { name: 'Private Notes', enabled: true, wardOnly: true, entries: {
-    p1: { uid: 'p1', enabled: true, content: 'A private note about the week.', position: 4, keys: ['week'] } } },
-  { name: 'Essay workshop', enabled: true, entries: {
-    e1: { uid: 'e1', enabled: true, content: 'Essay plan for the week.', position: 4, keys: ['week'] } } },
-]);
-const uids = (a) => ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth'].flatMap(k => (a[k] ?? []).map(e => e.uid)).sort();
-
-test('a whole private tome stays out of a shared room and stays in for the ward', () => {
-  const activated = activateLore(roomTomes(), 'how was the week', { messages: [], opts: {}, env: {} });
-  assert.deepEqual(uids(filterByAudience(activated, { wardPrivate: false })), ['e1'], 'only the shareable tome reaches the room');
-  assert.deepEqual(uids(filterByAudience(activated, { wardPrivate: true })), ['e1', 'p1', 's1'], 'the ward has all of it');
-  assert.equal(tomeIsWardOnly({ name: 'Session Memories' }), true);
-  assert.equal(tomeIsWardOnly({ name: 'Essay workshop' }), false);
-});
-
-test('the browser engine makes the same calls as the server engine (hand-maintained parity)', () => {
-  const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const ctx = {};
-  runInNewContext(`${extractFunctionSource(src, 'tomeIsWardOnly')}\n${extractFunctionSource(src, 'filterLoreByAudience')}\nresult = { tomeIsWardOnly, filterLoreByAudience };`, ctx);
-  const web = ctx.result;
-  for (const t of [{ name: 'Session Memories' }, { name: 'x', wardOnly: true }, { name: 'Essay workshop' }, {}]) {
-    assert.equal(web.tomeIsWardOnly(t), tomeIsWardOnly(t), JSON.stringify(t));
-  }
-  const activated = activateLore(roomTomes(), 'how was the week', { messages: [], opts: {}, env: {} });
-  for (const wardPrivate of [true, false]) {
-    assert.deepEqual(uids(web.filterLoreByAudience(activated, { wardPrivate })), uids(filterByAudience(activated, { wardPrivate })));
+test("the shipped condition tomes keep the ward's decision: guidance shared, diagnosis held back", async () => {
+  for (const f of CONDITION_TOMES) {
+    const tome = JSON.parse(await fs.readFile(path.join(REPO, 'tomes', f), 'utf8'));
+    assert.equal(tomeRoomShare(tome), 'always', `${f} guidance reaches shared rooms`);
+    const shared = tomesForRoom([tome], { topicGrants: FRIENDS })[0];
+    assert.ok(!Object.values(shared.entries).some(x => x.wardOnly), `${f} diagnosis stays out`);
+    assert.ok(Object.keys(shared.entries).length > 0, `${f} guidance comes along`);
   }
 });

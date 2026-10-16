@@ -3,6 +3,7 @@
   "name": "OCD Support",
   "description": "Context-sensitive knowledge to help the Familiar recognize and respond to OCD presentations in {{user}}, including obsessions, compulsions, and the communication traps unique to OCD support.",
   "enabled": true,
+  "roomShare": "always",
   "entries": {
     "c0000001-c000-4000-c000-c00000000000": {
       "uid": "c0000001-c000-4000-c000-c00000000000",

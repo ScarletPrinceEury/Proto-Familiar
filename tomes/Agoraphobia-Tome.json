@@ -3,6 +3,7 @@
   "name": "Agoraphobia Support",
   "description": "Context-sensitive knowledge to help the Familiar recognize and respond appropriately to agoraphobia in {{user}}, including panic in feared situations, avoidance patterns, safe zone contraction, and the unique challenge that reassurance maintains the disorder.",
   "enabled": true,
+  "roomShare": "always",
   "entries": {
     "e0000001-e000-4000-e000-e00000000000": {
       "uid": "e0000001-e000-4000-e000-e00000000000",

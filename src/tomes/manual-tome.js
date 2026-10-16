@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 14;
+export const MANUAL_TOME_VERSION = 15;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -209,6 +209,7 @@ export function buildManualTome() {
     description: 'How I work, and where to change each setting — kept current with live macros. Protected from Graduation.',
     enabled: true,
     graduationExempt: true,
+    roomShare: 'always',   // my own self-knowledge: it comes with me into shared rooms (0.14.90)
     version: MANUAL_TOME_VERSION,
     entries,
   };

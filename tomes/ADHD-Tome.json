@@ -3,6 +3,7 @@
   "name": "ADHD Support",
   "description": "Context-sensitive knowledge to help the Familiar support {{user}} through ADHD symptoms. Entries activate when {{user}} exhibits signs of specific ADHD-related challenges.",
   "enabled": true,
+  "roomShare": "always",
   "entries": {
     "a0000001-a000-4000-a000-a00000000000": {
       "uid": "a0000001-a000-4000-a000-a00000000000",

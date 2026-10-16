@@ -59,9 +59,7 @@ import {
 } from '../village/villager-consent.js';
 import { findVillagerByAlias } from '../village/village.js';
 import { mergeSettings } from '../../settings-merge.js';
-import { readAllTomes } from '../tomes/tome-store.js';
-import { activateLore, foldLoreForPrompt, filterByAudience } from '../tomes/tome-lore.js';
-import { resolveTomeMacros } from '../tomes/tome-macros.js';
+import { loreForTurn } from '../tomes/room-lore.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
@@ -1328,45 +1326,20 @@ function discordTomesOff() {
 }
 
 // Keyword-lore (tomes) for a Discord turn. The browser matches lore against its
-// own tome cache; a Discord turn has no browser, so we read the tome files and
-// run the same engine (tome-lore.js) here. Returns injectable strings by slot
-// ({ lead, tail, atDepth }) — empty when off, when there are no tomes, or when
-// nothing matched. NEVER throws into the turn; a bad tome degrades to no lore.
-async function activeDiscordLore({ content, session, settings, locationKey, wardPrivate = false }) {
+// own tome cache; a Discord turn has no browser, so the server reads the tome
+// files and runs the same engine — through room-lore.js, which gates the lore
+// for the room by content (0.14.90): my human's own DM gets everything, a
+// shared room only what its grants cover, my own lore (`self`) anywhere.
+// Returns { lead, tail, atDepth }; never throws into the turn.
+async function activeDiscordLore({ content, session, settings, locationKey, topicGrants = null }) {
   const none = { lead: '', tail: '', atDepth: '' };
   if (discordTomesOff()) return none;
-  try {
-    const tomes = await readAllTomes(path.join(REPO_ROOT, 'tomes'));
-    if (!tomes.length) return none;
-    const priorTurns = (session.messages ?? []).filter(m => m.role === 'user' || m.role === 'assistant');
-    const activated = activateLore(tomes, content, {
-      messages: session.messages ?? [],
-      opts: {
-        scanDepth:         settings.tomeScanDepth,
-        recursive:         settings.tomeRecursive,
-        maxRecursionSteps: settings.tomeMaxRecursionSteps,
-        caseSensitive:     settings.tomeCaseSensitive,
-        matchWholeWords:   settings.tomeMatchWholeWords,
-      },
-      // turnCount drives per-entry `delay`; timedEffects (sticky/cooldown) are
-      // not persisted across Discord turns yet (v1) — a documented follow-up.
-      env: { turnCount: priorTurns.length, charName: settings.charName, generationMode: 'normal' },
-    });
-    // Audience gate: on a non-ward-private turn (a villager DM, a guild channel)
-    // drop `wardOnly` entries — the "{{user}} has <condition>" diagnosis
-    // constants — so the ward's medical info never reaches a third party. The
-    // actionable symptom entries are unmarked and still inject for everyone.
-    const gated = filterByAudience(activated, { wardPrivate });
-    const n = ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth']
-      .reduce((s, k) => s + (gated[k]?.length || 0), 0);
-    if (n) console.log(`[discord] tomes: ${n} lore entr${n === 1 ? 'y' : 'ies'} activated in ${locationKey}${wardPrivate ? '' : ' (ward-only entries gated)'}`);
-    // Resolve live macros ({{visionActive}}, {{char}}, …) against current
-    // settings so the self-documenting manual tome always reads true.
-    return foldLoreForPrompt(gated, (t) => resolveTomeMacros(t, settings));
-  } catch (err) {
-    console.error('[discord] tome lore activation failed (skipping):', err?.message ?? err);
-    return none;
-  }
+  const lore = await loreForTurn({
+    content, messages: session.messages ?? [], settings, topicGrants,
+    tomesDir: path.join(REPO_ROOT, 'tomes'),
+  });
+  if (lore.count) console.log(`[discord] tomes: ${lore.count} lore entr${lore.count === 1 ? 'y' : 'ies'} activated in ${locationKey}${topicGrants == null ? '' : ' (gated for the room)'}`);
+  return { lead: lore.lead, tail: lore.tail, atDepth: lore.atDepth };
 }
 
 // Every Discord-turn call is bounded per round-trip; `signal` adds the turn's
@@ -2818,7 +2791,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // (after_char + sys_bottom) BELOW the system block; at-depth rides near the
   // turn (added to apiMessages below). session.messages here is prior history —
   // the current message (`content`) is scanned as the live input, not yet in it.
-  const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey, wardPrivate: audienceTag === 'ward-private' });
+  const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey, topicGrants: audienceTag === 'ward-private' ? null : (audienceTopics ?? {}) });
   const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
   const history = buildHistoryForPrompt(session);
 

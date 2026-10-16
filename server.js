@@ -130,6 +130,7 @@ import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } fr
 import { modelSignal } from './src/diagnostics/model-signal.js';
 import { speakerOf, labelSpeakers } from './src/village/web-speakers.js';
 import { createClaudeCodeBridge } from './src/bridge/claude-code-bridge.js';
+import { loreForTurn, placeRoomLore } from './src/tomes/room-lore.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -411,7 +412,7 @@ function malformedMessageIndex(messages) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag, clientAttempt, speaker: turnSpeaker } = req.body;
+  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag, clientAttempt, speaker: turnSpeaker, serverLore } = req.body;
   // Fires when the client goes away (tab closed, voice turn gave up, an external
   // client hung up) so every upstream request below stops with it. Attached
   // before any await — see upstream-abort.js for why it's the RESPONSE's close.
@@ -671,6 +672,19 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let baseMessages = injectCorePrompts
     ? withCorePrompts(historyMessages, readSettingsSync() || {})
     : historyMessages;
+  // A shared web session's tome lore (0.14.90): the browser leaves it to the
+  // server, which alone knows the room's grants — gated by content for the room
+  // (room-lore.js), placed where the web chat's own lore sits.
+  if (serverLore === true && enrichMode !== 'none') {
+    const lore = await loreForTurn({
+      content: userText, messages: historyMessages, settings: readSettingsSync() || {},
+      topicGrants: audienceTopics, tomesDir: path.join(__dirname, 'tomes'),
+    });
+    if (lore.count) {
+      baseMessages = placeRoomLore(baseMessages, lore);
+      console.log(`[tomes] ${lore.count} lore entr${lore.count === 1 ? 'y' : 'ies'} for a shared web session${audienceTopics == null ? '' : ' (gated for the room)'}`);
+    }
+  }
 
   let enrichedMessages = baseMessages;
 

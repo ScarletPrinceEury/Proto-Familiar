@@ -3,6 +3,7 @@
   "name": "Bipolar Support",
   "description": "Context-sensitive knowledge to help the Familiar recognize and respond appropriately to the phases and symptoms of bipolar disorder in {{user}}, including depressive episodes, hypomanic episodes, manic episodes, mixed states, and post-episode recovery.",
   "enabled": true,
+  "roomShare": "always",
   "entries": {
     "b0000001-b000-4000-b000-b00000000000": {
       "uid": "b0000001-b000-4000-b000-b00000000000",

@@ -6,17 +6,17 @@ delete it) rather than leaving it here stale.
 
 ---
 
-### Tome lore in shared rooms is gated by tome, not by content (yet)
+### Most tome entries aren't tagged yet, so they stay out of shared rooms
 
-0.14.89 keeps the diagnosis constants and Session Memories out of any room that
-isn't the ward's own (Discord and web). The rest of the lore still reaches
-shared rooms whenever its keywords match — including entries about the ward in
-the Familiar's Ponderings and in the ward's own tomes. Ward-chosen direction:
-a content-aware gate, the same per-topic grants memories use (content tag per
-entry, tagged when written + a careful one-time review by the Familiar,
-visible and undoable, unsure = private; a per-tome "always / never share"
-override in the Tomes modal). Lore that's the Familiar's own (interests,
-essays, the manual) keeps flowing, so it stays itself in group rooms.
+The content-aware room gate is live (0.14.90, `room-lore.js`): a shared room
+gets the Familiar's own lore (`self`) and whatever the room's grants cover by
+content tag. But only the shipped tomes are classified so far. Every other
+entry is untagged, which the gate treats as `general:sensitive` (private unless
+a circle is trusted with that much), so the Familiar's own Ponderings, essays
+and notes don't come along into group rooms yet. Next: tagging — new entries
+tagged as they're written, a careful one-time review of the ~900 existing ones
+by the Familiar (visible and undoable, unsure = private), and a per-tome
+"in shared rooms" control in the Tomes modal.
 
 ### Self-made rules that only exist because the harness falls short
 
