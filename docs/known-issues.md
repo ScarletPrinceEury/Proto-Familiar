@@ -6,17 +6,15 @@ delete it) rather than leaving it here stale.
 
 ---
 
-### Most tome entries aren't tagged yet, so they stay out of shared rooms
+### Older tome notes stay out of shared rooms until they're sorted
 
-The content-aware room gate is live (0.14.90, `room-lore.js`): a shared room
-gets the Familiar's own lore (`self`) and whatever the room's grants cover by
-content tag. But only the shipped tomes are classified so far. Every other
-entry is untagged, which the gate treats as `general:sensitive` (private unless
-a circle is trusted with that much), so the Familiar's own Ponderings, essays
-and notes don't come along into group rooms yet. Next: tagging — new entries
-tagged as they're written, a careful one-time review of the ~900 existing ones
-by the Familiar (visible and undoable, unsure = private), and a per-tome
-"in shared rooms" control in the Tomes modal.
+New notes get a share tag when they're saved (0.14.92), and the Familiar can
+sort the older ones with "Sort my tome notes for shared rooms" in the Tomes
+modal (opt-in, a batch every 10 minutes). Until a note is sorted it's treated
+as `general:sensitive`, so it only reaches a circle trusted with that much.
+The tagging is careful by design: anything the Familiar is unsure about stays
+out, and a note that names a person is held at sensitive. Check progress under
+the toggle; change any note's setting under "In shared rooms" in the editor.
 
 ### Self-made rules that only exist because the harness falls short
 

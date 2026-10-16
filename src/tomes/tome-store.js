@@ -25,8 +25,9 @@ export function isTomeFile(f) {
 
 // One SillyTavern-shaped tome entry, built in ONE place so the default-tome and
 // named-tome save paths can't drift on the 16 fields. `keys` accepts string[]
-// or a comma-separated string. Returns { uid, entry }.
-export function buildTomeEntry({ comment, content, keys, learnedAt } = {}) {
+// or a comma-separated string. `share` is the entry's share fields from
+// tome-tags.js newEntryTagFields (empty = not sorted yet). Returns { uid, entry }.
+export function buildTomeEntry({ comment, content, keys, learnedAt, share = {} } = {}) {
   let normKeys = [];
   if (Array.isArray(keys)) normKeys = keys.map(k => String(k).trim()).filter(Boolean);
   else if (typeof keys === 'string') normKeys = keys.split(',').map(k => k.trim()).filter(Boolean);
@@ -61,6 +62,7 @@ export function buildTomeEntry({ comment, content, keys, learnedAt } = {}) {
     insertion_order:     100,
     created_at:          now,
     learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
+    ...(share && typeof share === 'object' ? share : {}),
   } };
 }
 
@@ -87,16 +89,21 @@ export async function listTomesSummary(tomesDir) {
  * @returns {Promise<object[]>} tome objects ({ id, name, enabled?, entries }).
  */
 export async function readAllTomes(tomesDir) {
+  return (await readTomeFiles(tomesDir)).map(x => x.tome);
+}
+
+/** Like readAllTomes, but each tome comes with its file path: [{ tome, file }]. */
+export async function readTomeFiles(tomesDir) {
   let files;
   try { files = await fsp.readdir(tomesDir); }
   catch { return []; }
   const out = [];
   for (const f of files) {
     if (!isTomeFile(f)) continue;
+    const file = path.join(tomesDir, f);
     try {
-      const raw = await fsp.readFile(path.join(tomesDir, f), 'utf8');
-      const data = JSON.parse(raw);
-      if (data && typeof data === 'object') out.push(data);
+      const data = JSON.parse(await fsp.readFile(file, 'utf8'));
+      if (data && typeof data === 'object') out.push({ tome: data, file });
     } catch { /* skip a corrupt or unreadable tome */ }
   }
   return out;

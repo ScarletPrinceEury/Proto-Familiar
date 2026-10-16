@@ -1440,6 +1440,12 @@
           </select>
         </div>
         <div class="field-hint">"Delete" removes the entry once the fact is safely in Phylactery — best if your tomes are cluttered. "Breadcrumb" keeps a small pointer so keyword triggers still resolve.</div>
+        <div class="field-row">
+          <label for="tome-tagging-toggle">Sort my tome notes for shared rooms</label>
+          <input type="checkbox" id="tome-tagging-toggle">
+        </div>
+        <div class="field-hint">Off by default. In a friend's DM, a Discord channel, or a chat with others present, your Familiar brings its own notes along, and notes about you or other people only reach the people you've trusted with that topic. New notes get sorted as they're saved; this lets it go back through the older ones, a batch every few minutes. Anything it's unsure about stays out. You can see and change every note's setting under "In shared rooms" when you edit it.</div>
+        <div class="field-hint hint-keep" id="tome-tagging-status" aria-live="polite"></div>
       </div>
       <div class="modal-body" id="tomes-list">
         <p class="logs-loading">Loading…</p>
@@ -1582,6 +1588,14 @@
             <input type="number" id="lore-ed-order" value="100" min="0" max="999" step="1">
           </div>
         </div>
+
+        <div class="lore-editor-section">In shared rooms</div>
+        <div class="field-row">
+          <label for="lore-ed-share">Who it comes along to</label>
+          <select id="lore-ed-share" class="ke-select"></select>
+          <select id="lore-ed-share-level" class="ke-select" aria-label="Sensitivity level"></select>
+        </div>
+        <div class="field-hint" id="lore-ed-share-hint"></div>
 
         <div class="lore-editor-section">Selective Activation</div>
         <div class="field-row">

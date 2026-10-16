@@ -348,6 +348,7 @@ const state = {
   sessionUnifyEnabled:     true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
+  tomeTaggingEnabled:      false,   // opt-in: Familiar sorts its older tome notes for shared rooms
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   ponderConsolidationEnabled: true, // default-on (ward decision): fold old ponderings into digests + prune originals (destructive, but archived + restorable)
@@ -638,7 +639,7 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled', 'villagePresenceEnabled', 'villagerContextEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'memoryIntegrityEnabled', 'hippocampusEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'tomeTaggingEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'memoryIntegrityEnabled', 'hippocampusEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
@@ -4639,6 +4640,7 @@ function readSettingsFromUI() {
   if ($('session-unify-toggle')) state.sessionUnifyEnabled = $('session-unify-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
+  if ($('tome-tagging-toggle')) state.tomeTaggingEnabled = $('tome-tagging-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('mood-send-toggle')) state.moodSendEnabled = $('mood-send-toggle').checked;
   if ($('mood-visible-toggle')) state.moodVisibleToFamiliar = $('mood-visible-toggle').checked;
@@ -4866,6 +4868,7 @@ function writeSettingsToUI() {
   if ($('session-unify-toggle')) setIfNotFocused($('session-unify-toggle'), 'checked', state.sessionUnifyEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
+  if ($('tome-tagging-toggle')) setIfNotFocused($('tome-tagging-toggle'), 'checked', state.tomeTaggingEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('mood-send-toggle')) setIfNotFocused($('mood-send-toggle'), 'checked', state.moodSendEnabled === true);
   if ($('mood-visible-toggle')) setIfNotFocused($('mood-visible-toggle'), 'checked', state.moodVisibleToFamiliar !== false);
@@ -6356,7 +6359,7 @@ function init() {
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',
-    'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
+    'tome-graduation-toggle', 'tome-graduation-tidy', 'tome-tagging-toggle', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'reddit-reader-enabled', 'reddit-user-agent', 'reddit-client-id', 'reddit-client-secret', 'reddit-username', 'reddit-password',
     'cdp-mode-enabled', 'video-fileapi-enabled',
@@ -8584,6 +8587,7 @@ function closeTomesModal() {
 }
 
 async function refreshTomesList() {
+  refreshTomeTaggingStatus();
   await loadTomesFromServer();
   const container = $('tomes-list');
   container.innerHTML = '';
@@ -8602,6 +8606,7 @@ async function refreshTomesList() {
           <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
           <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
           <button class="btn-ghost tome-grad-btn" data-id="${esc(tome.id)}" title="${tome.graduationExempt ? 'Graduation skips this tome. Click to allow it again.' : 'Tome Graduation may move durable facts out of this tome. Click to protect it.'}">${tome.graduationExempt ? '🛡 Protected' : 'Graduatable'}</button>
+          ${tomeShareSelectHTML(tome)}
           <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome" aria-label="Delete tome">${msIcon('delete')}</button>
         </div>
       </div>
@@ -8611,8 +8616,64 @@ async function refreshTomesList() {
     div.querySelector('.tome-open-btn').addEventListener('click', () => openTomeEntriesModal(tome.id));
     div.querySelector('.tome-toggle-btn').addEventListener('click', () => toggleTomeEnabled(tome.id));
     div.querySelector('.tome-grad-btn').addEventListener('click', () => toggleTomeGraduation(tome.id));
+    div.querySelector('.tome-share-select')?.addEventListener('change', (ev) => setTomeRoomShare(tome.id, ev.target.value));
     div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTome(tome.id));
     container.appendChild(div);
+  }
+}
+
+// ── Tome lore in shared rooms (room-lore.js, 0.14.90–0.14.91) ──────────
+// A tome's setting: by each note's tag (default), always, or never. A private
+// tome (Session Memories, or marked wardOnly) is fixed at never server-side.
+const TOME_SHARE_LABELS = { content: 'Shared rooms: by note', always: 'Shared rooms: always', never: 'Shared rooms: never' };
+function tomeShareSelectHTML(tome) {
+  if (tome.roomShareLocked) {
+    return `<span class="ke-badge ke-badge-cw-high" title="Private: this tome never comes along to shared rooms">Private</span>`;
+  }
+  const cur = tome.roomShare ?? 'content';
+  const opts = Object.entries(TOME_SHARE_LABELS)
+    .map(([v, l]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('');
+  return `<select class="ke-select tome-share-select" data-id="${esc(tome.id)}" aria-label="Whether this tome comes along to shared rooms" title="In a friend's DM, a Discord channel or a chat with others present: follow each note's own setting, always bring this tome, or never">${opts}</select>`;
+}
+
+async function setTomeRoomShare(tomeId, roomShare) {
+  try {
+    await fetch(`/api/tomes/${tomeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomShare }),
+    });
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to update tome: ${err.message}`);
+  }
+}
+
+// One note's setting, as a badge: mine / by topic / just us / not sorted.
+function tomeEntryShareBadge(entry) {
+  if (entry?.wardOnly === true) return '<span class="ke-badge ke-badge-cw-high" title="Never comes along to shared rooms">Just us</span>';
+  const tag = String(entry?.contentTag ?? '').trim();
+  if (tag === 'self') return '<span class="ke-badge ke-badge-register" title="Your Familiar\'s own note: comes along to any room">Familiar\'s own</span>';
+  if (tag) return keContentTagBadge(tag);
+  return entry?.contentTagReviewedAt
+    ? '<span class="ke-badge ke-badge-cw-low" title="Looked at, couldn\'t tell: stays out of shared rooms">Unsure</span>'
+    : '<span class="ke-badge ke-badge-cw-low" title="Not sorted yet: stays out of shared rooms">Not sorted</span>';
+}
+
+// Where the sorting stands, under the toggle. Best effort.
+async function refreshTomeTaggingStatus() {
+  const el = $('tome-tagging-status');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/tome-tagging', { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { status: s, events } = await r.json();
+    if (!s?.total) { el.textContent = 'No notes to sort right now.'; return; }
+    const sorted = s.total - s.unsorted;
+    const last = events?.[0]?.loggedAt ? ` Last pass ${new Date(events[0].loggedAt).toLocaleString()}.` : '';
+    el.textContent = `Sorted ${sorted} of ${s.total} notes: ${s.self} your Familiar's own, ${s.topic} by topic, ${s.private} just between you, ${s.unsure} unsure. ${s.unsorted} waiting.${last}`;
+  } catch {
+    el.textContent = '';
   }
 }
 
@@ -8739,7 +8800,7 @@ async function refreshTomeEntriesList() {
         </div>
         <div class="lorebook-entry-keys">${keyTagsHtml}</div>
         <div class="lorebook-entry-content">${esc(entry.content ?? '')}</div>
-        <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge} \u00b7 ${posLabel}</div>
+        <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge} \u00b7 ${posLabel}${tomeEntryShareBadge(entry)}</div>
       `;
       div.querySelector('.lore-edit-btn').addEventListener('click', () => openLoreEditor(entry.uid));
       div.querySelector('.lore-toggle-btn').addEventListener('click', () => toggleTomeEntry(entry.uid));
@@ -12056,6 +12117,8 @@ function openLoreEditor(uid) {
   const gw = entry.groupWeight;
   $('lore-ed-group-weight').value = (gw !== null && gw !== undefined) ? String(gw) : '';
 
+  loreEditorFillShare(entry);
+
   // learnedAt — read-only, shown only when the field is present
   const learnedEl = $('lore-ed-learned-at');
   if (learnedEl) {
@@ -12069,6 +12132,51 @@ function openLoreEditor(uid) {
 
   $('lore-editor-modal').classList.remove('hidden');
   bindResizableModal('lore-editor-modal-inner', 'pf-lore-editor-modal-size');
+}
+
+// "In shared rooms" in the entry editor: the Familiar's own (any room) / just between us /
+// not sorted / a topic + level (the memory vocabulary). Whatever my human
+// picks here stands; the server only canonicalises it.
+function loreEditorFillShare(entry) {
+  const sel = $('lore-ed-share'), lvl = $('lore-ed-share-level');
+  if (!sel || !lvl) return;
+  const tag = String(entry?.contentTag ?? '').trim();
+  const p = keContentTagParts(tag && tag !== 'self' ? tag : '');
+  const cur = entry?.wardOnly === true ? 'private' : (tag === 'self' ? 'self' : (p?.topic ?? ''));
+  const opts = [
+    ['', 'Not sorted yet (stays out)'],
+    ['self', "Your Familiar's own (comes along anywhere)"],
+    ['private', 'Just between us (never)'],
+    ...VL_CONTENT_TOPICS.map(t => [t.key, `About: ${t.label}`]),
+  ];
+  sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('');
+  lvl.innerHTML = ['open', 'sensitive'].map(l => `<option value="${l}"${(p?.level ?? 'sensitive') === l ? ' selected' : ''}>${l}</option>`).join('');
+  const sync = () => {
+    const isTopic = !['', 'self', 'private'].includes(sel.value);
+    lvl.classList.toggle('hidden', !isTopic);
+    $('lore-ed-share-hint').textContent = isTopic
+      ? 'Comes along only where everyone present is trusted with this topic at this level.'
+      : '';
+  };
+  sel.onchange = sync;
+  sync();
+}
+
+function loreEditorShareFields(existing) {
+  const v = $('lore-ed-share')?.value ?? '';
+  const lvl = $('lore-ed-share-level')?.value === 'open' ? 'open' : 'sensitive';
+  const out = { ...existing };
+  const before = JSON.stringify([existing.contentTag ?? null, existing.wardOnly === true]);
+  delete out.contentTag; delete out.wardOnly;
+  if (v === 'private') out.wardOnly = true;
+  else if (v === 'self') out.contentTag = 'self';
+  else if (v) out.contentTag = `${v}:${lvl}`;
+  if (JSON.stringify([out.contentTag ?? null, out.wardOnly === true]) !== before) {
+    delete out.contentTagReviewedAt;
+    if (v) { out.contentTagSource = 'ward'; out.contentTagAt = new Date().toISOString(); }
+    else { delete out.contentTagSource; delete out.contentTagAt; }
+  }
+  return out;
 }
 
 function closeLoreEditor() {
@@ -12105,7 +12213,7 @@ async function saveLoreEditorEntry() {
   const groupWeight = gwRaw === '' ? null : Math.max(0, parseInt(gwRaw, 10) || 0);
 
   const entry = {
-    ...existing,
+    ...loreEditorShareFields(existing),
     uid,
     comment:             $('lore-ed-comment').value.trim(),
     keys,

@@ -128,6 +128,7 @@ ponderings injection, care-check framing) and as background loops
 ├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
 ├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG); per-tome opt-out `graduationExempt` (0.8.106): ward-toggleable in the Tomes modal, stamped on runtime tomes at creation, exposed via GET/PATCH /api/tomes — the name-exclusion list stays as belt-and-suspenders
 ├── content-regate-loop.js   Autonomous singleton loop (ward-disclosure Phase B, opt-in/default-OFF); the Familiar reviews EXISTING ward-private ward-self memories and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the coarse backfill `content_tag`) while keeping the rest private. Pure logic in content-regate.js. Conservative (parser fails closed to keep); code-selects candidates (memory_list_content_gate_candidates — ward-private + no third-party subject only, never touches a third-party fact); reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` (enrich(), ward-visible) settled by `acknowledge_disclosure` / reverted by `keep_memory_private`. Off-switch PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1 + "Review my private notes for content-sharing" toggle
+├── tome-tagging-loop.js     Autonomous singleton loop (0.14.92, opt-in/default-OFF, `tomeTaggingEnabled`); I sort my older UNSORTED tome notes for shared rooms, one batch of 12 per 10-min tick on the memorization connection. Pure logic in src/tomes/tome-tagging.js: code picks the batch (enabled entries in enabled 'content' tomes with no share tag), one judgment (self / private / topic:level / unsure), code checks every tag (tome-tags.js `checkTomeTag`: a note naming my human or a villager is held at sensitive), writes via the locked `modifyTomeFile` only if the entry is still unsorted. Careful by default: unsure/unparseable/left-out stays unsorted (out of shared rooms); 3 misses → marked looked-at. Log logs/tome-tagging-events.jsonl, status GET /api/tome-tagging. Defers during a live call. Off-switch PROTO_FAMILIAR_TOME_TAGGING_DISABLED=1
 ├── content-regate.js        Pure Phase-B logic: selectBatch / parseRetagDecision (fail-closed) / summarizeCircles / buildRetagPrompt + injectable runOneRetagTick; reviewed-tracker (tomes/.content-regate-reviewed.json) + disclosure notices (tomes/.disclosure-notices.json)
 ├── needs-tracking-loop.js   Autonomous singleton loop (Pass 2, opt-in/default-OFF); marks a recurring need-window's occurrence `missed` once its [when,end] elapses unresolved (builds the needs-fulfilment ledger). Pure selection in needs-tracking.js. Stands down at moderate+ threat (never competes with triage); only the LAPSE is made factual — projected consequence edges are untouched. Off-switch PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
@@ -1474,7 +1475,7 @@ turn. **Parity is hand-maintained** (app.js is a classic script, no ES modules,
 so no single shared source without a build step); tests pin the behavior — change
 one engine, change the other. Timed effects (sticky/cooldown) aren't persisted
 across Discord turns yet (v1); `delay` works via the session turn count.
-**Room gate (`room-lore.js`, 0.14.89–0.14.90).** Lore is gated for the room
+**Room gate (`room-lore.js`, 0.14.89–0.14.92).** Lore is gated for the room
 BEFORE activation by `tomesForRoom(tomes, { topicGrants })` (`null` = the ward's
 own room, everything). In a shared room an entry reaches the prompt when it's
 tagged `self` (the Familiar's own lore), or its `contentTag` is covered by the
@@ -1489,6 +1490,22 @@ decision: guidance shared, diagnosis held back); the Manual is 'always'.
 others present (the client sends `serverLore: true` and skips its own lore;
 `placeRoomLore` puts lead/tail in the system message and at-depth above the
 current message). `tome-lore.js` itself stays audience-agnostic.
+**Share tags (`tome-tags.js`, 0.14.92).** An entry carries `contentTag: 'self'`,
+`contentTag: 'topic:level'`, `wardOnly: true`, or nothing (unsorted =
+`general:sensitive`), plus `contentTagSource` (familiar / review / ward) and
+`contentTagAt`; the review stamps `contentTagReviewedAt` for "looked, couldn't
+tell". Three writers: `save_to_tome`'s optional `content_tag` (checked by
+`checkTomeTag` — a note naming my human or a villager can't be `self` or `:open`;
+the result says when it was held), the tagging loop for older notes, and the
+ward's "In shared rooms" picker in the entry editor (never second-guessed;
+the tome PUT only canonicalises via `canonicalEntryTag`). Per tome, the Tomes
+list shows a `roomShare` select (PATCH `/api/tomes/:id {roomShare}`; private
+tomes are fixed at never; GET `/api/tomes` returns `roomShare` +
+`roomShareLocked`). Every note shows its badge in the entry list; the progress
+line under the Tomes-modal toggle reads `GET /api/tome-tagging`
+(`tomeTaggingStatus` + recent passes). Ponderings are written `enabled:false`
+(never lore), so their write path doesn't tag; any that get enabled go through
+the review like any other note.
 **Live tome macros + the manual tome (0.11.22).** Tome content can carry macros
 that resolve at INJECTION time so the lore reads true now: `tome-macros.js`
 `resolveTomeMacros(text, settings)` folds `{{user}}`/`{{char}}` (via `macros.js`)

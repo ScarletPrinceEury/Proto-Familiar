@@ -103,7 +103,7 @@ export function selectBatch(candidates, reviewedSet, batchSize = DEFAULT_BATCH_S
  * understands what opening a fact of a given topic actually exposes. Only circles
  * that grant at least one topic are listed (strangers/empty are dropped).
  */
-export function summarizeCircles(registry) {
+export function summarizeCircles(registry, { emptyText = null } = {}) {
   const cats = registry?.categories ?? [];
   const lines = [];
   for (const c of cats) {
@@ -114,9 +114,8 @@ export function summarizeCircles(registry) {
       .map(([t, l]) => `${t}:${l}`);
     if (grants.length) lines.push(`  - "${c.name ?? c.id}" may see: ${grants.join(', ')}`);
   }
-  return lines.length
-    ? lines.join('\n')
-    : '  (none of my human\'s circles are granted any topic yet — so opening a fact exposes it to no one until they grant a circle its topic.)';
+  if (lines.length) return lines.join('\n');
+  return emptyText ?? '  (none of my human\'s circles are granted any topic yet — so opening a fact exposes it to no one until they grant a circle its topic.)';
 }
 
 // ── Prompt (first-person, conservative — written like I'd actually think) ──
