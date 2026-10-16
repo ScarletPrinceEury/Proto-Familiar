@@ -42,6 +42,22 @@ Every Familiar-facing tool belongs to exactly one module, defined in `TOOL_MODUL
 
 The module map is comprehensive: a parity test asserts that every builtin tool has exactly one module assignment, so adding a tool without a module makes the test suite fail rather than silently vanishing [@tool-surfacing-js].
 
+**Complementary tools need matching module placement, not just matching capability.** A tool
+that only adds and a tool that only cuts are a pair, and if one rides in CORE while the other is
+conditional, a turn can surface the half that adds without ever surfacing the half that cuts.
+This shipped as a live bug: `update_identity` (append) is CORE, but `remove_from_identity`,
+`delete_identity_section`, and `rewrite_identity_section` originally lived in the conditional
+`memory-edit` module, so a turn that did not happen to surface `memory-edit` could add to
+identity but had no way to remove anything — in the first identity review the Familiar, trying
+to undo a duplicated section, "removed" it by appending it a second time instead, because the
+only identity tool actually on offer that turn was the append one. The fix (0.14.75-alpha) moved
+all three cut tools into CORE beside `update_identity`, keeping the add/cut pair reachable
+together on every turn [@tool-surfacing-js]. A test pins the fix by asserting a core-only turn
+offers all four, and that none of the four is on any villager allowlist. See
+[Phylactery](phylactery)'s "Identity editing" section for the tools themselves and
+[Care facts move out of identity into high-care standing facts](../decisions/care-facts-out-of-identity)
+for why identity needed cut tools at all.
+
 ## Context-sensitive surfacing: when modules travel
 
 The same turn may need different tool modules depending on the context — a turn mentioning "mood" should surface trackers, a turn with outside-event language should surface weather, a turn asking to search should surface web tools. Surfacing is **default-ON** and cheap (regex + block markers + a sticky TTL), never an LLM decision [@tool-surfacing-js].
@@ -93,12 +109,15 @@ Deep into a long conversation, the model loses track of which tools it actually 
 round — the provider puts the full tools schema at the very top of the prompt, far from where
 the model is actually reading by the time a conversation has grown long, and it has been
 observed narrating calls it never made or "calling" a tool that was not even in that turn's set
-[@tool-surfacing-js]. `formatToolRoster(tools)` is a short, names-only, first-person block that
+[@tool-surfacing-js]. `formatToolRoster(tools)` (0.14.74-alpha) is a short, names-only, first-person block that
 rides at the END of the context every round instead, grouped by module, naming which other
 modules could still be pulled in with `request_tools`, with a hard off-switch
 (`PROTO_FAMILIAR_TOOL_ROSTER_DISABLED=1`) [@tool-surfacing-js]. `anchorWithToolRoster` appends it
 under the turn's time anchor; it renders as `''` on a closing text round (no tools) or when the
-roster is disabled.
+roster is disabled. It shipped alongside a per-turn tool-call diagnostic log built from the same
+review (`src/diagnostics/turn-log.js`) — see [Autonomous loops](autonomous-loops)'s Diagnostics
+panel section for that mechanism, and [Engineering conventions](../reference/engineering-conventions)'s
+collapseToolTurns section for the specific narrated-call pattern it later helped diagnose.
 
 The roster's closing line is a deliberate, plain statement of the structural fact "a tool only
 runs when I actually call it" [@tool-surfacing-js], and, since 0.14.83-alpha, an explicit
@@ -138,6 +157,10 @@ capability, even though the tool itself is reachable.
 
 ## Related
 
+- [Autonomous loops](autonomous-loops) — the Diagnostics panel's "Tool turns" tab, built from the
+  same 0.14.74-alpha review, that records per-round whether a call actually ran.
+- [Phylactery](phylactery) — the identity-editing tools this page's module-placement worked
+  example is about.
 - [Browser](browser) — the one-page-reader-per-turn rule (0.14.65) that is this page's worked
   example of a tool description drifting from what composition actually offers.
 - [Noticing](noticing) — `composeNoticingTools` (0.14.82) rebuilds the background noticing turn's toolset from this same module-surfacing and `request_tools` growth mechanism, replacing an earlier fixed tool list that silently fell behind live-turn capabilities.

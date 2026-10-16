@@ -116,6 +116,9 @@ sources:
   - id: excerpt-test
     type: file
     path: tests/excerpt.test.mjs
+  - id: turn-log-js
+    type: file
+    path: src/diagnostics/turn-log.js
 ---
 
 # Engineering Conventions
@@ -408,6 +411,41 @@ the deliberation readers (`getRecentSessionMessages`/`formatRecentMessagesForCon
 skipped carriers on their own (a `tool_calls`-length check plus a non-empty-string content
 filter), so they were never affected by the bug and did not need this helper [@message-sanitize].
 
+**Stripping the scaffolding has a side effect: history stops proving a past action happened
+(0.14.76-alpha).** Dropping `tool_calls` and the `role:'tool'` results closes the null-carrier
+bug above, but over a long session it leaves nothing in history to distinguish a turn that
+really called a tool from a turn whose reply merely claims one ran — the assistant's own
+sentence becomes the only trace either way. `src/diagnostics/turn-log.js`, a parallel
+diagnostic log built in the same release (`logs/turn-tools.jsonl`, read back by
+`GET /api/turn-diagnostics`; see [Autonomous loops](../architecture/autonomous-loops)'s
+Diagnostics panel section), is what made the pattern legible: ten logged turns alternated
+between single calls that genuinely ran and rounds that ended in zero tool calls whose reply
+still read "Ran and logged, ok" — no call was ever silently dropped by the loop itself
+[@turn-log-js]. The cause was structural, not a one-off confabulation: `collapseToolTurns`
+erased every past action's evidence, so history itself taught that *writing* "ran — ok" IS the
+action.
+
+The fix adds an opt-in second argument, `collapseToolTurns(messages, { records: true })`, used
+at both live provider-history boundaries (`server.js`'s `/api/chat` handler and both
+`discord-gateway.js` history-assembly sites) [@server-js] [@discord-gateway-js]. A turn that
+really ran tools gets one extra message appended right after it — `role: 'system'`, starting
+`[App record of that turn: I called save_memory (ok).]` — built from the calls and results
+collapse had just stripped; a turn that only narrated gets no such record, so the two are
+distinguishable in history again [@message-sanitize]. The record is a system message rather
+than assistant text on purpose: the model writes assistant turns, never these, so it cannot
+confuse the app's own record with something it said. `message-sanitize.mjs`'s
+`lastTurnRecord(messages)`, from the same release, is the companion fact placed at the START of
+the Familiar's *next* turn instead of inside history: one line naming what the previous turn's
+assistant messages actually ran, read from stored history rather than from the model's own
+memory of what it meant to do [@message-sanitize]. Both mechanisms answer the same question
+("did a tool call I remember actually happen?") from opposite ends of the turn boundary — one
+retrospective and inside history, one prospective and outside it — because a single fix at only
+one end would have left the other blind spot open. See
+[Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) for the
+0.14.83-alpha pass that reworded `lastTurnRecord`'s output (and see the section below, "A gap is
+reported as a plain fact, never a verdict," for its current wording); this section is about why
+the mechanism exists at all, not its voice.
+
 **Generalization:** this is the same family as the `stripLlmTimestamps` rule in
 [Exact values are code's job](../decisions/exact-values-in-code) — clean contaminated content
 at the boundary where stored history re-enters the model, not only at the point it is
@@ -532,11 +570,12 @@ copy-pasted into each call site [@cerebellum-js]. Its wording states what happen
 next ("my tool budget for this turn is used up, so the calls I just asked for didn't run... If
 they tell me to go on, I get a fresh budget and carry on") with no caps-lock verdict.
 
-`message-sanitize.mjs`'s `lastTurnRecord(messages)` builds the companion fact for the *next*
-turn: a one-line record of what the previous turn's assistant messages actually ran, read from
-stored history rather than from the model's own memory of what it meant to do [@message-sanitize].
-It renders `[Last turn, tools used: ...]` or `[Last turn: no tools used.]` — plain record, not
-the audit-voiced "from the app's record" phrasing an earlier version used.
+`message-sanitize.mjs`'s `lastTurnRecord(messages)` — introduced in 0.14.76-alpha for the reason
+given in "Tool-call scaffolding is turn-internal" above — builds the companion fact for the
+*next* turn: a one-line record of what the previous turn's assistant messages actually ran, read
+from stored history rather than from the model's own memory of what it meant to do
+[@message-sanitize]. It renders `[Last turn, tools used: ...]` or `[Last turn: no tools used.]`
+— plain record, not the audit-voiced "from the app's record" phrasing the 0.14.76 original used.
 
 **Text tool calls get named too (0.14.86-alpha).** Some models, some of the time, write a tool
 call out as literal text instead of invoking it — a `<tool_call>` tag, a `<function=name>` tag, a

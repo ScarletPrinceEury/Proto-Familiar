@@ -189,7 +189,13 @@ appending a new section — a bug that previously let a thalamus-side JSON-parse
 failure read a refusal (or an accidental append) back as a successful rewrite
 [@phylactery-server] [@thalamus-js]. These exist specifically so a line moved
 out of identity into a standing fact can actually be cut afterward, rather
-than only ever appended around. See
+than only ever appended around. The three cut tools originally shipped in the
+conditional `memory-edit` tool module while `update_identity` (append) stayed
+CORE, so a turn that did not surface `memory-edit` could add to identity but
+not remove anything from it — a gap that surfaced in the first identity
+review, fixed in 0.14.75-alpha by moving all three into CORE beside
+`update_identity`; see [Tool surfacing and provider-safe ceiling](tool-surfacing)'s
+module-placement section for the incident. See
 [Care facts move out of identity into high-care standing facts](../decisions/care-facts-out-of-identity)
 for why that move mattered (care details pinned in identity rode into every
 room identity reaches, group chats included) and the token-budget/eligibility
@@ -292,6 +298,8 @@ toggle [@phylactery-design].
 
 - [Holistic backup](holistic-backup) — the whole-install backup mechanism built to cover what
   Phylactery's own `backup.py` above does not: tomes, Unruh, and settings.
+- [Tool surfacing and provider-safe ceiling](tool-surfacing) — the module-placement incident
+  that moved the three identity-editing cut tools above into CORE beside `update_identity`.
 - [Multi-embodiment](../concepts/multi-embodiment) — why a canonical store exists at all.
 - [Unruh](unruh) — the sibling specialist that stays outside Phylactery by design (temporal
   context, mostly per-embodiment ponderings).
