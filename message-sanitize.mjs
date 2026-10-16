@@ -127,6 +127,27 @@ export function collapseToolTurns(messages = [], { records = false } = {}) {
 }
 
 /**
+ * Tool calls written INTO a reply as text (0.14.86). Some models, some of the
+ * time, write the call out instead of making it — `<tool_call>{"name": …}`, a
+ * `{"name": "save_memory", "arguments": …}` blob, `save_memory({…})`. Nothing
+ * runs, and it reads like it did. Only shapes prose doesn't produce count, so
+ * an ordinary sentence that mentions a tool never trips it. Returns the tool
+ * names found, in order, unique ('a tool' when the shape has no name). Pure.
+ */
+export function findTextToolCalls(text) {
+  const s = String(text ?? '');
+  if (!s) return [];
+  const found = [];
+  const add = (n) => { const name = String(n ?? '').trim() || 'a tool'; if (!found.includes(name)) found.push(name); };
+  const nameIn = (chunk) => (chunk.match(/"name"\s*:\s*"([A-Za-z_][\w.-]*)"/) || chunk.match(/<function=([A-Za-z_][\w.-]*)>/) || [])[1];
+  for (const m of s.matchAll(/<tool_call>([\s\S]*?)(<\/tool_call>|$)/gi)) add(nameIn(m[1]));
+  for (const m of s.matchAll(/<function=([A-Za-z_][\w.-]*)>/g)) add(m[1]);
+  for (const m of s.matchAll(/\{\s*"name"\s*:\s*"([A-Za-z_][\w.-]*)"\s*,\s*"(arguments|parameters)"\s*:/g)) add(m[1]);
+  for (const m of s.matchAll(/^\s*(?:functions\.)?([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\(\s*\{/gm)) add(m[1]);
+  return found;
+}
+
+/**
  * One line for the CURRENT turn's end-of-context anchor: what my previous turn
  * actually ran, read from the stored history (raw, before collapse). `messages`
  * ends with the current user message. '' when there's no previous turn yet.
@@ -144,16 +165,27 @@ export function lastTurnRecord(messages = []) {
   if (!turn.some(m => m?.role === 'assistant')) return '';
   const calls = [];
   const results = {};
+  const written = [];
   for (const m of turn) {
     if (m?.role === 'assistant' && Array.isArray(m.tool_calls)) {
       for (const tc of m.tool_calls) calls.push({ id: tc?.id, name: tc?.function?.name });
     }
+    if (m?.role === 'assistant' && typeof m.content === 'string') {
+      for (const n of findTextToolCalls(m.content)) if (!written.includes(n)) written.push(n);
+    }
     if (m?.role === 'tool') results[m.tool_call_id] = m.content;
   }
+  // A call written out as text, with no real call of that name, didn't run;
+  // said plainly so I can make it for real (0.14.86).
+  const ran = new Set(calls.map(c => c.name));
+  const textOnly = written.filter(n => !ran.has(n));
+  const note = textOnly.length
+    ? ` My reply had ${textOnly.join(', ')} written out as text, which doesn't run it.`
+    : '';
   // Plain facts, not an audit voice (0.14.83): it rides nearly every turn.
   return calls.length
-    ? `[Last turn, tools used: ${describeCalls(calls, results)}.]`
-    : '[Last turn: no tools used.]';
+    ? `[Last turn, tools used: ${describeCalls(calls, results)}.${note}]`
+    : `[Last turn: no tools used.${note}]`;
 }
 
 // The dynamic-context depth: how many turns from the END the dynamic block sits,

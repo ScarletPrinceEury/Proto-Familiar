@@ -31,8 +31,12 @@ below lets the Familiar drop a rule instead of carrying it:
   the conversation, and when a conversation is brand new (model-signal.js).
   Retires "I cannot verify my own engine from inside" and gives "after a crash
   or a model swap, I check memory before speaking" its trigger.
-- **Tool calls written into the reply as text** (a provider/model failure) go
-  unnoticed. The app could see a tool call in the reply text and say so.
+- ~~**Tool calls written into the reply as text**~~ — fixed 0.14.86:
+  `findTextToolCalls` (message-sanitize.mjs) spots the shapes a written-out
+  call takes (`<tool_call>`, `<function=…>`, a name+arguments JSON blob, a line
+  starting `snake_case({`), the next turn's line says "My reply had X written
+  out as text, which doesn't run it.", and the turn log records
+  `textToolCalls` per round.
 - **Rules outlive their cause.** Some rules work around limits that are gone
   (webp images were rejected; custom identity files "weren't injected"). A
   self-rule doesn't record what it works around, so nothing tells the Familiar
