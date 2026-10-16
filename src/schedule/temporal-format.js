@@ -43,7 +43,7 @@ import { relativeTime } from '../../relative-time.js';
 // 📅 marks a Google-synced node; when it comes from a calendar attributed to
 // someone OTHER than my human (a shared calendar — a villager's, a club's),
 // the marker names them so the Familiar reads whose event it is.
-function gcalMarkerFor(node) {
+export function gcalMarkerFor(node) {
   if (node?.payload?.source !== 'gcal') return '';
   const a = node.payload?.gcal_attribution;
   if (a && a.kind && a.kind !== 'ward' && a.kind !== 'unassigned' && a.label) return ` 📅 ${a.label}`;

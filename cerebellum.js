@@ -74,6 +74,7 @@ import { formatOrganStatus } from './organs.js';
 import { formatCareFactsBlock, careWeightFromFlag, formatCareFactsReview } from './src/safety/care-facts.js';
 import { formatCleanupProposalsReview } from './src/memory/cleanup-proposals.js';
 import { checkCanariesInFiles, formatCanaryEditNote, formatCanaryList, lastCanaryStates } from './src/memory/identity-canaries.js';
+import { gcalMarkerFor } from './src/schedule/temporal-format.js';
 import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
@@ -4519,6 +4520,13 @@ export const TOOL_EXECUTORS = {
     const sid = String(id ?? '').trim();
     if (!sid) return 'I need the id of the schedule item to remove — it\'s in the [schedule ids] legend of my [Temporal Context].';
     try {
+      // A calendar-synced item comes straight back on the next sync, so a delete
+      // here would be undone without anyone noticing (0.14.84). Say so and point
+      // at what does work, rather than deleting.
+      const got = await getScheduleNode({ id: sid }).catch(() => null);
+      if (got?.node?.payload?.source === 'gcal') {
+        return `${got.node.label ?? sid} comes from the calendar sync (📅), so deleting it here would only last until the next sync. If it isn't happening, I resolve it as cancelled (schedule_resolve). If it should go for good, it has to be deleted in Google Calendar.`;
+      }
       const data = await deleteScheduleNode({ id: sid });
       if (!data?.ok) return `I couldn't remove that schedule item: ${data?.error ?? 'Unruh unavailable'}.`;
       if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
@@ -4634,7 +4642,9 @@ export const TOOL_EXECUTORS = {
       const lines = matches.map(m => {
         const when = m.when ? (relativeTime(m.when, Date.now()) || m.when) : 'no time set';
         const res = m.resolution ? ` [${m.resolution}]` : '';
-        return `- ${m.label} [${m.type}] — ${when}${res} (id: ${m.id})`;
+        // 📅 = the calendar sync owns it (0.14.84): where an item came from is in
+        // the result, so nobody has to go and check before acting on it.
+        return `- ${m.label}${gcalMarkerFor(m)} [${m.type}] — ${when}${res} (id: ${m.id})`;
       });
       return [`${matches.length} match(es) for "${q}":`, ...lines].join('\n');
     } catch (err) { return `I couldn't search the schedule: ${err.message}`; }

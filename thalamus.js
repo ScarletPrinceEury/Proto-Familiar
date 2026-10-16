@@ -1677,6 +1677,12 @@ export function __setPhylacteryClientForTest(client) {
   _startPromise = Promise.resolve();
 }
 
+/** The same for Unruh (schedule tools). Never called by runtime code. */
+export function __setUnruhClientForTest(client) {
+  unruhClient = client;
+  _startPromise = Promise.resolve();
+}
+
 export function startThalamus() {
   if (_startPromise) return _startPromise;
   _startPromise = (async () => {
