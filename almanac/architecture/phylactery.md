@@ -17,7 +17,7 @@ sources:
   - id: phylactery-server
     type: file
     path: phylactery/src/phylactery/server.py
-    note: "contains identity_set_file and identity_delete_section MCP tool definitions"
+    note: "contains identity_set_file, identity_delete_section, and identity_remove_text MCP tool definitions"
   - id: fable-review-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
@@ -177,6 +177,24 @@ The identity editor is now complete with two new operations, both auto-snapshot 
 - **`identity.delete_section(category, filename, section)`** — removes one `##` section (its heading, body, and the blank-line gap) from a file, or reports the section missing. Exposed as `DELETE /api/entity/identity/:cat/:file/sections/:section` on the server side and wrapped in `thalamus.deleteIdentitySection()`.
 
 The Knowledge editor's identity detail pane reflects these operations: an "Edit whole file" textarea replaces the per-section editor (working for any file, including prose-top content), and each section now has a "Delete section" button with a confirmation prompt [@architecture-doc]. A side effect: `VALID_FILENAME_RE` now allows hyphens in identity filenames (previously it was `[\w]+\.md`, so hyphenated names could never be saved — a latent correctness bug).
+
+Three more identity-editing tools followed once removal, not just addition,
+became necessary: `remove_from_identity` (`identity_remove_text`) cuts one
+quoted passage out of a file (exact match first, then whitespace-flexible;
+refused outright if the passage is missing or matches more than once, so it
+never guesses which occurrence was meant), `delete_identity_section` removes
+a whole `##` section heading and body, and `rewrite_identity_section` now
+refuses and returns the file's real headings on a miss instead of silently
+appending a new section — a bug that previously let a thalamus-side JSON-parse
+failure read a refusal (or an accidental append) back as a successful rewrite
+[@phylactery-server] [@thalamus-js]. These exist specifically so a line moved
+out of identity into a standing fact can actually be cut afterward, rather
+than only ever appended around. See
+[Care facts move out of identity into high-care standing facts](../decisions/care-facts-out-of-identity)
+for why that move mattered (care details pinned in identity rode into every
+room identity reaches, group chats included) and the token-budget/eligibility
+mechanics (`identityBudgetTokens`, the protected self core, the per-category
+graduation-eligibility rule) that decide which files the audit below reaches.
 
 The automated side of identity editing — the graduation audit that moves durable
 facts out of identity and into memory to keep the always-injected surface lean —

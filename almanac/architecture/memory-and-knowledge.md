@@ -52,6 +52,8 @@ Here is the journey a fact takes from conversation to durable memory:
 1. **Stand-alone write**: A tool like `memory_create` with `register: 'me'` or `register: 'ward'` writes a fact that should never age out.
 2. **Phylactery direct write**: The fact lands directly in Phylactery's significant tier, skipping daily granularity. It is always injected and never consolidated away.
 
+A `ward`-register standing fact can also carry `care_weight: 'high'` — a marked subset for care-critical facts (allergies, medications, crisis triggers, support contacts) that used to be pinned in identity files instead, which leaked them into every room identity reaches. See [Care facts move out of identity into high-care standing facts](../decisions/care-facts-out-of-identity) for why that moved and how the Familiar can flag or un-flag a fact's care weight explicitly rather than relying only on wording.
+
 ### Ward-authored facts (keyboard-triggered)
 
 1. **Ward writes in Tomes UI**: The ward opens the Tomes modal and adds an entry with keywords, text, and optional activation rules.

@@ -18,7 +18,7 @@ place instead ([Slice provenance is captured at the read](slice-provenance-captu
 keeps an inline "Update (version):" note rather than a separate superseded page, because the
 original decision still holds and only its scope narrowed.
 
-Thirty-two decisions live here. Grouped by the question each one answers:
+Thirty-three decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -100,6 +100,12 @@ and of what is normal for its bond with the ward:
   — why a memory whose subject is unclear is downweighted in recall rather than dropped or
   guessed at, and the three-layer stack (extraction, Phylactery recall, a noticing re-resolution
   sweep) that implements it.
+- [Care facts move out of identity into high-care standing facts](care-facts-out-of-identity) —
+  identity rides every turn and every room with basic identity access, so care details (meds,
+  allergies, triggers, who to call) pinned there leaked past the ward into group chats; the fix
+  gives identity a token budget, moves care lines into standing facts the Familiar can flag
+  itself, and builds the first tools that can actually remove a line from identity rather than
+  only append to it.
 - [Identity cleanup only proposes; the Familiar decides](identity-cleanup-propose-only) — the
   incident where an autonomous identity-budget rewrite condensed away unfiled prose, and the
   fix that removed the audit's own write entirely (propose-only, human-applied) alongside an
