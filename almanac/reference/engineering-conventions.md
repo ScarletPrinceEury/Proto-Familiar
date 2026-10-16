@@ -306,7 +306,12 @@ MCP peer never takes another one's context or delivery down with it. Failures th
 must be observable — delivery state recorded on the item, triage decisions logged, degraded
 peers logging loudly at boot — because silent failure is exactly the failure mode this rule
 exists to prevent [@claude-md]. See [Architecture](../architecture) and
-[Autonomous loops](../architecture/autonomous-loops) for where this is implemented.
+[Autonomous loops](../architecture/autonomous-loops) for where this is implemented. A stalled
+`await` — rather than a thrown error — is the sharpest version of this rule: a provider call
+that never settles can hold a Discord room's turn queue, a background loop's tick guard, or an
+HTTP response open indefinitely with nothing to log, because nothing ever throws. See
+[Stall resilience](../architecture/stall-resilience) for the deadlines and watchdogs that bound
+every such await, and why none of them can truly cancel slow work — only stop waiting on it.
 
 ## Token-conscious operation
 

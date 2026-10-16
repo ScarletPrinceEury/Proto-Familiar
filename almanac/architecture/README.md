@@ -202,6 +202,7 @@ If you're asking yourself... go to:
 - **When do sessions end, and how can the ward manually close an open session?** → [Session lifecycle](session-lifecycle)
 - **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
 - **How does a ward back up or restore the whole Familiar, not just Phylactery?** → [Holistic backup](holistic-backup)
+- **What stops one stalled provider response from silently wedging a Discord room, a background loop, or the server?** → [Stall resilience](stall-resilience)
 
 ## Where to go next
 
@@ -272,6 +273,9 @@ If you're asking yourself... go to:
 - [Holistic backup](holistic-backup) — the passphrase-encrypted `.pfbackup` file that bundles
   Phylactery, Unruh, tomes, and settings together, the safety spine a restore runs before it
   overwrites a live install, and how it differs from Phylactery's own narrower backup.
+- [Stall resilience](stall-resilience) — Discord turn deadlines, the default provider-call
+  timeout, the shared stuck-tick watchdog, client-disconnect handling, and why a throwing route
+  can no longer take the whole server down.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
 - [Update](update) — the self-update mechanism, detection, and the design choice to never

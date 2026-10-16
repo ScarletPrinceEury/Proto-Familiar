@@ -26,6 +26,9 @@ sources:
   - id: tome-tagging-loop-js
     type: file
     path: src/tomes/tome-tagging-loop.js
+  - id: tick-guard-js
+    type: file
+    path: src/util/tick-guard.js
 ---
 
 # Autonomous Loops
@@ -58,7 +61,12 @@ Every loop follows the same shape, stated in CLAUDE.md as a rule rather than a h
   guarantee — see [Architecture](../architecture) for how thalamus and cerebellum enforce it
   [@claude-md].
 - **Reentrancy guards and a graceful stop.** A loop tracks whether a tick is in flight and a
-  `stop*()` call awaits it rather than killing it mid-write.
+  `stop*()` call awaits it rather than killing it mid-write. Since 0.14.67-alpha all fourteen
+  loops share one guard, `createTickGuard()` in `src/util/tick-guard.js`, instead of fourteen
+  hand-written copies of the same flag — it adds a watchdog that releases a tick stuck on an
+  unbounded await (an MCP call, a tool, a file lock) so the loop keeps going instead of stopping
+  for good [@tick-guard-js]. See [Stall resilience](stall-resilience) for the watchdog itself,
+  the per-loop timings, and the matching bound on every provider call these loops make.
 
 ## The loops
 
@@ -180,6 +188,9 @@ attention, distinguishing "nothing has happened" from "nothing can happen."
 
 ## Related
 
+- [Stall resilience](stall-resilience) — the shared tick-guard watchdog above, the matching bound
+  on every provider call a loop tick makes, and the two HTTP-side fixes (client disconnect,
+  crash-proof routes) from the same resilience pass.
 - [Noticing](noticing) — the autonomous loop that surfaces aging commitments and overdue events, the no-nag ledger, and how it integrates with entity-as-subject framing.
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Trackers](trackers) — the pantry-expiry and menses projection nodes the tracker-projection loop reconciles, and why neither is composed into the Familiar's own toolset.
