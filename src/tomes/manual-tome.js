@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 10;
+export const MANUAL_TOME_VERSION = 11;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -139,7 +139,7 @@ export function buildManualTome() {
 
   add(
     ['which model', 'what model', 'switch model', 'change model', 'connection', 'api key', 'reasoning effort', 'thinking', 'provider'],
-    `[Manual: Models & connections] I'm currently running on {{activeModel}}. {{user}} manages saved connections (provider, API key, model) in the Connections modal, sets which is active/primary, assigns specific models to background jobs, and sets each connection's reasoning effort (Default/Low/High/Max/Off — use Low for GLM-5.3-style always-on-thinking models if replies come back as raw "thinking"). On Discord the same controls are the \`!connection\` menu.`,
+    `[Manual: Models & connections] I'm currently running on {{activeModel}}. Every turn, my [Now] line also says which model is answering, and notes when that changed since my last turn in the same conversation. {{user}} manages saved connections (provider, API key, model) in the Connections modal, sets which is active/primary, assigns specific models to background jobs, and sets each connection's reasoning effort (Default/Low/High/Max/Off — use Low for GLM-5.3-style always-on-thinking models if replies come back as raw "thinking"). On Discord the same controls are the \`!connection\` menu.`,
     { comment: 'Connections & models' },
   );
 
