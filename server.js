@@ -130,7 +130,10 @@ import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } fr
 import { modelSignal } from './src/diagnostics/model-signal.js';
 import { speakerOf, labelSpeakers } from './src/village/web-speakers.js';
 import { createClaudeCodeBridge } from './src/bridge/claude-code-bridge.js';
-import { loreForTurn, placeRoomLore } from './src/tomes/room-lore.js';
+import { loreForTurn, placeRoomLore, tomeRoomShare, tomeIsWardOnly, ROOM_SHARE_MODES } from './src/tomes/room-lore.js';
+import { canonicalEntryTag } from './src/tomes/tome-tags.js';
+import { tomeTaggingStatus, readTaggingEvents } from './src/tomes/tome-tagging.js';
+import { startTomeTaggingLoop, stopTomeTaggingLoop, tomeTaggingEnabled } from './src/tomes/tome-tagging-loop.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -3784,9 +3787,16 @@ app.get('/api/tomes', async (_req, res) => {
       if (!isTomeFile(f)) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const { id, name, description, enabled, entries, graduationExempt } = JSON.parse(raw);
+        const t = JSON.parse(raw);
+        const { id, name, description, enabled, entries, graduationExempt } = t;
         if (!id) continue; // not a tome (no id) — skip rather than poison the registry
-        tomes.push({ id, name, description, enabled, graduationExempt: graduationExempt === true, entryCount: Object.keys(entries ?? {}).length });
+        tomes.push({
+          id, name, description, enabled, graduationExempt: graduationExempt === true,
+          entryCount: Object.keys(entries ?? {}).length,
+          // Shared rooms (room-lore.js): 'content' | 'always' | 'never'; a
+          // private tome (Session Memories, or marked wardOnly) is fixed at never.
+          roomShare: tomeRoomShare(t), roomShareLocked: tomeIsWardOnly(t),
+        });
       } catch { /* skip corrupt */ }
     }
     tomes.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
@@ -3856,7 +3866,7 @@ app.put('/api/tomes/:id', async (req, res) => {
       const safe = {};
       for (const [uid, entry] of Object.entries(entries)) {
         if (!isValidEntryUid(uid)) continue;
-        safe[uid] = entry;
+        safe[uid] = canonicalEntryTag(entry);
       }
       return {
         ...existing,
@@ -3883,6 +3893,10 @@ app.patch('/api/tomes/:id', async (req, res) => {
       if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
       if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
       if (req.body.graduationExempt !== undefined) tome.graduationExempt = !!req.body.graduationExempt;
+      if (ROOM_SHARE_MODES.includes(req.body.roomShare) && !tomeIsWardOnly(tome)) {
+        if (req.body.roomShare === 'content') delete tome.roomShare;
+        else tome.roomShare = req.body.roomShare;
+      }
     });
     res.json({ ok: true });
   } catch (err) {
@@ -3932,7 +3946,7 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
 // Familiar-made tomes are enabled + graduationExempt (the runtime-tome
 // convention: a tome it deliberately keeps shouldn't be drained by tome
 // graduation). Returns { tomeId, uid, created }.
-async function addTomeEntryByName({ name, description = '', comment, content, keys, learnedAt }) {
+async function addTomeEntryByName({ name, description = '', comment, content, keys, learnedAt, share }) {
   const trimmed = String(name ?? '').trim();
   if (!trimmed) throw new Error('a tome name is required');
   const before = await readAllTomes(TOMES_DIR).catch(() => []);
@@ -3941,7 +3955,7 @@ async function addTomeEntryByName({ name, description = '', comment, content, ke
     name: trimmed, description: String(description ?? ''), enabled: true,
     graduationExempt: true, entries: {},
   });
-  const { uid, entry } = buildTomeEntry({ comment, content, keys, learnedAt });
+  const { uid, entry } = buildTomeEntry({ comment, content, keys, learnedAt, share });
   await modifyTomeFile(file, (fresh) => { fresh.entries = fresh.entries || {}; fresh.entries[uid] = entry; return fresh; });
   return { tomeId: tome.id, uid, created: !existed };
 }
@@ -3959,7 +3973,7 @@ async function createNamedTome({ name, description = '' }) {
   return { tomeId: tome.id, created: !existed };
 }
 
-async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
+async function addDefaultTomeEntry({ comment, content, keys, learnedAt, share }) {
   // Find first enabled tome — directory scan is read-only so doesn't
   // need a lock. The actual entry insert happens through modifyTome
   // below, which holds the per-file lock across read-modify-write so
@@ -3987,7 +4001,7 @@ async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
     targetTomeId = newId;
   }
 
-  const { uid, entry } = buildTomeEntry({ comment, content, keys, learnedAt });
+  const { uid, entry } = buildTomeEntry({ comment, content, keys, learnedAt, share });
   await modifyTome(targetTomeId, (tome) => { tome.entries[uid] = entry; });
   return { tomeId: targetTomeId, uid };
 }
@@ -4007,6 +4021,21 @@ app.post('/api/tomes/default/entries', async (req, res) => {
     res.json({ ok: true, tomeId, uid });
   } catch {
     res.status(500).json({ error: 'Failed to save entry.' });
+  }
+});
+
+// GET /api/tome-tagging — where my tome notes stand for shared rooms (sorted /
+// waiting / unsure, by kind) and the latest sorting passes. Read-only.
+app.get('/api/tome-tagging', async (_req, res) => {
+  try {
+    const tomes = await readAllTomes(TOMES_DIR);
+    res.json({
+      enabled: tomeTaggingEnabled(readSettingsSync()),
+      status:  tomeTaggingStatus(tomes),
+      events:  await readTaggingEvents(10),
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to read tome tagging status.' });
   }
 });
 
@@ -7389,6 +7418,12 @@ function startReachout() {
   // PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1.
   startContentRegateLoop();
 
+  // Tome tagging (0.14.91). OPT-IN (default OFF): I sort my older tome notes
+  // for shared rooms, a batch at a time (careful: unsure stays out). Visible +
+  // changeable in the Tomes modal. Hard off-switch:
+  // PROTO_FAMILIAR_TOME_TAGGING_DISABLED=1.
+  startTomeTaggingLoop();
+
   // Needs-tracking (Pass 2). Opt-in (default OFF): marks a recurring
   // need-window's occurrence `missed` once its window elapses unresolved,
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
@@ -7798,6 +7833,7 @@ async function handleSignal(signal) {
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopContentRegateLoop(); } catch { /* already stopped */ }
+  try { await stopTomeTaggingLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
   try { await stopTrackerProjectionLoop(); } catch { /* already stopped */ }
   try { await stopMediaRetentionLoop(); } catch { /* already stopped */ }

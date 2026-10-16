@@ -26,8 +26,9 @@ import { readAllTomes } from './tome-store.js';
 import { activateLore, foldLoreForPrompt } from './tome-lore.js';
 import { resolveTomeMacros } from './tome-macros.js';
 import { memoryVisibleToVillager } from '../memory/content-tags.js';
+import { normalizeTomeTag, TOME_SELF_TAG, TOME_PRIVATE_TAG } from './tome-tags.js';
 
-export const TOME_SELF_TAG = 'self';
+export { TOME_SELF_TAG };
 
 // Tomes that are always private to my human, whatever room I'm in: summaries
 // of our own conversations. A tome can also say so itself with `wardOnly: true`
@@ -38,6 +39,7 @@ export const PRIVATE_TOME_NAMES = new Set(['Session Memories']);
 export function tomeIsWardOnly(tome) {
   return tome?.wardOnly === true || PRIVATE_TOME_NAMES.has(String(tome?.name ?? ''));
 }
+
 export const ROOM_SHARE_MODES = ['content', 'always', 'never'];
 
 /** A tome's shared-room setting: 'content' (default), 'always' or 'never'. */
@@ -52,9 +54,10 @@ export function entryReachesRoom(entry, { share = 'content', topicGrants = null 
   if (entry?.wardOnly === true) return false;
   if (share === 'never') return false;
   if (share === 'always') return true;
-  const tag = String(entry?.contentTag ?? '').trim().toLowerCase();
+  const tag = normalizeTomeTag(entry?.contentTag);
   if (tag === TOME_SELF_TAG) return true;
-  return memoryVisibleToVillager(tag || null, topicGrants);
+  if (tag === TOME_PRIVATE_TAG) return false;
+  return memoryVisibleToVillager(tag, topicGrants);
 }
 
 /** The tomes as this room may see them (entry shape — array or map — kept). */

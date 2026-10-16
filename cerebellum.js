@@ -112,6 +112,8 @@ import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surfac
 import { appendWardProactiveTurn, isWardConversationalKind, proactiveMessageId } from './src/sessions/proactive-session.js';
 import { searchSessionLogs, sessionLogKind, isWardReadableLog } from './src/sessions/session-search.js';
 import { speakerNameField } from './name-field.js';
+import { CONTENT_TOPICS } from './src/memory/content-tags.js';
+import { normalizeTomeTag, checkTomeTag, peopleNames, newEntryTagFields } from './src/tomes/tome-tags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1350,6 +1352,24 @@ const _toolDeps = {
   createNamedTome: null,
   listTomes: null,
 };
+// save_to_tome's share tag: normalised + checked against the people it names
+// (my human, the village), so a note about someone can't go out as `self` or
+// `:open`. Returns the entry's share fields and a short note for the result —
+// only when the tag was held or couldn't be read. A clean save stays quiet; a
+// save whose tag changed returns its full text, so I know what it became.
+async function tomeShareForSave(rawTag, text) {
+  if (rawTag == null || String(rawTag).trim() === '') return { share: {}, shareNote: '' };
+  const picked = normalizeTomeTag(rawTag);
+  if (!picked) return { share: {}, shareNote: ` I couldn't read "${String(rawTag).slice(0, 40)}" as a share tag, so it stays out of shared rooms until I sort it.` };
+  let registry = null;
+  try { registry = _toolDeps.getVillageRegistry ? await _toolDeps.getVillageRegistry() : null; } catch { /* names from settings only */ }
+  const { tag, heldBy } = checkTomeTag(picked, text, peopleNames({ settings: readSettingsSync(), registry }));
+  return {
+    share: newEntryTagFields(tag, { source: 'familiar' }),
+    shareNote: heldBy ? ` It names someone, so it's tagged ${tag} rather than ${picked}.` : '',
+  };
+}
+
 export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof addTomeEntryByName === 'function')  _toolDeps.addTomeEntryByName  = addTomeEntryByName;
@@ -1402,6 +1422,7 @@ export const BUILTIN_TOOLS = [
           content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
           keywords: { type: 'array', items: { type: 'string' }, description: 'several trigger keywords or short phrases — things {{user}} would literally say when this situation recurs or the subject comes back up in conversation. The entry will be injected into my prompt whenever these appear in conversation.' },
           tome:     { type: 'string', description: 'OPTIONAL — the name of one of my own themed tomes to file this under (created if it doesn\'t exist yet). I omit it for a general entry. I reuse an existing name from list_tomes rather than coin a near-duplicate.' },
+          content_tag: { type: 'string', description: 'OPTIONAL — whether this comes along when I\'m somewhere with other people (a friend\'s DM, a Discord channel). "self" if it\'s my own thinking or general knowledge that isn\'t about anyone; "private" if it stays between {{user}} and me; or a topic like my memories use ("work:open", "mental-health:sensitive"; topics: ' + CONTENT_TOPICS.join(', ') + ') when it\'s about {{user}} or someone else, at sensitive if it names a person. If I leave it out, it stays out of shared rooms until I sort it.' },
         },
         required: ['title', 'content', 'keywords'],
       },
@@ -3300,25 +3321,30 @@ export const TOOL_EXECUTORS = {
     elapsedMsSinceLastMessage: ctx?.sessionInfo?.elapsedMsSinceLastMessage ?? null,
   }, null, 2),
 
-  save_to_tome: async ({ title, content, keywords, tome }) => {
+  save_to_tome: async ({ title, content, keywords, tome, content_tag }) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save to Tome: content is required.';
     if (content.length > 16384) return 'Failed to save to Tome: content exceeds 16 KB limit.';
     const keys = Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean);
     const learnedAt = new Date().toISOString();
     const named = typeof tome === 'string' && tome.trim();
+    // The share tag I picked, checked in code: a note that names a person is
+    // held at sensitive (tome-tags.js). Unreadable or absent → not sorted yet.
+    const { share, shareNote } = await tomeShareForSave(content_tag, `${title ?? ''}\n${content}`);
     try {
       if (named) {
         if (!_toolDeps.addTomeEntryByName) return 'Failed to save to Tome: named tomes are not available right now.';
         const { uid, created } = await _toolDeps.addTomeEntryByName({
-          name: tome.trim(), comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt,
+          name: tome.trim(), comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt, share,
         });
-        return quietOk(`Saved to my "${tome.trim()}" tome${created ? ' (new)' : ''} (entry: ${uid ?? 'unknown'}).`, { id: uid });
+        const text = `Saved to my "${tome.trim()}" tome${created ? ' (new)' : ''} (entry: ${uid ?? 'unknown'}).${shareNote}`;
+        return shareNote ? text : quietOk(text, { id: uid });
       }
       if (!_toolDeps.addDefaultTomeEntry) return 'Failed to save to Tome: tome storage is not available right now.';
       const { uid } = await _toolDeps.addDefaultTomeEntry({
-        comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt,
+        comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt, share,
       });
-      return quietOk(`Saved to Tome (entry: ${uid ?? 'unknown'}).`, { id: uid });
+      const text = `Saved to Tome (entry: ${uid ?? 'unknown'}).${shareNote}`;
+      return shareNote ? text : quietOk(text, { id: uid });
     } catch (err) {
       return `Failed to save to Tome: ${err.message}`;
     }
