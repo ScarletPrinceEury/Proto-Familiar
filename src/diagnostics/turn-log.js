@@ -15,6 +15,7 @@
 import path from 'path';
 import { mkdirSync, promises as fsp } from 'fs';
 import { REPO_ROOT } from '../../repo-root.js';
+import { findTextToolCalls } from '../../message-sanitize.mjs';
 
 const LOG_DIR   = path.join(REPO_ROOT, 'logs');
 const LOG_FILE  = path.join(LOG_DIR, 'turn-tools.jsonl');
@@ -33,6 +34,8 @@ export function turnLogEnabled() {
  */
 export function describeRound({ round, finishReason, toolCalls, ran, content, reasoning, closing = false }) {
   const calls = (Array.isArray(toolCalls) ? toolCalls : []).map(tc => tc?.function?.name || '?');
+  // A call written into the reply as text instead of made (0.14.86).
+  const written = typeof content === 'string' ? findTextToolCalls(content).filter(n => !calls.includes(n)) : [];
   return {
     round,
     finishReason: finishReason ?? null,
@@ -42,6 +45,7 @@ export function describeRound({ round, finishReason, toolCalls, ran, content, re
     contentChars: typeof content === 'string' ? content.length : 0,
     reasoningChars: typeof reasoning === 'string' ? reasoning.length : 0,
     ...(closing ? { closing: true } : {}),
+    ...(written.length ? { textToolCalls: written } : {}),
   };
 }
 
