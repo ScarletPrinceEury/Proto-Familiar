@@ -104,6 +104,12 @@ sources:
   - id: voice-pin-overlay-test
     type: file
     path: tests/voice-pin-overlay.test.mjs
+  - id: voice-chat-turn-js
+    type: file
+    path: src/voice/voice-chat-turn.js
+  - id: llm-call-js
+    type: file
+    path: llm-call.js
 ---
 
 # Voice
@@ -129,9 +135,12 @@ one Familiar whenever a second one joined the same Discord call, fixed in 0.11.1
 that curates aged voice-clip sounds without ever touching their transcripts
 [@media-retention-loop]; text-in-voice interleave (0.11.85-alpha), which lets a message typed
 into a live Discord call's attached text chat become a spoken turn in that same call
-[@call-engine-js]; and making the Whisper/Parakeet offline-ASR upgrades actually installable
+[@call-engine-js]; making the Whisper/Parakeet offline-ASR upgrades actually installable
 in-app (0.11.117-alpha), after the opt-in download path had shipped scaffolded but unfinished
-[@offline-asr-models]. See [Vision and media](vision-and-media) for the sibling
+[@offline-asr-models]; and an empty-turn retry on the live call path (0.14.47-alpha) that
+tells a transient provider hiccup apart from exhausted quota, built on top of a fix that
+stops a budget-exhausted reasoning turn from being spoken aloud as raw chain-of-thought
+[@voice-chat-turn-js]. See [Vision and media](vision-and-media) for the sibling
 multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
@@ -574,6 +583,50 @@ cache from 0.11.9 were both reverted along with the old fail-counting teardown: 
 fixed, filtering out other bots is no longer needed, and **all speakers, including other bots,
 are decoded** — two Familiars conversing by voice over Discord is supported
 [@voice-discord-adapter-js].
+
+## Never the chain-of-thought, and the empty-turn retry (0.14.47-alpha)
+
+`voice-chat-turn.js`'s `runVoiceTurn` posts `stream:false` to `/api/chat` rather than calling a
+provider directly, so its own doc comment says it must replicate
+[RULE A's](../reference/engineering-conventions) guarantees itself: a generous `max_tokens` and a
+safe reply-extraction call at the boundary [@voice-chat-turn-js]. Before 2026-09-29 it read the
+reply through `extractContent`, the same blanket "fall back to `reasoning_content` when `content`
+is empty" helper internal callers use. On a thinking model that spent its whole turn budget
+reasoning (`finish_reason === 'length'`), `content` comes back empty with no answer at all — only
+chain-of-thought sitting in `reasoning_content` — and `extractContent` dutifully returned that CoT
+as if it were the reply, which this path then spoke aloud on the live call
+[@llm-call-js] [@voice-chat-turn-js]. `runVoiceTurn` now calls `extractTurnReply(choice)` instead,
+which returns `''` specifically on `finish_reason === 'length'` rather than falling back — see
+[Engineering conventions](../reference/engineering-conventions)'s RULE A ward-facing corollary for
+the general rule and the matching fix on the non-stream `/api/chat` path itself.
+
+Returning `''` instead of a CoT dump means a budget-exhausted turn would otherwise go silently
+dead. `runVoiceTurn` closes that gap with one bounded retry — the spoken counterpart to a
+web-client empty-reply retry — capped to a single extra round-trip so the existing 90-second
+per-turn timeout (`VOICE_TURN_TIMEOUT_MS`) still bounds both attempts and a live call stays
+responsive [@voice-chat-turn-js]. The retry is tuned to *why* the first attempt came back empty:
+a `finish_reason === 'length'` first attempt spent its whole budget thinking, so a same-cap retry
+would just re-fail — that case retries at a doubled cap (`VOICE_RETRY_MAX_TOKENS`, 8000 vs. the
+base `VOICE_BASE_MAX_TOKENS`, 4000), the codebase's own "raise `max_tokens`" remedy for a thinking
+model. A truly empty (transient) reply retries at the same base cap [@voice-chat-turn-js].
+
+An HTTP failure is a separate case, handled by a pure, unit-tested helper,
+`voiceHttpRetryPlan(status, retryAfterHeader)`, so the retry-or-not policy is exercised directly
+rather than only through the live turn [@voice-chat-turn-js]:
+
+- **5xx or 408** (overload, gateway hiccup, timeout) is transient — retry once after the
+  `Retry-After` header's wait, or an 800 ms default when the header is absent.
+- **429 is dual-use.** Providers return 429 for both hard quota exhaustion (which will not refill
+  on a retry) and transient rate- or concurrency-limiting (which will). `Retry-After` is the
+  honest signal that tells the two apart: a 429 is retried only when it names a wait the call can
+  afford; a bare or long 429 is treated as quota and left alone.
+- **Any other 4xx** (400/401/403/404/422) is never retried — an identical request fails
+  identically.
+
+The wait itself is capped at 3 seconds (`RETRY_BACKOFF_CAP_MS`): a live call cannot freeze longer
+than that waiting on a retry, so a `Retry-After` beyond the cap reads as "not now" and the turn is
+dropped rather than stalling the conversation. `Retry-After` is parsed from either a plain number
+of seconds or an HTTP date [@voice-chat-turn-js].
 
 ## Text-in-voice interleave: typing into a live call (0.11.85-alpha)
 

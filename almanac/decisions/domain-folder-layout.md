@@ -8,6 +8,9 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: surface-events-js
+    type: file
+    path: src/pondering/surface-events.js
 ---
 
 # Domain Folder Layout: Moving Root Modules Into src/<domain>/
@@ -75,6 +78,31 @@ folders across most migrated domains, not only voice; and source-scanning tests 
 moved file as a **literal path string** (`read('voice-transcribe.js')`) need surgical updates,
 distinct from a blanket string replace that would also corrupt unrelated substring assertions
 [@repo-organization-plan].
+
+**A worked instance of the first hazard, caught well after the fact.** `surface-events.js` moved
+into `src/pondering/` on 2026-09-07, carrying `DEFAULT_TOMES_DIR =
+path.resolve(__dirname, 'tomes')` unchanged. After the move, `__dirname` resolved to
+`src/pondering/`, so that expression pointed at `src/pondering/tomes/` instead of the repo's real
+`tomes/` directory — the exact depth-hop break this page's hazard paragraph describes, just not
+caught before it shipped. The real store, `tomes/.surface-events.json`, froze on the move date,
+while every live surface-offer/outcome event written after it landed in a new, untracked,
+un-ignored file one level down that nothing was reading from. The fix, once found, resolves the
+path from `REPO_ROOT` like every other state-owning module and adds a one-time boot migration,
+`migrateStraySurfaceEvents()`, that folds the stray file back into the canonical store — merging
+events deduped by id, keeping the newer `last_reflection_at`, then deleting the stray so a later
+boot cannot re-merge it — with a guard that refuses to act (and never deletes) if the stray and
+canonical directories ever coincide [@surface-events-js]. `.gitignore` gained `src/**/tomes/` as a
+safety net against the same mistake recurring under any other `src/` folder; seven weeks later
+that glob pattern itself caused a different incident (a tracked source file silently matching the
+same wildcard) — see [Tomes and keyword lore](../architecture/tomes-and-lore)'s "Two gotchas"
+section.
+
+The lesson this incident adds to the hazard paragraph above: the breakage is silent in the
+specific sense that matters most for a background store — no error, no crash, no failing test, a
+file just quietly stops being read from. A domain move's test suite passing green is evidence the
+*code paths* still execute, not evidence that every `__dirname`-relative path inside a moved file
+still points at the right place; that check has to be done by eye, file by file, against the
+`REPO_ROOT` convention.
 
 ## Status
 

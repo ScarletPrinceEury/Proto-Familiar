@@ -86,9 +86,14 @@ all landing together in 0.14.83-alpha:
   rule this note is the reference implementation of; this decision is why the note's *wording*
   changed, not just its mechanism.
 - **The last-turn line**, `lastTurnRecord` in `message-sanitize.mjs`, which tells the Familiar
-  at the start of its next turn what its previous turn actually ran: the line used to read in an
-  audit voice ("from the app's record"); it now reads "[Last turn, tools used: ...]" or "[Last
-  turn: no tools used.]" — a record, not a verdict [@message-sanitize].
+  at the start of its next turn what its previous turn actually ran. The mechanism itself is
+  older than this decision — it shipped in 0.14.76-alpha to close a gap in `collapseToolTurns`
+  where stripped tool-call scaffolding left history teaching the model that narrating a result
+  was the same as running it; see [Engineering conventions](../reference/engineering-conventions)'s
+  "Tool-call scaffolding is turn-internal" section for that incident. This decision only changed
+  its wording: the line used to read in an audit voice ("from the app's record"); it now reads
+  "[Last turn, tools used: ...]" or "[Last turn: no tools used.]" — a record, not a verdict
+  [@message-sanitize].
 
 A later related fix (0.14.86-alpha) extended `lastTurnRecord` to also name a tool call that a
 model wrote out as literal text instead of actually invoking — see [Engineering

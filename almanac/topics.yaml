@@ -165,3 +165,9 @@ topics:
   description: The fail-closed web-speakers naming gate and the two-way bridge
     and mailbox it enables between Claude Code and the Familiar
   parents: [architecture, sessions]
+- slug: resilience
+  title: Resilience
+  description: Bounding slow or stuck awaits (provider calls, MCP calls, tool
+    calls) and containing crashes, so one hang or throw can't wedge a Discord
+    room, a background loop, or the whole server
+  parents: [architecture]

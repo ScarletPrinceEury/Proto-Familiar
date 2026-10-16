@@ -65,6 +65,60 @@ sources:
   - id: pondering-consolidate-js
     type: file
     path: src/pondering/pondering-consolidate.js
+  - id: voice-chat-turn-js
+    type: file
+    path: src/voice/voice-chat-turn.js
+  - id: settings-store-js
+    type: file
+    path: settings-store.js
+  - id: contact-baselines-js
+    type: file
+    path: src/safety/contact-baselines.js
+  - id: wait-streak-js
+    type: file
+    path: src/safety/wait-streak.js
+  - id: audit-wiring-script
+    type: file
+    path: scripts/audit-wiring.mjs
+  - id: voice-notes-test
+    type: file
+    path: tests/voice-notes.test.mjs
+  - id: resolve-uv
+    type: file
+    path: scripts/lib/resolve-uv.mjs
+  - id: json-state
+    type: file
+    path: src/util/json-state.js
+  - id: core-prompts
+    type: file
+    path: core-prompts.js
+  - id: guide-chat
+    type: file
+    path: guide-chat.js
+  - id: memorization
+    type: file
+    path: src/memory/memorization.js
+  - id: injection-guard
+    type: file
+    path: injection-guard.js
+  - id: own-files
+    type: file
+    path: own-files.js
+  - id: excerpt-js
+    type: file
+    path: src/util/excerpt.js
+  - id: hippocampus-js
+    type: file
+    path: src/memory/hippocampus.js
+  - id: memory-module
+    type: file
+    path: phylactery/src/phylactery/memory.py
+  - id: excerpt-test
+    type: file
+    path: tests/excerpt.test.mjs
+  - id: turn-log-js
+    type: file
+    path: src/diagnostics/turn-log.js
 ---
 
 # Engineering Conventions
@@ -143,6 +197,49 @@ existing monthly one was built as one tier-parameterized engine (`selectTierTarg
 fold function, with the monthly tier's own exports rewritten as thin wrappers over the shared
 engine so its public contract did not change [@pondering-consolidate-js].
 
+A late-September 2026 pass found and fixed three more instances of the same mistake, all with
+the same shape: logic that should exist once had quietly drifted into two or three places that
+had to be kept in sync by hand.
+
+- **`resolveUv()`** (find the `uv` binary across the install locations Astral's installer uses)
+  existed as three byte-identical copies — in `ensure-phylactery-deps.mjs`, in
+  `ensure-unruh-deps.mjs`, and as `thalamus.js`'s own `resolveUvBinary()` — with one copy's
+  comment literally saying "Mirror thalamus.js's resolveUvBinary()" as an acknowledgment of the
+  duplication rather than a fix for it. It is now one `resolveUv()` in
+  `scripts/lib/resolve-uv.mjs`, imported by all three call sites; `thalamus.js` kept its own
+  comment at the import site explaining the GUI-launcher/ENOENT rationale that is specific to
+  its `StdioClientTransport` use and not captured by the generic helper [@resolve-uv].
+- **`readJsonStateSync`** — six separate modules each hand-rolled the same "parse a JSON file,
+  never throw, fall back on missing/corrupt/non-object" dance for their own sync state file
+  (voice clips catalogue, call-engine active-call check, browser page watches, the weather
+  mirror, the pondering web budget, and `wait-streak.js`'s streak tally). `json-state.js`
+  already owned an async version, `readJsonState`; this added the sync sibling
+  `readJsonStateSync(file, fallback)` with the identical contract, so all six callers adopted
+  one tested implementation instead of six subtly-varying inline `try`/`catch` blocks
+  [@json-state]. The `wait-streak.js` adoption was deliberately scoped as behavior-preserving
+  only — it is a `src/safety/` file (see the Safety-critical sign-off rule below), and the
+  change touches only the streak-tally file read, not any gate or threshold.
+- **The ward-field framing** (the `[Character Profile]`/`[Human Profile]` block: headers, field
+  order, and the `'\n\n---\n\n'` join) was assembled independently in `core-prompts.js`'s
+  `coreSystemSegment` (the server chat path) and in `guide-chat.js`'s `buildGuideSystem` (the
+  settings web-search guide) — the two had to be kept matching by hand, and a header rename in
+  one would silently diverge the other. The un-substituted assembly is now a single
+  `coreFieldsBlock(settings)` in `core-prompts.js`; `coreSystemSegment` calls it and substitutes
+  macros over the result, and `guide-chat.js` imports it and folds it into its own larger
+  assembly before substituting once over the whole thing, so no caller double-substitutes
+  macros [@core-prompts] [@guide-chat].
+
+Recomputing the same thing inside one call site, every time it runs, is the same waste as
+copy-pasting logic across files — it just costs cycles instead of maintenance risk.
+`injection-guard.js`'s `sanitizeExternal` used to rebuild all 13 of its global-flagged
+detection regexes with `new RegExp(...)` on every call, on every inbound web/Discord message;
+they are now precomputed once at module load as `INJECTION_PATTERNS_G`, which is safe because
+`String.replace` resets a global regex's own `lastIndex` on each call [@injection-guard].
+`own-files.js`'s `readOwnFile` used to call `stat` twice — once to size the read cap, again only
+to compute `truncated` — when the first stat's size already answers both questions; it now
+stats once and reuses the result, which is also more correct, since a second stat could observe
+a different size if the file changed between the two calls [@own-files].
+
 ## Modular by default; orchestration files are the exception
 
 New logic defaults to a focused module. `cerebellum.js` and `thalamus.js` are deliberately
@@ -151,6 +248,20 @@ architecture, not a single-responsibility violation, and should not be reflexive
 unrelated logic that could live in its own file should not be piled into them either
 [@claude-md]. See [Architecture](../architecture) for what each of those two files actually
 owns.
+
+The same judgment applies one level down, inside a single wide function: split off the
+self-contained sub-steps, but keep the true connective spine intact. `processJob` in
+`src/memory/memorization.js` — the ~400-line memorization orchestrator — had four genuinely
+self-contained, narrow-surface concerns (building the name/alias lookup, filing deferred
+session follow-ups, logging passive tracker observations, and routing extracted relations to
+the graph) pulled out into named module-level helpers (`buildByNameLookup`,
+`createSessionFollowups`, `logTrackerObservations`, `routeRelationsToGraph`), each independently
+testable and each already covered by its own pipeline test [@memorization]. The per-fact loop
+itself was deliberately **not** extracted: it reads about ten shared-state values, mutates
+`created`/`pendingConsent` across iterations, is the function's true connective spine, and has
+a recorded crash history of its own. Splitting it for symmetry would have added regression
+surface for a readability gain that is low compared to the risk — the same reasoning that keeps
+`cerebellum.js` and `thalamus.js` whole above, applied to a single function rather than a file.
 
 ## Ride existing requests; gate in code
 
@@ -210,7 +321,12 @@ MCP peer never takes another one's context or delivery down with it. Failures th
 must be observable — delivery state recorded on the item, triage decisions logged, degraded
 peers logging loudly at boot — because silent failure is exactly the failure mode this rule
 exists to prevent [@claude-md]. See [Architecture](../architecture) and
-[Autonomous loops](../architecture/autonomous-loops) for where this is implemented.
+[Autonomous loops](../architecture/autonomous-loops) for where this is implemented. A stalled
+`await` — rather than a thrown error — is the sharpest version of this rule: a provider call
+that never settles can hold a Discord room's turn queue, a background loop's tick guard, or an
+HTTP response open indefinitely with nothing to log, because nothing ever throws. See
+[Stall resilience](../architecture/stall-resilience) for the deadlines and watchdogs that bound
+every such await, and why none of them can truly cancel slow work — only stop waiting on it.
 
 ## Token-conscious operation
 
@@ -295,6 +411,41 @@ the deliberation readers (`getRecentSessionMessages`/`formatRecentMessagesForCon
 skipped carriers on their own (a `tool_calls`-length check plus a non-empty-string content
 filter), so they were never affected by the bug and did not need this helper [@message-sanitize].
 
+**Stripping the scaffolding has a side effect: history stops proving a past action happened
+(0.14.76-alpha).** Dropping `tool_calls` and the `role:'tool'` results closes the null-carrier
+bug above, but over a long session it leaves nothing in history to distinguish a turn that
+really called a tool from a turn whose reply merely claims one ran — the assistant's own
+sentence becomes the only trace either way. `src/diagnostics/turn-log.js`, a parallel
+diagnostic log built in the same release (`logs/turn-tools.jsonl`, read back by
+`GET /api/turn-diagnostics`; see [Autonomous loops](../architecture/autonomous-loops)'s
+Diagnostics panel section), is what made the pattern legible: ten logged turns alternated
+between single calls that genuinely ran and rounds that ended in zero tool calls whose reply
+still read "Ran and logged, ok" — no call was ever silently dropped by the loop itself
+[@turn-log-js]. The cause was structural, not a one-off confabulation: `collapseToolTurns`
+erased every past action's evidence, so history itself taught that *writing* "ran — ok" IS the
+action.
+
+The fix adds an opt-in second argument, `collapseToolTurns(messages, { records: true })`, used
+at both live provider-history boundaries (`server.js`'s `/api/chat` handler and both
+`discord-gateway.js` history-assembly sites) [@server-js] [@discord-gateway-js]. A turn that
+really ran tools gets one extra message appended right after it — `role: 'system'`, starting
+`[App record of that turn: I called save_memory (ok).]` — built from the calls and results
+collapse had just stripped; a turn that only narrated gets no such record, so the two are
+distinguishable in history again [@message-sanitize]. The record is a system message rather
+than assistant text on purpose: the model writes assistant turns, never these, so it cannot
+confuse the app's own record with something it said. `message-sanitize.mjs`'s
+`lastTurnRecord(messages)`, from the same release, is the companion fact placed at the START of
+the Familiar's *next* turn instead of inside history: one line naming what the previous turn's
+assistant messages actually ran, read from stored history rather than from the model's own
+memory of what it meant to do [@message-sanitize]. Both mechanisms answer the same question
+("did a tool call I remember actually happen?") from opposite ends of the turn boundary — one
+retrospective and inside history, one prospective and outside it — because a single fix at only
+one end would have left the other blind spot open. See
+[Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) for the
+0.14.83-alpha pass that reworded `lastTurnRecord`'s output (and see the section below, "A gap is
+reported as a plain fact, never a verdict," for its current wording); this section is about why
+the mechanism exists at all, not its voice.
+
 **Generalization:** this is the same family as the `stripLlmTimestamps` rule in
 [Exact values are code's job](../decisions/exact-values-in-code) — clean contaminated content
 at the boundary where stored history re-enters the model, not only at the point it is
@@ -352,6 +503,38 @@ fold on an always-thinking connection either timed out or came back with an empt
 fallback. See [Phylactery](../architecture/phylactery) for the fix and why the reasoning-content
 fallback is safe there specifically.
 
+**RULE A's ward-facing corollary — `extractContent`'s reasoning fallback is for internal
+artifacts only; a reply the ward can see, store, or hear needs the length-aware shape.**
+`extractContent`'s blanket "fall back to `reasoning_content` when `content` is empty" is correct
+for Phylactery's rollups and other private notes, but it has a failure mode on an interactive
+turn: when a thinking model hits `finish_reason === 'length'`, it spent its entire budget
+reasoning and produced no answer at all — only chain-of-thought parked in `reasoning_content`.
+Folding that into `content` on a ward-facing path surfaces the raw CoT as if it were the reply
+(2026-09-29). Before the fix, `server.js`'s non-stream `/api/chat` path folded reasoning into
+content on ANY empty `content`, with no `finish_reason` check, so a budget-exhausted turn's raw
+CoT reached every non-stream caller that path serves — rendered and stored on the web chat,
+saved as a handoff, shown in guide-chat, and, worst, spoken aloud on a voice call
+[@server-js] [@llm-call-js].
+
+`extractTurnReply(choice)` in `llm-call.js` is the fix: real content wins; empty content with
+`finish_reason === 'length'` returns `''` (budget exhaustion — the caller treats it as no-reply,
+never a CoT dump); empty content otherwise falls back to `reasoning_content`/`reasoning`, the
+case where a proxy legitimately parks a *finished* answer there [@llm-call-js]. Two coordinated
+changes landed together because each has its own callers: `server.js` now skips the reasoning
+fold on `finish_reason === 'length'` (`choice.finish_reason !== 'length'` guards the call to
+`foldReasoningIntoContent`), so content stays empty and the ordinary empty-reply handling fires
+instead [@server-js]; and `voice-chat-turn.js`'s `runVoiceTurn`, which does its own recovery
+rather than relying on the server's fold, swapped `extractContent` for `extractTurnReply` so the
+same guarantee holds on the path that speaks the reply aloud [@voice-chat-turn-js].
+
+The rule of thumb: **use `extractContent`'s reasoning-content fallback for internal artifacts**
+(Phylactery's consolidation summaries, deliberation notes — nothing the ward reads directly),
+**use `extractTurnReply`'s length-aware shape for anything ward-facing** — rendered on screen,
+stored as a handoff or memory, or spoken aloud [@llm-call-js] [@consolidate-module]. This is the
+corollary [Phylactery](../architecture/phylactery) names when it explains why Phylactery's own
+`_call_llm` is safe using the plain reasoning-content fallback: consolidation output is the
+Familiar's own private notes, never a user-facing reply, so the corollary does not apply there.
+
 **RULE B — budget exhaustion is never silence.** Every cap, limit, timeout, or retry ceiling
 must define, before it is built: what the ward sees, what the Familiar is told (its own tool
 result must record that an action did not run — a dropped cutoff manufactures confident
@@ -387,11 +570,12 @@ copy-pasted into each call site [@cerebellum-js]. Its wording states what happen
 next ("my tool budget for this turn is used up, so the calls I just asked for didn't run... If
 they tell me to go on, I get a fresh budget and carry on") with no caps-lock verdict.
 
-`message-sanitize.mjs`'s `lastTurnRecord(messages)` builds the companion fact for the *next*
-turn: a one-line record of what the previous turn's assistant messages actually ran, read from
-stored history rather than from the model's own memory of what it meant to do [@message-sanitize].
-It renders `[Last turn, tools used: ...]` or `[Last turn: no tools used.]` — plain record, not
-the audit-voiced "from the app's record" phrasing an earlier version used.
+`message-sanitize.mjs`'s `lastTurnRecord(messages)` — introduced in 0.14.76-alpha for the reason
+given in "Tool-call scaffolding is turn-internal" above — builds the companion fact for the
+*next* turn: a one-line record of what the previous turn's assistant messages actually ran, read
+from stored history rather than from the model's own memory of what it meant to do
+[@message-sanitize]. It renders `[Last turn, tools used: ...]` or `[Last turn: no tools used.]`
+— plain record, not the audit-voiced "from the app's record" phrasing the 0.14.76 original used.
 
 **Text tool calls get named too (0.14.86-alpha).** Some models, some of the time, write a tool
 call out as literal text instead of invoking it — a `<tool_call>` tag, a `<function=name>` tag, a
@@ -404,6 +588,54 @@ X written out as text, which doesn't run it." for anything written but never cal
 a fact about what happened, not as a mistake — and a real call of the same name in the same turn
 clears the note. The turn log records `textToolCalls` per round so the pattern is visible outside
 the live prompt too.
+
+## A clipped view of your own past words reads as an unfinished sentence (0.14.69-alpha)
+
+A silent fixed-length cut on text the Familiar reads back about itself produces a specific,
+recurring misread: a reply that went out complete reads back as one that broke off, and the
+Familiar apologizes for an unfinished sentence it actually finished. This shipped independently
+on three surfaces, each clipping a different way, before the shared fix: the hippocampus kept a
+stored reply's first 279 characters plus `"…"` [@hippocampus-js]; `formatRecentMessagesForContext`
+(noticing's and warm reach-out's recent-lines rendering) stopped silently at 300 characters,
+sometimes mid-word [@cerebellum-js]; and triage's recent-lines rendering stopped silently at 400
+— which meant a crisis sentence placed at the END of a long message never reached triage at all
+[@cerebellum-js].
+
+This shipped across three call sites feeding [Memory and knowledge](../architecture/memory-and-knowledge)'s episodic-memory surface (the hippocampus) and [Noticing](../architecture/noticing)'s recent-conversation rendering; see those pages for what each surface is for. `src/util/excerpt.js`'s `excerpt(text, max)` is the shared fix: text over budget keeps its START
+and its real END, both cut at a word boundary, joined by an explicit `EXCERPT_MARKER`
+(`[… cut for length …]`) rather than a trailing `"…"` that reads as mid-thought [@excerpt-js]. The
+real ending is what proves the message was complete; the marker is what says the *display* was
+shortened, not the message itself. `headAt`/`tailAt` only snap to a word boundary when doing so
+does not throw away more than 30% of the side being cut (`BOUNDARY_SLACK`) — one long unbroken
+run (a URL, a run-on word) is cut hard instead of searching indefinitely for a space that is not
+there [@excerpt-js]. Text within budget returns untouched.
+
+**Not every surface gets the same budget, because not every surface carries the same cost of a
+cut.** The hippocampus and the noticing/warm-reach-out renderer kept their existing 300-ish
+character budgets, now excerpted instead of silently truncated [@hippocampus-js] [@cerebellum-js].
+Triage is different: `renderTriageSliceBody` (`cerebellum.js`) shows its newest
+`TRIAGE_UNCUT_LATEST` (5) lines of a slice **whole, at any length** — they are the context a
+safety decision actually rests on, so nothing about them may be shortened — and only an *older*
+line is excerpted, and only past `TRIAGE_LINE_CEILING` (10,000 characters), so a single
+pathological paste earlier in the conversation cannot push the whole prompt past the model's
+context window and fail every deliberation on that slice [@cerebellum-js]. This is a direct
+instance of the robust-over-cheap ordering elsewhere on this page: the cheap fix (apply the same
+300-character excerpt everywhere) would have reintroduced the exact bug triage needed fixed,
+since a crisis sentence sitting past character 300 of a long message is the failure this surface
+cannot afford.
+
+`tests/excerpt.test.mjs` pins the helper directly, a hippocampus round-trip (a long reply renders
+with its real ending), legacy entries stored before the fix (which still end in `"…"` and render
+with the marker appended until they age out of retention), the noticing/reach-out formatter, and
+triage's newest-whole/older-capped split [@excerpt-test].
+
+**The same clipping shape is still open on a surface this fix did not reach.** Phylactery's
+`recall` tool builds its result excerpts as a bare `content[:300]` in four places in `memory.py`,
+with no cut marker at all [@memory-module]. A ward-facing identity review hit exactly the
+predicted failure: the Familiar read a cut-off recall as "this fact isn't saved yet," saved a
+near-duplicate, then found the full text with `read_memory_by_id` and deleted its own duplicate.
+Phylactery needs the same start-and-real-end excerpting `src/util/excerpt.js` already gives the
+Node side; until then, treat any `memory.py` excerpt as unmarked and possibly cut mid-word.
 
 ## Safety-critical sign-off
 
@@ -634,3 +866,81 @@ so the names no longer collide on the `intention_set` prefix; only the model-fac
 MCP call kept its own name [@cerebellum-js]. The convention: when two Familiar-facing tools are
 siblings, make sure neither name is a prefix of the other — the model picks by name, and a
 shared prefix is a selection hazard, not just a cosmetic overlap.
+
+## Second full-codebase audit (2026-09-29): one open gap, settings-access dedup
+
+A second full-tree re-audit (pass 2, following the 0.9.0 one referenced throughout this page)
+re-ran the original review questions across the whole codebase plus a dedicated
+optimization/clarity pass. Its headline finding was positive: every background loop still holds
+the hard-off-switch invariant from
+[Autonomous loops](../architecture/autonomous-loops)' shared contract, and no other systemic
+issue turned up. The one real, actionable finding is that an earlier dedup pass did not fully
+land, and it is still open as of this writing.
+
+A prior pass ("dedup extractions pt.1") pulled the inlined `JSON.parse(readFileSync(SETTINGS_FILE))`
+pattern into one leaf module, `settings-store.js`, exporting `readSettingsSync` and
+`SETTINGS_FILE` for both `cerebellum.js` (which owns the write path and re-exports
+`readSettingsSync` for its many callers) and `thalamus.js` (which sits below `cerebellum.js` and
+would otherwise create an import cycle) [@settings-store-js]. The second audit found the
+extraction reached thalamus and its downstream callers, but not every direct reader: as of this
+writing, `contact-baselines.js` and `wait-streak.js` each still define their own local
+`SETTINGS_FILE` constant and read the file independently rather than importing the shared reader
+[@contact-baselines-js] [@wait-streak-js]. On the write side, `writeSettingsPatch` in
+`cerebellum.js` is the one function that performs the locked, atomic tmp-write-then-rename against
+`settings.json`, but `discord-gateway.js`'s ward-console settings path (`patchWardSettings`)
+re-implements the same lock-plus-atomic-rename sequence against its own local
+`WARD_SETTINGS_FILE` constant instead of calling it [@discord-gateway-js]. Neither duplication is
+a correctness bug on its own — both copies read and write the same file correctly — but every
+module that keeps its own `SETTINGS_FILE` constant or its own write sequence is a copy that can
+silently diverge from the canonical one the next time the write contract changes. This is the
+"no copy-paste of substantial logic" rule above, caught by audit rather than by the original
+build: the fix proposed is to make `settings-store.js` the single home for the path, the read, and
+the write, with every remaining direct reader and the Discord write path importing it rather than
+re-declaring it.
+
+The audit's other action was a routine dead-code and stale-documentation sweep rather than new
+findings: a batch of confirmed-zero-caller symbols (an unused re-exported constant, a shadowed
+module-level helper whose only "call site" was dead by construction, an orphaned Python function)
+was removed after verifying no callers first, and a batch of comments and docstrings that still
+described retired designs (a renamed in-tree store, a "deferred to v2" feature that had since
+shipped, a pre-local-naive-time description of the temporal model) was corrected to match current
+behavior. Neither batch changed runtime behavior; both are the kind of drift that accumulates
+between audits and is cheapest to fix in the same pass that finds it.
+
+## A check that reads a stripped copy of the source can pass green on nothing
+
+The second audit also retired an existing wiring check rather than fixing it, for a reason worth
+keeping as a general lesson. `scripts/audit-wiring.mjs` had a check asserting that every setting
+synced from the client is actually read somewhere server-side. The check was dead on arrival: it
+matched key names against a comment-and-literal-stripped copy of `app.js` it built for a different
+purpose, so it always found zero keys and printed a passing checkmark regardless of what the real
+code did [@audit-wiring-script]. A check that evaluates a transformed or filtered copy of the
+source, instead of the source itself, can pass vacuously — the green result proves the copy was
+empty, not that the property holds.
+
+Fixing the check's plumbing would not have made it a good check, though. "Synced but unread
+server-side" is the normal shape of a client-only setting kept in sync for device portability (a
+UI preference like a theme toggle, say), not a bug signal — of the settings actually synced from
+the client, the large majority that showed up as server-unread were confirmed legitimately
+client-only. A correctly-wired version of this check would still be almost entirely false
+positives. The direction that actually causes bugs — a server read with no setting anywhere
+providing it, silently returning `undefined` — is a different check already covered elsewhere in
+the same script. The check was deleted with a tombstone comment recording why, so it is not
+reintroduced by someone who only notices it is missing [@audit-wiring-script]. The general lesson:
+before resurrecting or fixing a removed check, confirm what it would actually flag in the
+passing case, not only whether its plumbing could be made to run.
+
+## An assertion on a literal tests nothing, even when the test passes
+
+`tests/voice-notes.test.mjs` had a test named "a temp dir is not left behind" whose body asserted
+`assert.ok(true)` after an `fs.rm` call — syntactically a test, but verifying nothing about the
+code under test; a passing result told a reader only that `true` is truthy. The fix makes the
+test assert the actual claim in its name: it checks that a specific stray `os.tmpdir()` path the
+store must never write to is absent, proving the save path exercised by the write tests above it
+never leaked outside the real media store, with a `before` hook that clears any prior-run leftovers
+first so the assertion cannot pass by accident from a previous run's state [@voice-notes-test].
+This is the same family as the "Test discipline: assert, not narrate" rule above, in a sharper
+form: a test with an assertion that is a tautology (asserting a literal, or asserting a value the
+test itself just set) is indistinguishable from a comment at review time, and it rots exactly like
+an unasserted narration does — it just takes longer to notice because the test suite stays green, rather than reading plainly as
+a no-op on review.

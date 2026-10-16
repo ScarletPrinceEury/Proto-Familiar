@@ -17,7 +17,7 @@ sources:
   - id: phylactery-server
     type: file
     path: phylactery/src/phylactery/server.py
-    note: "contains identity_set_file and identity_delete_section MCP tool definitions"
+    note: "contains identity_set_file, identity_delete_section, and identity_remove_text MCP tool definitions"
   - id: fable-review-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
@@ -116,10 +116,11 @@ into a single oversized prompt (one observed case: 264 source rows) [@consolidat
 The fix brings `_call_llm` up to the same standard as `callProviderChat`, adapted for where the
 output goes: `_extract_message_content(message)` tries `content`, then `reasoning_content`, then
 `reasoning` — the Python mirror of `extractContent` — and this is safe here specifically because
-consolidation output is the Familiar's own private notes, not a user-facing reply, so the
-RULE B corollary against dumping raw chain-of-thought at the ward does not apply. The rule of
-thumb: use the reasoning-content fallback for internal artifacts, use the length-aware turn-reply
-shape for anything ward-facing [@consolidate-module]. `_call_llm` also retries once, but only on
+consolidation output is the Familiar's own private notes, not a user-facing reply, so
+[RULE A's ward-facing corollary](../reference/engineering-conventions) against dumping raw
+chain-of-thought at the ward does not apply here. The rule of thumb: use the reasoning-content
+fallback for internal artifacts, use the length-aware turn-reply shape (`extractTurnReply`) for
+anything ward-facing [@consolidate-module]. `_call_llm` also retries once, but only on
 `httpx.TimeoutException` (an HTTP error status is not blindly re-sent), and reads
 `max_tokens`/`timeout_s` from `cfg` with defaults of `8000` / `240.0` seconds so an old-shaped or
 test `cfg` still works [@consolidate-module]. For periods still too large at that cap,
@@ -176,6 +177,30 @@ The identity editor is now complete with two new operations, both auto-snapshot 
 - **`identity.delete_section(category, filename, section)`** — removes one `##` section (its heading, body, and the blank-line gap) from a file, or reports the section missing. Exposed as `DELETE /api/entity/identity/:cat/:file/sections/:section` on the server side and wrapped in `thalamus.deleteIdentitySection()`.
 
 The Knowledge editor's identity detail pane reflects these operations: an "Edit whole file" textarea replaces the per-section editor (working for any file, including prose-top content), and each section now has a "Delete section" button with a confirmation prompt [@architecture-doc]. A side effect: `VALID_FILENAME_RE` now allows hyphens in identity filenames (previously it was `[\w]+\.md`, so hyphenated names could never be saved — a latent correctness bug).
+
+Three more identity-editing tools followed once removal, not just addition,
+became necessary: `remove_from_identity` (`identity_remove_text`) cuts one
+quoted passage out of a file (exact match first, then whitespace-flexible;
+refused outright if the passage is missing or matches more than once, so it
+never guesses which occurrence was meant), `delete_identity_section` removes
+a whole `##` section heading and body, and `rewrite_identity_section` now
+refuses and returns the file's real headings on a miss instead of silently
+appending a new section — a bug that previously let a thalamus-side JSON-parse
+failure read a refusal (or an accidental append) back as a successful rewrite
+[@phylactery-server] [@thalamus-js]. These exist specifically so a line moved
+out of identity into a standing fact can actually be cut afterward, rather
+than only ever appended around. The three cut tools originally shipped in the
+conditional `memory-edit` tool module while `update_identity` (append) stayed
+CORE, so a turn that did not surface `memory-edit` could add to identity but
+not remove anything from it — a gap that surfaced in the first identity
+review, fixed in 0.14.75-alpha by moving all three into CORE beside
+`update_identity`; see [Tool surfacing and provider-safe ceiling](tool-surfacing)'s
+module-placement section for the incident. See
+[Care facts move out of identity into high-care standing facts](../decisions/care-facts-out-of-identity)
+for why that move mattered (care details pinned in identity rode into every
+room identity reaches, group chats included) and the token-budget/eligibility
+mechanics (`identityBudgetTokens`, the protected self core, the per-category
+graduation-eligibility rule) that decide which files the audit below reaches.
 
 The automated side of identity editing — the graduation audit that moves durable
 facts out of identity and into memory to keep the always-injected surface lean —
@@ -273,6 +298,8 @@ toggle [@phylactery-design].
 
 - [Holistic backup](holistic-backup) — the whole-install backup mechanism built to cover what
   Phylactery's own `backup.py` above does not: tomes, Unruh, and settings.
+- [Tool surfacing and provider-safe ceiling](tool-surfacing) — the module-placement incident
+  that moved the three identity-editing cut tools above into CORE beside `update_identity`.
 - [Multi-embodiment](../concepts/multi-embodiment) — why a canonical store exists at all.
 - [Unruh](unruh) — the sibling specialist that stays outside Phylactery by design (temporal
   context, mostly per-embodiment ponderings).

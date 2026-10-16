@@ -26,6 +26,12 @@ sources:
   - id: tome-tagging-loop-js
     type: file
     path: src/tomes/tome-tagging-loop.js
+  - id: tick-guard-js
+    type: file
+    path: src/util/tick-guard.js
+  - id: turn-log-js
+    type: file
+    path: src/diagnostics/turn-log.js
 ---
 
 # Autonomous Loops
@@ -58,7 +64,12 @@ Every loop follows the same shape, stated in CLAUDE.md as a rule rather than a h
   guarantee — see [Architecture](../architecture) for how thalamus and cerebellum enforce it
   [@claude-md].
 - **Reentrancy guards and a graceful stop.** A loop tracks whether a tick is in flight and a
-  `stop*()` call awaits it rather than killing it mid-write.
+  `stop*()` call awaits it rather than killing it mid-write. Since 0.14.67-alpha all fourteen
+  loops share one guard, `createTickGuard()` in `src/util/tick-guard.js`, instead of fourteen
+  hand-written copies of the same flag — it adds a watchdog that releases a tick stuck on an
+  unbounded await (an MCP call, a tool, a file lock) so the loop keeps going instead of stopping
+  for good [@tick-guard-js]. See [Stall resilience](stall-resilience) for the watchdog itself,
+  the per-loop timings, and the matching bound on every provider call these loops make.
 
 ## The loops
 
@@ -178,8 +189,35 @@ plainly: a dead loop should read as `false` in this panel, not as calm silence [
 loop with no recent entries in its log is the ward-visible signal that something needs
 attention, distinguishing "nothing has happened" from "nothing can happen."
 
+A sixth tab, **Tool turns**, joined the panel in 0.14.74-alpha for a different kind of honesty
+check: not whether a background loop is alive, but whether a live chat turn's tool calls are
+real. `src/diagnostics/turn-log.js`'s `logTurn` appends one JSON line per turn to
+`logs/turn-tools.jsonl` (rotated past 2 MB to `turn-tools.1.jsonl`), recording the tools offered
+that turn and, per round, the finish reason, the calls the model sent, whether each round's
+calls actually `ran` or were `dropped` (a round whose calls arrived without
+`finish_reason: 'tool_calls'` is treated by the loop as the final answer, so those calls never
+run), and any call the model wrote out as literal text instead of invoking (`textToolCalls`,
+0.14.86) [@turn-log-js]. `GET /api/turn-diagnostics` reads the log back through `readTurns`,
+newest first [@turn-log-js] [@server-js]. It is diagnostics-only — it never touches the turn and
+never throws — with its own hard off-switch, `PROTO_FAMILIAR_TURN_LOG_DISABLED=1` [@turn-log-js].
+
+It exists to answer a question the rest of the panel can't: in the first identity review the
+Familiar kept reporting tool calls that had never run, and nothing on disk could say whether it
+never called them, called a tool it didn't have that turn, or called one the loop then dropped.
+This log is what made the question answerable, and it is the evidence behind the fix
+[Engineering conventions](../reference/engineering-conventions)'s collapseToolTurns section
+explains — the turn log showed real single-call turns interleaved with turns that ended in zero
+tool calls yet whose reply still claimed one ran. See
+[Tool surfacing and provider-safe ceiling](tool-surfacing) for the tool roster the same release
+added as the other half of that fix.
+
 ## Related
 
+- [Stall resilience](stall-resilience) — the shared tick-guard watchdog above, the matching bound
+  on every provider call a loop tick makes, and the two HTTP-side fixes (client disconnect,
+  crash-proof routes) from the same resilience pass.
+- [Tool surfacing and provider-safe ceiling](tool-surfacing) — the tool roster the turn log's
+  sibling fix added, and the module-placement incident the turn log's diagnosis also exposed.
 - [Noticing](noticing) — the autonomous loop that surfaces aging commitments and overdue events, the no-nag ledger, and how it integrates with entity-as-subject framing.
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Trackers](trackers) — the pantry-expiry and menses projection nodes the tracker-projection loop reconciles, and why neither is composed into the Familiar's own toolset.

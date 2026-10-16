@@ -74,6 +74,18 @@ sources:
   - id: websearch-js
     type: file
     path: src/search/websearch.js
+  - id: browse-gate-js
+    type: file
+    path: src/browser/browse-gate.js
+  - id: page-read-js
+    type: file
+    path: src/browser/page-read.js
+  - id: tool-surfacing-js
+    type: file
+    path: tool-surfacing.js
+  - id: browser-first-reading-test
+    type: file
+    path: tests/browser-first-reading.test.mjs
 ---
 
 # Browser: Click-and-Fill Web Access
@@ -839,6 +851,62 @@ extraction gap. Interactive `browse_open`/`browse_act` on Reddit also remains op
 reader fixes `read_webpage` only, and a real click-and-fill session there still drives a browser
 Reddit's anti-bot wall can fingerprint.
 
+## The browser becomes how the Familiar reads pages; `read_webpage` becomes its fallback (0.14.65-alpha)
+
+Before this change, the Familiar kept reaching for `read_webpage` instead of its own browser
+tools even with browsing turned on, and the cause was its own tool descriptions: `web_search`
+told it the links it returned were ones "I can then open with `read_webpage`", and `browse_open`
+itself said "`read_webpage` is cheaper for plain reading, so I try that first" — both description
+strings pointed at the plain reader as the default, regardless of what was actually offered that
+turn. The ward's decision reframes the relationship: **when the browser is on, it is the page
+reader, and the plain reader exists only as its fallback** when the browser cannot open a page.
+
+`composeActiveTools` now offers exactly one page reader per turn, decided by
+`browser-gate.js`'s `browserReadsPages(settings)` — true when `browseEnabled(settings)` is true
+and the ward has not pinned `webReadBackend: 'static'` [@browse-gate-js]. That one predicate
+drives both sides of the choice in `cerebellum.js`: `read_webpage` is filtered out of the tool
+list whenever the browser is the reader, and `withPageReaderModule` makes sure whichever reader
+is actually in play rides alongside the `web` module's surfacing trigger — a web turn pulls in
+`browser` when the browser reads, or `web` when a pasted link is read by the plain path, so a
+search followed by an open never costs a `request_tools` round trip just to reach the tool that
+was always going to be offered [@cerebellum-js] [@tool-surfacing-js]. `browse-gate.js` is
+deliberately import-free: it holds only this yes/no question, so the tool composer that asks it
+every turn does not have to pull the whole browser engine into its static import graph
+[@browse-gate-js]. With browsing off, `browse_*` is not advertised at all — browser spec §10
+always said so, but until this fix the tools still appeared and simply answered "turned off"
+when called, which is a more expensive and more confusing failure than never offering them.
+
+**The fallback is in code, not left to the model's judgment.** `browse_open` gained a `level`
+parameter — `level: 'text'` reads the page and returns its content in one call, instead of the
+model needing a separate `see` after `open` — and a fallback that fires on a missing browser, a
+launch or navigation failure, or the site answering 401/403/429/5xx (the driver now records a
+page's HTTP status specifically so this case is distinguishable from an ordinary read failure)
+[@browser-js]. The fallback calls `page-read.js`'s `readPageText(url, { liveRead: false, ... })`
+— the same reading ladder `read_webpage` itself runs, just with the live-browser rung skipped,
+since the browser is the thing that just failed [@page-read-js]. The result names what happened
+plainly ("there's no live page open for me to click on") so the Familiar does not go on to try to
+click or fill an element on a page it never actually opened. The fallback never fires for a site
+the ward's site mode blocks, or during a pending handoff — those cases keep their existing honest
+refusals rather than silently degrading to a different reader. A registered gated site (Reddit)
+opened at `level: 'text'` skips straight to its own reader instead of the browser, for the same
+anti-bot reason [Reader router](reader-router) routes `read_webpage` around Reddit already.
+
+**The reading ladder moved, not just the fallback wiring.** `page-read.js` now holds the
+site-reader → live-browser → static-fetch ladder that used to live only inside the
+`read_webpage` executor, with behavior unchanged — it moved so `browse_open`'s in-code fallback
+could call the exact same ladder instead of a second copy of it [@page-read-js]. A `.gitignore`
+entry (`browser/`, unanchored) had been quietly matching `src/browser/` too, so new source files
+added under `src/browser/` during this change were silently left out of earlier commits; it is
+now anchored to `/browser/` so only the runtime profile/vault/Chromium directory stays ignored.
+
+The behavioral contract this fixes: a tool's own description must never recommend reaching for a
+tool that `composeActiveTools` is not actually going to offer that turn. See [Tool
+surfacing](tool-surfacing) for the broader module-composition mechanism this reader choice rides,
+and `tests/browser-first-reading.test.mjs` for the coverage — which reader is offered under each
+settings combination, the module-surfacing pull-in, that no description names an unoffered
+reader, the `level` behavior, each fallback path, and a pipeline run through the real reader and
+extractor against a browser that cannot launch [@browser-first-reading-test].
+
 ## Related
 
 - [Reader router: reading gated and blocked sites](reader-router) — the 0.11.30
@@ -865,3 +933,6 @@ Reddit's anti-bot wall can fingerprint.
   where `sourcesBlock()`'s output lands in the ponder prompt.
 - [Autonomous loops](autonomous-loops) — the shared loop contract page watches follows, and
   where it sits alongside the app's other background workers.
+- [Tool surfacing](tool-surfacing) — `composeActiveTools`'s module-composition mechanism that
+  the one-page-reader-per-turn rule (0.14.65) rides, and the general contract that a tool
+  description must never point at a tool the current turn does not actually offer.

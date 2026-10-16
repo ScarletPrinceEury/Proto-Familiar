@@ -208,6 +208,10 @@ rather than asking the model to be more careful about what it condenses.
 
 ## Related
 
+- [Care facts move out of identity into high-care standing facts](care-facts-out-of-identity)
+  — the preceding 0.14.70–0.14.73 work this decision's graduation audit inherits: the identity
+  token budget, the eligibility rule this page's `run_graduation_audit` runs against, and the
+  `care_weight`/`high_care` vocabulary `apply_cleanup_proposal`'s own `high_care` parameter reuses.
 - [Archive before destructive autonomous writes](archive-before-destructive-autonomous-writes)
   — the earlier, broader decision this one specializes: that incident's
   snapshot-and-restore shape caught *deletion*, but did not by itself catch a

@@ -103,6 +103,20 @@ loads into `tomeCache`: it filters out dotfile bookkeeping (`.consent-pending.js
 `.memorization-queue.json`) via `isTomeFile`, and skips a corrupt tome file rather than
 throwing, because a bad lore file must never break a chat turn [@tome-store-js].
 
+Before a later fix, `isTomeFile` admitted anything non-dotfile that ended in `.json`, so a
+`Sample*.json` reference lorebook left sitting in `tomes/` (already git-ignored, meant to be read
+on disk as a dev reference, not injected) was scanned and activated like any real tome. `isTomeFile`
+now also rejects any file whose name starts with `Sample` [@tome-store-js]. Every injection site
+gates through this one predicate: server-turn injection (`readAllTomes`), the Familiar's own tome
+listing (`listTomesSummary`), and the `/api/tomes` list that feeds the browser's `tomeCache`, so
+the browser is covered transitively even though it never calls `isTomeFile` itself — it just
+refetches from `/api/tomes` and never persists a stale cache across a server restart
+[@tome-store-js] [@server-js]. `server.js` had carried its own byte-identical copy of `isTomeFile`
+rather than importing the one in `tome-store.js`; that duplication was removed in the same change,
+specifically because two independent copies of the same predicate are exactly the shape of drift
+that lets a fix like the `Sample`-prefix rejection land in one copy and not the other
+[@tome-store-js].
+
 **Parity between the two engines is hand-maintained, not shared.** `public/app.js` is a
 classic browser script with no ES modules, so it cannot import `tome-lore.js`; the comment at
 the top of both files calls this out explicitly and says to change the matching logic in one

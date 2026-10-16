@@ -139,6 +139,14 @@ importing it themselves [@vision-js] [@media-retention-js] — one more reason e
 should ride `callProviderChat` in the first place (see
 [Engineering conventions](../reference/engineering-conventions), RULE A).
 
+Every one of those call sites inherits a bound that is enforced inside `llm-call.js` itself
+rather than at each caller: `callProviderChat` carries a 300-second default wall-clock deadline
+over the whole round-trip (headers and body), because a provider that sends headers and then
+trickles keep-alive bytes defeats undici's own idle timeout and never settles otherwise
+[@llm-call-js]. See [Stall resilience](stall-resilience) for why that bound exists, the narrower
+deadlines silence triage and noticing use instead of the shared default, and the matching
+Discord-side and tick-level bounds from the same resilience pass.
+
 On the settings side, `public/app.js` (a classic script, not an ES module, so it cannot import
 `providers.js`) hand-maintains its own copies of `BASE_URL_PROVIDERS` and the keyless provider
 set, plus `connUsable(c)`, a client mirror of `connectionReady` [@app-js]. The mirror is not
@@ -165,6 +173,8 @@ of the provider work [@readiness-commit].
 
 ## Related
 
+- [Stall resilience](stall-resilience) — the default 300-second deadline every `callProviderChat`
+  call carries, why that number is safe, and the narrower bounds silence triage and noticing use.
 - [Tool Surfacing and Provider-Safe Ceiling](tool-surfacing) — the complementary mechanism that ensures tool schemas never exceed provider limits; a keyless local connection is usable here, and large tool registries are managed there.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how a saved connection
   gets bound to a specific background job in the first place; this page covers what happens once
