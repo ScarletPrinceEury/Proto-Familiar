@@ -53,6 +53,9 @@ sources:
   - id: crisis-classifier-spec
     type: file
     path: docs/crisis-classifier-build-spec.md
+  - id: text-normalize-js
+    type: file
+    path: src/util/text-normalize.js
 ---
 
 # Safety Spine
@@ -83,6 +86,35 @@ the LLM is reserved for interpreting the pattern once assembled, not for tagging
 [@claude-md]. The patterns are tuned for high precision specifically on the SEVERE tier — the
 regression suite CLAUDE.md points to watches phrases like "cut me off" or "I want to die from
 embarrassment," which read as crisis language on a naive scan but are not [@architecture-doc].
+
+### Normalizing spelling before the floor scores it
+
+The regex floor matches against the literal text, so a severe statement typed with a curly
+apostrophe or a slang contraction could slip past every pattern entirely: "I don't want to be
+here anymore" scored severe, but "I don't want to be here anymore" typed with a curly apostrophe,
+or "I don't wanna be here anymore," scored 0 — the ML head does not cover this gap either, since
+it is a second opinion layered on top of the floor, not a replacement for it. This was treated as
+a safety-floor miss and fixed without a softer alternative considered, because the floor's whole
+job is to catch the phrasing its patterns expect, and a spelling variant of an already-covered
+phrase defeating it is exactly the failure the floor exists to prevent.
+
+`normalizeForMatch()` in `src/util/text-normalize.js` is a shared matching-only normalizer:
+curly/prime apostrophes and quotes become straight ASCII, `wanna`/`gonna`/`gotta` expand to their
+full form, common un-apostrophed contractions (`dont`, `cant`, `wont`, `didnt`, `im`, `ive`,
+`isnt`, `doesnt`) regain their apostrophe on a whole-word match only, and runs of whitespace
+collapse [@text-normalize-js]. `scoreMessage()` in `crisis-signals.js` runs this normalizer on a
+**copy** of the message before matching; the stored and displayed message is never touched, and
+the patterns themselves are unchanged [@text-normalize-js] [@crisis-signals]. This makes the
+change raise-only by construction: normalizing the matched copy can only make a pattern that
+already exists match text it previously missed, never remove a match that already fired.
+
+`normalizeForMatch` is deliberately a separate module from `normalizeForMl`, the ML head's
+byte-for-byte mirror of its Python trainer (see below) — that mirror must never change, while the
+matching normalizer is free to grow as new spelling gaps surface [@text-normalize-js]. The ML
+input itself is not normalized by this change. `normalizeForMatch` is written as a general
+matching utility, not a crisis-signals-only helper, so the Tome keyword matcher and the shipped
+condition-tome rewrite can reuse the same normalization instead of each growing their own partial
+copy.
 
 ### A second opinion: crisis-classifier.js and scoreThreatMessage
 
