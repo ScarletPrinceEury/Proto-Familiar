@@ -26,10 +26,11 @@ below lets the Familiar drop a rule instead of carrying it:
   "an empty search tells me where it isn't, never where it is".
 - **Tomes.** The Familiar can create tomes and add entries, but can't edit or
   delete an existing entry (only `create_tome`, `list_tomes`, `save_to_tome`).
-- **Self-knowledge the app has and never shares.** The Familiar is never told
-  which model it is running on, or that its model changed since its last turn,
-  or that this is a fresh session. So "after a crash or a model swap, I check
-  memory before speaking" has nothing to trigger it.
+- ~~**Self-knowledge the app has and never shares.**~~ Fixed 0.14.85: the [Now]
+  block says which model is answering, when that changed since the last turn in
+  the conversation, and when a conversation is brand new (model-signal.js).
+  Retires "I cannot verify my own engine from inside" and gives "after a crash
+  or a model swap, I check memory before speaking" its trigger.
 - **Tool calls written into the reply as text** (a provider/model failure) go
   unnoticed. The app could see a tool call in the reply text and say so.
 - **Rules outlive their cause.** Some rules work around limits that are gone

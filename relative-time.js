@@ -413,7 +413,7 @@ export function plainInterval(target, now = Date.now()) {
  * doing date arithmetic. Errors degrade silently to '' so a clock
  * glitch never corrupts the rest of the prompt.
  */
-export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null, timeZone = null, weatherLine = '' } = {}) {
+export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null, timeZone = null, weatherLine = '', selfLine = '' } = {}) {
   try {
     // Plain LOCAL wall-clock in the WARD's timezone — Unruh stores and compares
     // in that local time, so the times I schedule (reminders, events, tasks) use
@@ -436,6 +436,9 @@ export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = nul
     // read-mirror) so this stays pure and so gated turns can withhold it —
     // '' by default (no forecast, weather off, or a non-ward surface).
     if (typeof weatherLine === 'string' && weatherLine.trim()) lines.push(weatherLine.trim());
+    // Which model I'm running on, and whether that changed (model-signal.js,
+    // 0.14.85) — built in code by the caller, '' when unknown.
+    if (typeof selfLine === 'string' && selfLine.trim()) lines.push(selfLine.trim());
     return `[Now]\n${lines.join('\n')}`;
   } catch {
     return '';

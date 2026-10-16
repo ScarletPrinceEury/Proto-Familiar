@@ -150,6 +150,8 @@ tomes/.voice-clip-features.json.tmp
 # NEVER committed, never synced; local to this embodiment only (spec §8.1).
 tomes/.voiceprints.json
 tomes/.voiceprints.json.tmp
+# Which model ran my last turn per conversation (model-signal.js, 0.14.85)
+tomes/.last-model.json
 
 # Python bytecode — machine artifacts from any of the Python peers.
 __pycache__/

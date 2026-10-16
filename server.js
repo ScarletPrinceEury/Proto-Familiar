@@ -127,6 +127,7 @@ import { recordReachOut } from './src/warmth/reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './src/pondering/reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } from './relative-time.js';
+import { modelSignal } from './src/diagnostics/model-signal.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -693,7 +694,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let timeAnchor = '';
   if (enrichMode === 'full') {
     const anchorSettings = readSettingsSync();
+    // Which model answers this turn, and whether it changed since my last turn
+    // in this conversation (0.14.85) — told in code, since I can't see it.
+    const selfLine = await modelSignal({
+      sessionKey: sessionInfo?.sessionId ?? null,
+      model,
+      firstTurn: !(Array.isArray(messages) && messages.some(m => m?.role === 'assistant')),
+    }).catch(() => '');
     timeAnchor = buildTimeAnchorBlock({
+      selfLine,
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
       // The ward's zone, not the server's — so the [Now] the Familiar reads is

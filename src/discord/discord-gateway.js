@@ -95,6 +95,7 @@ import { coreSystemSegment, postHistoryMessage } from '../../core-prompts.js';
 import { recordOutgoingPrompt } from '../sessions/prompt-capture.js';
 import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord, isToolRecord } from '../../message-sanitize.mjs';
 import { buildTimeAnchorBlock } from '../../relative-time.js';
+import { modelSignal } from '../diagnostics/model-signal.js';
 import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mirror.js';
 import { sanitizeExternal } from '../../injection-guard.js';
 import { recordEvent as hippoRecord } from '../memory/hippocampus.js';
@@ -2889,8 +2890,16 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // sense of "now" was one server-zone line buried in the dynamic block. Weather
   // detail is ward-private only (vague tier on any gated room, so a precise value
   // can't leak a location). Empty string when it can't be built — never blocks.
+  // Which model answers this turn, and whether it changed (web parity, 0.14.85).
+  // Keyed by session id alone, so a shared web/Discord conversation is one.
+  const selfLine = await modelSignal({
+    sessionKey: session.sessionId ?? null,
+    model: conn?.model,
+    firstTurn: !(session.messages ?? []).some(m => m?.role === 'assistant'),
+  }).catch(() => '');
   const discordTimeAnchor = [
     buildTimeAnchorBlock({
+      selfLine,
       now: Date.now(),
       lastUserMessageAt: null,  // Discord doesn't track the client-side gap clock web has
       timeZone: settings?.wardTimeZone || null,
