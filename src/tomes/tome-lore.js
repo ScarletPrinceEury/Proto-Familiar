@@ -171,25 +171,11 @@ export function applyGroupLogic(entries) {
  *                               timedEffects, rng }.
  * @returns {{ sys_top, before_char, after_char, sys_bottom, at_depth }} entry arrays.
  */
-// Tomes that are always private to my human, whatever room I'm in (0.14.89):
-// summaries of our own conversations. A tome can also say so itself with
-// `wardOnly: true` (new Session Memories tomes are created that way); the name
-// covers the one that already exists. Either way, every entry in it is treated
-// as `wardOnly`, so filterByAudience keeps the whole tome out of shared rooms.
-export const PRIVATE_TOME_NAMES = new Set(['Session Memories']);
-
-export function tomeIsWardOnly(tome) {
-  return tome?.wardOnly === true || PRIVATE_TOME_NAMES.has(String(tome?.name ?? ''));
-}
-
 export function activateLore(tomes, userInput, { messages = [], opts = {}, env = {} } = {}) {
   const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
   const allEntries = (Array.isArray(tomes) ? tomes : [])
     .filter(t => t && t.enabled !== false)
-    .flatMap(t => {
-      const entries = Array.isArray(t.entries) ? t.entries : Object.values(t.entries ?? {});
-      return tomeIsWardOnly(t) ? entries.map(e => ({ ...e, wardOnly: true })) : entries;
-    });
+    .flatMap(t => Array.isArray(t.entries) ? t.entries : Object.values(t.entries ?? {}));
   if (!allEntries.length) return empty;
 
   const globals = { caseSensitive: opts.caseSensitive ?? false, matchWholeWords: opts.matchWholeWords ?? false };
@@ -245,27 +231,6 @@ export function activateLore(tomes, userInput, { messages = [], opts = {}, env =
     sys_bottom:  entries.filter(e => normEntryPos(e.position) === 3),
     at_depth:    entries.filter(e => normEntryPos(e.position) === 4),
   };
-}
-
-/**
- * Audience gate for a SERVER turn. The web path is single-audience (the ward's
- * own session), so it never needs this; a Discord turn can face a villager or a
- * guild, so an entry marked `wardOnly` must not reach it. Removes `wardOnly`
- * entries from every slot UNLESS the turn is ward-private — so the diagnosis
- * constant ("{{user}} has <condition>") stays ward-only while the actionable
- * symptom entries still inject for everyone (the ward's decision: the actionable
- * guidance is neutral; the diagnosis label is the medical info to protect).
- * Returns a new activated-shaped object; the input is not mutated.
- */
-export function filterByAudience(activated, { wardPrivate = false } = {}) {
-  const a = activated ?? {};
-  const slots = ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth'];
-  const out = {};
-  for (const k of slots) {
-    const arr = a[k] ?? [];
-    out[k] = wardPrivate ? arr.slice() : arr.filter(e => !e?.wardOnly);
-  }
-  return out;
 }
 
 const renderEntries = (arr, resolve) =>
