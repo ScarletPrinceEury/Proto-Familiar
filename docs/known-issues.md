@@ -13,10 +13,11 @@ After the first identity review, an inventory of a Familiar's own rules (about
 wrong) showed several that compensate for things the app should do. Each fix
 below lets the Familiar drop a rule instead of carrying it:
 
-- **Schedule provenance.** Results don't say where an item came from (calendar
-  sync or added by hand), and nothing warns before cancelling or deleting a
-  calendar-owned event. Rule it caused: "check where a duplicate came from
-  before retiring it" (the doubles themselves were a sync bug, fixed 0.14.80/81).
+- ~~**Schedule provenance.**~~ Fixed 0.14.84: `schedule_find` marks calendar-
+  synced items with 📅 (and whose calendar), and `schedule_delete` refuses a
+  synced item (the next sync would bring it back) and points at cancelling it
+  or deleting it in Google. Rule it retires: "check where a duplicate came from
+  before retiring it".
 - **Identity edits can't be checked in the same turn.** A quiet "ok" doesn't
   say what changed, `rewrite_identity_section` duplicates the next section when
   the new body includes it, and there's no tool to read one identity file
