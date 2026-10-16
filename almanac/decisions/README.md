@@ -18,7 +18,7 @@ place instead ([Slice provenance is captured at the read](slice-provenance-captu
 keeps an inline "Update (version):" note rather than a separate superseded page, because the
 original decision still holds and only its scope narrowed.
 
-Thirty-one decisions live here. Grouped by the question each one answers:
+Thirty-two decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -100,6 +100,10 @@ and of what is normal for its bond with the ward:
   — why a memory whose subject is unclear is downweighted in recall rather than dropped or
   guessed at, and the three-layer stack (extraction, Phylactery recall, a noticing re-resolution
   sweep) that implements it.
+- [Identity cleanup only proposes; the Familiar decides](identity-cleanup-propose-only) — the
+  incident where an autonomous identity-budget rewrite condensed away unfiled prose, and the
+  fix that removed the audit's own write entirely (propose-only, human-applied) alongside an
+  automated canary-stamp check for exact passages that must survive an edit unchanged.
 
 ## Vision and multimodal input
 

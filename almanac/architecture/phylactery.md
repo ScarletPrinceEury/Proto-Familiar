@@ -177,6 +177,15 @@ The identity editor is now complete with two new operations, both auto-snapshot 
 
 The Knowledge editor's identity detail pane reflects these operations: an "Edit whole file" textarea replaces the per-section editor (working for any file, including prose-top content), and each section now has a "Delete section" button with a confirmation prompt [@architecture-doc]. A side effect: `VALID_FILENAME_RE` now allows hyphens in identity filenames (previously it was `[\w]+\.md`, so hyphenated names could never be saved — a latent correctness bug).
 
+The automated side of identity editing — the graduation audit that moves durable
+facts out of identity and into memory to keep the always-injected surface lean —
+used to perform that move itself. After a rewrite silently condensed away unfiled
+prose, the audit was changed to only propose; a reviewed `apply_cleanup_proposal`
+call is now the only path that edits a file this way, and a separate canary-stamp
+registry checks every identity edit for exact passages that must survive unchanged.
+See [Identity cleanup only proposes; the Familiar decides](../decisions/identity-cleanup-propose-only)
+for the incident and both fixes.
+
 ## Audience-native records
 
 Every record in Phylactery — identity, graph node, or memory — carries an `audience` field:
