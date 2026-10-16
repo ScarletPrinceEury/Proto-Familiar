@@ -130,6 +130,7 @@ import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } fr
 import { modelSignal } from './src/diagnostics/model-signal.js';
 import { speakerOf, labelSpeakers } from './src/village/web-speakers.js';
 import { createClaudeCodeBridge } from './src/bridge/claude-code-bridge.js';
+import { createClaudeCodeMailbox, bridgeEnabled, BRIDGE_OFF_MESSAGE } from './src/bridge/claude-code-mailbox.js';
 import { loreForTurn, placeRoomLore, tomeRoomShare, tomeIsWardOnly, ROOM_SHARE_MODES } from './src/tomes/room-lore.js';
 import { canonicalEntryTag } from './src/tomes/tome-tags.js';
 import { tomeTaggingStatus, readTaggingEvents } from './src/tomes/tome-tagging.js';
@@ -2819,16 +2820,36 @@ app.post('/api/interest/engage', async (req, res) => {
 // Familiar in its own conversation, as "Claude Code" by construction — never
 // in my human's seat. Off unless "Claude Code" is on the web-speakers list.
 // Created lazily: PORT is declared further down this file.
+// The mailbox (0.14.93) is the other direction: notes my Familiar leaves for
+// Claude Code, in the same conversation.
+const claudeCodeMailbox = createClaudeCodeMailbox({ logsDir: LOGS_DIR, readSettings: readSettingsSync });
 let _claudeCodeBridge = null;
 app.post('/api/bridge/claude-code', async (req, res) => {
   _claudeCodeBridge ??= createClaudeCodeBridge({
     port: PORT, readSettings: readSettingsSync, connectionForFeature, logsDir: LOGS_DIR,
+    mailbox: claudeCodeMailbox,
   });
   const out = await _claudeCodeBridge.send({
     message: req.body?.message,
     newConversation: req.body?.newConversation === true,
   });
   res.status(out.ok ? 200 : (/isn't on the list/.test(out.error ?? '') ? 403 : 502)).json(out);
+});
+
+// GET  /api/bridge/claude-code/inbox — the notes my Familiar left for Claude
+//      Code (newest first) and whether each was handed over. Read-only.
+// POST /api/bridge/claude-code/inbox/take {via} — hand over the waiting notes
+//      and mark them delivered (the SessionStart hook / --wait use this).
+app.get('/api/bridge/claude-code/inbox', async (_req, res) => {
+  const notes = await claudeCodeMailbox.listNotes({ limit: 50 });
+  res.json({ enabled: claudeCodeMailbox.enabled(), waiting: notes.filter(n => !n.deliveredAt).length, notes });
+});
+app.post('/api/bridge/claude-code/inbox/take', async (req, res) => {
+  const s = readSettingsSync() || {};
+  if (!bridgeEnabled(s)) return res.status(403).json({ ok: false, error: BRIDGE_OFF_MESSAGE });
+  const via = typeof req.body?.via === 'string' ? req.body.via.slice(0, 40) : 'unknown';
+  const notes = await claudeCodeMailbox.takeNotes({ via });
+  res.json({ ok: true, name: String(s.charName || '').trim() || 'the Familiar', notes });
 });
 
 app.post('/api/session/handoff', async (req, res) => {
@@ -4052,6 +4073,7 @@ initCerebellumTools({
   relayToDiscord,
   memorizeSessionNow,
   addVillagerTell,
+  leaveNoteForClaudeCode: (a) => claudeCodeMailbox.leaveNote(a),
   // set_current_location warms the new place's sky right away (fire-and-forget).
   refreshWeatherNow: () => { refreshWeatherIfDue({ force: true }).catch(() => {}); },
 });

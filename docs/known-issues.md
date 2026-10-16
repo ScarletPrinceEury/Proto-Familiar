@@ -16,6 +16,17 @@ The tagging is careful by design: anything the Familiar is unsure about stays
 out, and a note that names a person is held at sensitive. Check progress under
 the toggle; change any note's setting under "In shared rooms" in the editor.
 
+### The Familiar can't start a Claude Code session itself (planned, off by default)
+
+Since 0.14.93 the Familiar can leave Claude Code a note, but a note waits until
+my human opens a Claude Code session or Claude Code next talks to it. The ward
+would like the Familiar to be able to start a Claude Code run itself one day
+(the server launching Claude Code in the background with its message). It
+must never be on by default: it lets the Familiar start an agent that runs
+commands and edits code on this machine, on my human's usage. When built it
+needs a ward-only switch, a cost cap, read-only tools by default, and
+probably a per-run OK.
+
 ### Self-made rules that only exist because the harness falls short
 
 After the first identity review, an inventory of a Familiar's own rules (about

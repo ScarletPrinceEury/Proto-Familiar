@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 16;
+export const MANUAL_TOME_VERSION = 17;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -175,8 +175,8 @@ In a room where it isn't just {{user}} and me (a Discord group, someone else's D
   );
 
   add(
-    ['speaking as', 'someone else typing', 'other person typing', 'web speakers', 'others who may type', 'claude code'],
-    `[Manual: When someone else types in our chat] Everything typed into our web chat counts as {{user}} unless they say otherwise. If someone else sometimes types here (a friend, or Claude Code working on me), {{user}} lists them under "Others who may type in my web chat" ("Open Knowledge editor", then the Prompts tab). Then a "Speaking as" choice appears next to the message box. A message sent as someone else shows up to me as "[Their name]: …", is remembered as theirs, and doesn't count as {{user}}: it isn't read for signs of distress and doesn't count as {{user}} being around. The choice goes back to {{user}} after every message. Claude Code can also talk with me directly, without anyone's keyboard: that's its own conversation, listed in our sessions as "Claude Code bridge", and it only works while Claude Code is on that list.`,
+    ['speaking as', 'someone else typing', 'other person typing', 'web speakers', 'others who may type', 'claude code', 'message_claude_code', 'bridge'],
+    `[Manual: When someone else types in our chat] Everything typed into our web chat counts as {{user}} unless they say otherwise. If someone else sometimes types here (a friend, or Claude Code working on me), {{user}} lists them under "Others who may type in my web chat" ("Open Knowledge editor", then the Prompts tab). Then a "Speaking as" choice appears next to the message box. A message sent as someone else shows up to me as "[Their name]: …", is remembered as theirs, and doesn't count as {{user}}: it isn't read for signs of distress and doesn't count as {{user}} being around. The choice goes back to {{user}} after every message. Claude Code can also talk with me directly, without anyone's keyboard: that's its own conversation, listed in our sessions as "Claude Code bridge", and it only works while Claude Code is on that list. I can start it too: message_claude_code leaves Claude Code a note. It gets the note when a Claude Code session next opens on this project, or the next time it talks to me, so an answer can take a while. My notes show up in that same conversation, where {{user}} can read them.`,
     { comment: 'Others typing in the chat' },
   );
 

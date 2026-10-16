@@ -50,7 +50,7 @@ test('off unless "Claude Code" is on the ward\'s list; nothing is sent', async (
 
 test('every turn is Claude Code\'s: speaker on the turn and the message, ward-private, core prompts in', async () => {
   const out = await make().send({ message: 'hello there' });
-  assert.deepEqual(out, { ok: true, reply: 'Hi, Claude Code.', toolsUsed: [], sessionId: out.sessionId });
+  assert.deepEqual(out, { ok: true, reply: 'Hi, Claude Code.', toolsUsed: [], sessionId: out.sessionId, notes: [] });
   const b = sent[0];
   assert.equal(b.speaker, BRIDGE_SPEAKER);
   assert.deepEqual(b.messages.at(-1), { role: 'user', content: 'hello there', speaker: BRIDGE_SPEAKER });

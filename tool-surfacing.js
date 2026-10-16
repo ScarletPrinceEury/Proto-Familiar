@@ -34,6 +34,7 @@ export const TOOL_MODULES = {
   remove_from_identity: 'core', delete_identity_section: 'core', rewrite_identity_section: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   bookmark_for_later: 'core',   // the Familiar's own initiative (nothing in a user msg triggers it) — always reachable, like the other interest-layer tools
+  message_claude_code: 'core',  // also my own initiative; only composed while the Claude Code bridge is on
 
   contact_trusted_person: 'core', show_crisis_resources: 'core',
   flag_distress: 'core',   // safety: the Familiar's own read of distress → threat (ward-signed)
