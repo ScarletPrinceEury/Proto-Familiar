@@ -2232,7 +2232,10 @@ function _buildApiMessagesInner(userInput) {
   const atDepthInjections = [];
 
   // ── Activate lorebook entries ────────────────────────────────
-  const lore = activateTomeEntries(userInput);
+  // Others present in this web session → a shared room (the same signal that
+  // sends sessionAudience to the server): private lore stays out (0.14.89).
+  const sharedRoom = !!(state.sessionAudience?.participants?.length || state.sessionAudience?.location);
+  const lore = filterLoreByAudience(activateTomeEntries(userInput), { wardPrivate: !sharedRoom });
   const joinLore = (entries) =>
     entries.map(e => applyNameVars(e.content.trim())).filter(Boolean).join('\n\n---\n\n');
   const pushSeg = (source, text) => {
@@ -8461,12 +8464,33 @@ function applyGroupLogic(entries) {
  * Returns { sys_top, before_char, after_char, sys_bottom, at_depth } arrays of activated entries.
  * Aggregates entries from all enabled tomes cached in state.tomeCache.
  */
+// Mirror of tome-lore.js's audience gate (0.14.89) — parity is hand-maintained,
+// tests pin both engines. A web session with others present
+// (state.sessionAudience) is a shared room: whole-private tomes (Session
+// Memories, or a tome marked wardOnly) and wardOnly entries stay out of it.
+function tomeIsWardOnly(tome) {
+  return tome?.wardOnly === true || ['Session Memories'].includes(String(tome?.name ?? ''));
+}
+
+function filterLoreByAudience(activated, { wardPrivate = false } = {}) {
+  const a = activated ?? {};
+  const out = {};
+  for (const k of ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth']) {
+    const arr = a[k] ?? [];
+    out[k] = wardPrivate ? arr.slice() : arr.filter(e => !e?.wardOnly);
+  }
+  return out;
+}
+
 function activateTomeEntries(userInput) {
   const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
   // Flatten all entries from all enabled (cached) tomes
   const allEntries = Object.values(state.tomeCache)
     .filter(tome => tome.enabled !== false)
-    .flatMap(tome => Object.values(tome.entries ?? {}));
+    .flatMap(tome => {
+      const entries = Object.values(tome.entries ?? {});
+      return tomeIsWardOnly(tome) ? entries.map(e => ({ ...e, wardOnly: true })) : entries;
+    });
   if (!allEntries.length) return empty;
 
   const globalDepth = state.tomeScanDepth ?? 4;

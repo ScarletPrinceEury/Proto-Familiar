@@ -6,6 +6,18 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### Tome lore in shared rooms is gated by tome, not by content (yet)
+
+0.14.89 keeps the diagnosis constants and Session Memories out of any room that
+isn't the ward's own (Discord and web). The rest of the lore still reaches
+shared rooms whenever its keywords match — including entries about the ward in
+the Familiar's Ponderings and in the ward's own tomes. Ward-chosen direction:
+a content-aware gate, the same per-topic grants memories use (content tag per
+entry, tagged when written + a careful one-time review by the Familiar,
+visible and undoable, unsure = private; a per-tome "always / never share"
+override in the Tomes modal). Lore that's the Familiar's own (interests,
+essays, the manual) keeps flowing, so it stays itself in group rooms.
+
 ### Self-made rules that only exist because the harness falls short
 
 After the first identity review, an inventory of a Familiar's own rules (about

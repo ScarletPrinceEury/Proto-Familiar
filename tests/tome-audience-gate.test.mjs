@@ -71,3 +71,44 @@ test('every shipped condition-tome constant is tagged wardOnly (diagnosis never 
     }
   }
 });
+
+// ── whole private tomes (0.14.89) ────────────────────────────────────────────
+// Session Memories holds summaries of the ward's own conversations: no entry of
+// it belongs in a shared room, tagged or not. A tome marked wardOnly behaves the
+// same. Other tomes are untouched.
+import { tomeIsWardOnly } from '../src/tomes/tome-lore.js';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { extractFunctionSource } from './_vm-extract.mjs';
+
+const roomTomes = () => ([
+  { name: 'Session Memories', enabled: true, entries: {
+    s1: { uid: 's1', enabled: true, content: 'We talked about the hard week.', position: 4, keys: ['week'] } } },
+  { name: 'Private Notes', enabled: true, wardOnly: true, entries: {
+    p1: { uid: 'p1', enabled: true, content: 'A private note about the week.', position: 4, keys: ['week'] } } },
+  { name: 'Essay workshop', enabled: true, entries: {
+    e1: { uid: 'e1', enabled: true, content: 'Essay plan for the week.', position: 4, keys: ['week'] } } },
+]);
+const uids = (a) => ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth'].flatMap(k => (a[k] ?? []).map(e => e.uid)).sort();
+
+test('a whole private tome stays out of a shared room and stays in for the ward', () => {
+  const activated = activateLore(roomTomes(), 'how was the week', { messages: [], opts: {}, env: {} });
+  assert.deepEqual(uids(filterByAudience(activated, { wardPrivate: false })), ['e1'], 'only the shareable tome reaches the room');
+  assert.deepEqual(uids(filterByAudience(activated, { wardPrivate: true })), ['e1', 'p1', 's1'], 'the ward has all of it');
+  assert.equal(tomeIsWardOnly({ name: 'Session Memories' }), true);
+  assert.equal(tomeIsWardOnly({ name: 'Essay workshop' }), false);
+});
+
+test('the browser engine makes the same calls as the server engine (hand-maintained parity)', () => {
+  const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const ctx = {};
+  runInNewContext(`${extractFunctionSource(src, 'tomeIsWardOnly')}\n${extractFunctionSource(src, 'filterLoreByAudience')}\nresult = { tomeIsWardOnly, filterLoreByAudience };`, ctx);
+  const web = ctx.result;
+  for (const t of [{ name: 'Session Memories' }, { name: 'x', wardOnly: true }, { name: 'Essay workshop' }, {}]) {
+    assert.equal(web.tomeIsWardOnly(t), tomeIsWardOnly(t), JSON.stringify(t));
+  }
+  const activated = activateLore(roomTomes(), 'how was the week', { messages: [], opts: {}, env: {} });
+  for (const wardPrivate of [true, false]) {
+    assert.deepEqual(uids(web.filterLoreByAudience(activated, { wardPrivate })), uids(filterByAudience(activated, { wardPrivate })));
+  }
+});

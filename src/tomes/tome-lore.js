@@ -171,11 +171,25 @@ export function applyGroupLogic(entries) {
  *                               timedEffects, rng }.
  * @returns {{ sys_top, before_char, after_char, sys_bottom, at_depth }} entry arrays.
  */
+// Tomes that are always private to my human, whatever room I'm in (0.14.89):
+// summaries of our own conversations. A tome can also say so itself with
+// `wardOnly: true` (new Session Memories tomes are created that way); the name
+// covers the one that already exists. Either way, every entry in it is treated
+// as `wardOnly`, so filterByAudience keeps the whole tome out of shared rooms.
+export const PRIVATE_TOME_NAMES = new Set(['Session Memories']);
+
+export function tomeIsWardOnly(tome) {
+  return tome?.wardOnly === true || PRIVATE_TOME_NAMES.has(String(tome?.name ?? ''));
+}
+
 export function activateLore(tomes, userInput, { messages = [], opts = {}, env = {} } = {}) {
   const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
   const allEntries = (Array.isArray(tomes) ? tomes : [])
     .filter(t => t && t.enabled !== false)
-    .flatMap(t => Array.isArray(t.entries) ? t.entries : Object.values(t.entries ?? {}));
+    .flatMap(t => {
+      const entries = Array.isArray(t.entries) ? t.entries : Object.values(t.entries ?? {});
+      return tomeIsWardOnly(t) ? entries.map(e => ({ ...e, wardOnly: true })) : entries;
+    });
   if (!allEntries.length) return empty;
 
   const globals = { caseSensitive: opts.caseSensitive ?? false, matchWholeWords: opts.matchWholeWords ?? false };
