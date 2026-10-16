@@ -45,7 +45,7 @@ The overdue-event wake fires on one fact: an event node has no `resolution` [@no
 
 ### The fix: resolution tools + outcome tracking
 
-`schedule_resolve` and `schedule_calibrate_link` are now in `NOTICING_REGISTRY_TOOL_NAMES` and count as proactive acts (classified by `NOTICING_PROACTIVE_TOOLS`) [@noticing-js]. This lets the Familiar close the loop by recording how an event actually turned out.
+`schedule_resolve` and `schedule_calibrate_link` are always part of the noticing turn's toolset (today, `NOTICING_ALWAYS_TOOLS` — see "Tool parity with live turns" below for how that set replaced an earlier fixed registry) and count as proactive acts (classified by `NOTICING_PROACTIVE_TOOLS`) [@noticing-js] [@cerebellum-js]. This lets the Familiar close the loop by recording how an event actually turned out.
 
 The noticing prompt renders overdue events as a NOTEPAD, each with its slug id and the closing tools named inline (operability: the Familiar cannot close what it cannot name) [@noticing-js]. The prompt directs: check the conversation first, close when already answered (prompted or unprompted), only ask otherwise [@noticing-outcomes-js].
 
@@ -115,12 +115,56 @@ empty condition list on failure or when disabled rather than blocking the rest o
 code decides when a shaky memory has settled enough to be worth revisiting, and only then does a
 turn happen, so the sweep adds no standing LLM cost of its own [@server-js].
 
-The wake condition shipped together with the tools it needs to act: `recall`, `read_memory_by_id`,
-and `update_memory_by_id` were added to `NOTICING_REGISTRY_TOOL_NAMES`, and `update_memory_by_id`
+The wake condition shipped together with the tools it needs to act: `recall` is a core tool the
+noticing turn already carries, `read_memory_by_id` and `update_memory_by_id` were added to what is
+today `NOTICING_ALWAYS_TOOLS` (see "Tool parity with live turns" below), and `update_memory_by_id`
 was taught to accept `subjects` and `attribution_confidence` so the correction can actually be
 written, not just noticed [@cerebellum-js]. See
 [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops)
 for the full three-layer decision this wake condition is the closing layer of.
+
+## Tool parity with live turns (0.14.82)
+
+Before 0.14.82, the noticing turn's toolset was a fixed, hand-maintained registry — a short list
+of schedule and memory tools plus the reach-out. That meant a capability only a live turn could
+reach (memory recall, the knowledge graph, identity tools, a Village lookup) was invisible to a
+noticing turn even when the situation report named exactly the thing noticing would need one of
+those tools for: an intention set during a full conversation fired later in a noticing tick with
+only `intention_done` and the reach-out in hand, nothing to actually investigate or act on. The
+ward's framing was that this made noticing a **fragmented brain** — a background turn reasoning
+over the same ward it talked to a moment ago, but without the toolbox that turn had [@cerebellum-js].
+
+The fix makes `composeNoticingTools` build its set the same way a live turn's tool-surfacing does,
+not a separate hand-maintained list [@cerebellum-js]:
+
+- **Core tools** (always advertised on every turn) compose in automatically.
+- **Modules the turn's own text surfaces** — the same `selectModules`-driven surfacing a live chat
+  turn uses, run here against the noticing prompt's own body text.
+- **Whatever `request_tools` pulls in mid-turn** — the tool-surfacing recovery path (see
+  [Tool surfacing](tool-surfacing)) that lets a turn grow its own toolset across rounds; noticing's
+  loop recomposes per round through the same growth-only mechanism, via `getTools`.
+- **`NOTICING_ALWAYS_TOOLS`** — a small, explicit set of non-core tools noticing's own wake
+  conditions depend on regardless of what surfaces: `schedule_availability`, `schedule_export`,
+  `schedule_set_lead`, `schedule_resolve`, `schedule_calibrate_link`, `read_memory_by_id`,
+  `update_memory_by_id`, and `weather_today` [@cerebellum-js]. These are ranked alongside core
+  tools under the tool ceiling, so growing the live-parity list never crowds them out.
+- `reach_out_to_ward` and `set_next_check`, noticing's own warm-knock and self-pacing tools, are
+  added on top.
+
+Two differences from a live turn are deliberate, ward-signed exclusions rather than oversights
+[@cerebellum-js]: **`NOTICING_EXCLUDED_TOOLS`** (`contact_trusted_person`, `show_crisis_resources`)
+keeps the crisis tools out of noticing's reach entirely, so escalation stays exactly one path —
+`flag_distress` handing an alarming read to [silence-triage](safety-spine) — rather than two
+routes that could disagree. And noticing's round budget changed from a tight background-only cap
+to `toolRoundsPerTurn(settings)`, the same ward-configurable budget a live ward turn gets, wired at
+`runNoticingToolLoop`'s call site [@server-js] [@cerebellum-js]. A turn that legitimately needs to
+check several files or resolve several events no longer runs out of rounds before it can act.
+
+The underlying lesson generalizes beyond noticing: a fixed, hand-maintained tool list for a
+background deliberation silently drifts behind whatever a live turn can do, because every new live
+tool has to be remembered a second time for the background path. Building the background set from
+the same composition the live turn already uses means a new tool is visible everywhere it should
+be the moment it ships, with no second registry to keep in sync.
 
 ## Cadence and self-pacing
 
@@ -128,6 +172,7 @@ Noticing runs on self-paced cadence via `set_next_check`, clamped to 5 minutes (
 
 ## Related
 
+- [Tool surfacing](tool-surfacing) — the live-turn module-surfacing and `request_tools` growth mechanism `composeNoticingTools` now reuses, and the module/trigger map it reads.
 - [Autonomous loops](autonomous-loops) — where noticing sits among the other background workers and how it differs from loops that defer to crisis handling.
 - [Safety spine](safety-spine) — the crisis detection and escalation machinery that noticing deliberately does not defer to.
 - [Unruh](unruh) — where the intention store and event graph data live, which noticing's wake conditions read.

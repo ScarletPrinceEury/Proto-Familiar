@@ -157,3 +157,8 @@ gate with no separate toggle, on the strength of the archive already being in pl
   a later application of the same set-aside-not-destroyed shape one step earlier in a write's
   life: a suspect fact is held before it is ever written, rather than archived before an
   existing record is deleted.
+- [Identity cleanup only proposes; the Familiar decides](identity-cleanup-propose-only) — a
+  harder case this decision's shape alone did not cover: an autonomous *summarizing* rewrite
+  (the identity graduation audit) can discard unfiled content with no sign anything was lost,
+  even with a snapshot in hand. The fix there removes the audit's own write instead of just
+  archiving around it, and adds an automated exact-match check for content that must survive.

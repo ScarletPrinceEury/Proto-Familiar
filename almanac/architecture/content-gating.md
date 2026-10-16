@@ -270,3 +270,6 @@ not an architectural filter [@build-spec].
 - [Villager proactive context](villager-proactive-context) — a third caller of this gate: the
   villager-facing "what we've been talking about" recall extends `list_by_subject` with the same
   audience-floor-plus-content-tag pair `memory.search` applies, rather than adding a second gate.
+- [Tomes and keyword lore](tomes-and-lore) — a fourth caller, added 0.14.89–0.14.92: `room-lore.js`
+  gates keyword-triggered Tome entries by room with `memoryVisibleToVillager`, the same per-topic
+  grant check this page describes, filtering entries before keyword activation rather than after.

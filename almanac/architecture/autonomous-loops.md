@@ -23,6 +23,9 @@ sources:
   - id: tracker-projection-loop-js
     type: file
     path: src/schedule/tracker-projection-loop.js
+  - id: tome-tagging-loop-js
+    type: file
+    path: src/tomes/tome-tagging-loop.js
 ---
 
 # Autonomous Loops
@@ -75,6 +78,7 @@ Every loop follows the same shape, stated in CLAUDE.md as a rule rather than a h
 | Content re-gate | `content-regate-loop.js` | 30min | **off** | `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1` |
 | Media retention | `media-retention-loop.js` | ~6h | on | `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` |
 | Tracker projection | `tracker-projection-loop.js` | 30min | on | `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED=1` |
+| Tome note tagging | `tome-tagging-loop.js` | 10min, batch of 12 | **off** | `PROTO_FAMILIAR_TOME_TAGGING_DISABLED=1` |
 
 Tracker projection (T-C.3a) is the most recently added loop: it drives one atomic Unruh reconcile
 per tick (`tracker_project`) that mints, updates, and resolves the ward-private schedule nodes
@@ -92,7 +96,11 @@ retention curates aged voice clips on a ~daily cadence, deciding only whether th
 old exchange is kept — the transcript always survives — so a wrong "let go" costs disk, not
 memory [@media-retention-loop]. Like every loop that reads threat state, it defers during a live
 call and at moderate-or-higher threat, because the crisis machinery owns that moment; see
-[Safety spine](safety-spine).
+[Safety spine](safety-spine). Tome note tagging is the newest opt-in loop (0.14.92): it reviews a
+batch of tome entries that have no share tag yet and decides, per entry, whether the content is
+the Familiar's own ("self"), a memory-style `topic:level` tag, or held private, so
+[Tomes and keyword lore](tomes-and-lore)'s room gate has something to filter on for entries
+written before that gate existed [@tome-tagging-loop-js].
 
 (Sourced from CLAUDE.md's "Autonomous loops" section and `docs/architecture.md`'s
 autonomous-loop boot list [@claude-md] [@architecture-doc]. Stewardship and the weekly

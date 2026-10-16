@@ -14,6 +14,9 @@ sources:
   - id: providers-js
     type: file
     path: providers.js
+  - id: model-signal-js
+    type: file
+    path: src/diagnostics/model-signal.js
 ---
 
 # Exact Values Are Code's Job
@@ -117,6 +120,13 @@ for `collapseToolTurns`, which collapses a tool-call carrier and its results int
 assistant turn before history reaches `server.js`'s `/api/chat` or either Discord
 history-assembly site, so the model never reads its own past turn as a literal `null` or as a
 sentence cut off mid-thought.
+
+A further instance is a fact the model structurally cannot know by introspection rather than one
+it might compute wrong: which underlying model answered a given turn, and whether that changed
+since the conversation's last turn. `src/diagnostics/model-signal.js`'s `modelSignal` states this
+in code and appends it to the `[Now]` block instead of leaving the model to guess or assume
+continuity [@model-signal-js] — see [Unruh](../architecture/unruh), "A second line in the same
+anchor," for the mechanism and the self-made rules this closed.
 
 `providers.js`'s `normalizeBaseUrl` (0.11.91-alpha) is a narrower, non-model-facing application
 of the same rule to a value the *ward* types by hand rather than the model: a connection's

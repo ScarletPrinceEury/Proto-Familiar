@@ -35,6 +35,9 @@ sources:
   - id: relative-time-js
     type: file
     path: relative-time.js
+  - id: model-signal-js
+    type: file
+    path: src/diagnostics/model-signal.js
   - id: unruh-db
     type: file
     path: unruh/src/unruh/db.py
@@ -50,6 +53,9 @@ sources:
   - id: server
     type: file
     path: server.js
+  - id: discord-gateway-js
+    type: file
+    path: src/discord/discord-gateway.js
   - id: causal-chain-spec
     type: file
     path: docs/causal-chain-fix-build-spec.md
@@ -68,6 +74,9 @@ sources:
   - id: audit-mcp-script
     type: file
     path: scripts/audit-mcp-contracts.mjs
+  - id: gcal-source-js
+    type: file
+    path: src/gcal/gcal-source.js
   - id: app-js
     type: file
     path: public/app.js
@@ -462,6 +471,53 @@ before this fix: `dedupe_gcal_nodes` (gcal-vs-gcal dedup) and `display-level ded
 temporal briefing (display-time exact-duplicate suppression) — those remain and still serve as
 safeguards [@temporal-format-js] [@unruh-gcal].
 
+## Superseded series nodes: a series and its own occurrences never both repeat
+
+A different duplicate shape surfaces specifically on a **source switch** for the same calendar.
+An iCal-link sync stores a recurring event as one series node that regenerates its occurrences
+from a repeat rule; Google's own API (`singleEvents`) instead delivers the
+same series pre-expanded, one event per occurrence [@unruh-gcal]. Switching a calendar from the
+iCal-link tier to a native Google account (or back) leaves the old series node in place: nothing
+in the new snapshot ever names it (its id belongs to the link, not the account), and its anchor
+date is in the past, so the ordinary deletion-reconcile pass — which only cancels still-future
+nodes on a confirmed full snapshot — never touches it. The series node keeps generating every
+occurrence beside the newly-synced per-occurrence nodes, so a weekly event (and a birthday) showed
+twice, and alerted twice [@unruh-gcal].
+
+`cap_superseded_series(conn, nodes_by_uid, seen_uids)` runs on every ingest, after occurrence
+nodes created this pass are counted, and closes this gap without widening deletion reconcile to
+past anchors (deletion reconcile's own age guard is a deliberate data-loss safeguard, not the rule
+to relax here) [@unruh-gcal]. For each series node that is not itself present in this ingest's
+snapshot, whose occurrences already exist as their own nodes, it sets the series' recurrence to
+end one second before the first of those occurrences — a local-naive timestamp, never a bare date
+(a date-only `until` reads as UTC midnight in JavaScript and would silently drop that day's later
+occurrence) [@unruh-gcal]. The series node's own history — its past occurrences and whatever
+resolutions were recorded against them — is left alone; only the forward-generating rule is capped.
+The function is idempotent, and a once-doubled calendar heals on its next ordinary sync once this
+fix is deployed, with no manual cleanup [@unruh-gcal].
+
+**Matching a series to its occurrences deliberately crosses calendar ids.** The first version of
+this fix (0.14.80) scoped the series-to-occurrence match to the calendar currently being synced,
+which missed most of the real doubled pairs: one shared calendar commonly has *two different ids*
+— one under the iCal link, another under the Google account it was switched to — so the stale
+series node sits under an id no current snapshot uses at all. The fix (0.14.81) matches globally
+instead: Google's own series ids (`recurringEventId`/`iCalUID`, carried as `gcal_series_uid` on
+each occurrence, with Google's `<eventId>_<date>` instance-id shape as the fallback for events
+synced before this field existed) are globally unique, so matching a series to its own occurrences
+across calendar ids cannot conflate it with another calendar's events [@gcal-source-js]
+[@unruh-gcal]. Deletion reconcile itself stays scoped per-calendar — only the series-capping match
+widened.
+
+**Provenance stays visible once an item is synced (0.14.84).** Before this, a ward-initiated
+`schedule_delete` on a synced item appeared to work, then quietly came back on the next sync —
+indistinguishable from a bug until the ward learned the item was gcal-managed. `schedule_find` now
+marks a synced item with the same 📅-plus-calendar-name marker the temporal briefing already used
+(`gcalMarkerFor`, shared from `temporal-format.js` rather than re-implemented), and `schedule_delete`
+refuses a synced item outright, naming the two things that actually work instead: resolving it as
+cancelled (so it clears from the live board without fighting the next sync), or deleting it in
+Google Calendar directly [@temporal-format-js] [@unruh-gcal]. This refusal applies to every caller,
+including a registered villager with schedule-write access, not only the ward.
+
 ## The temporal briefing display: pure derivation, safe to edit
 
 The `[Temporal Context]` block that appears in every turn's prompt is built from Unruh's schedule graph via `buildTimeAnchorBlock()` in `relative-time.js`, then formatted for readability by `temporal-format.js` [@temporal-format-js] [@relative-time-js]. This display layer is pure derivation — all transformation, no new data — so changes to display hygiene, filtering, or formatting are safe to make without ward sign-off [@claude-md].
@@ -475,6 +531,44 @@ The display pipeline applies three filters and a dedup pass to the raw schedule 
 5. **Display-level dedup** — Exact duplicate detection at the display level (a separate pass from data-layer dedup). This handles cases like a Google-synced node plus a hand-added identical task showing up in both the schedule and a manual entry — one is shown, duplicates are suppressed [@temporal-format-js].
 
 All of these are transformation-only; no events are deleted or modified in the underlying data. The Temporal Context block is a view, not a mutating operation. A change to any of these filters is safe for the same reason weather display changes are safe: it is pure code-side derivation, not a decision point that changes the Familiar's reasoning [@claude-md].
+
+## A second line in the same anchor: which model answered (0.14.85)
+
+`buildTimeAnchorBlock` takes a `selfLine` parameter that rides in the same `[Now]` block as the
+schedule-derived lines above, but it is not schedule data at all — it is a fact about the turn's
+own execution, built by a separate module, `src/diagnostics/model-signal.js`
+[@relative-time-js] [@model-signal-js]. The app knows which model answers every turn; the model
+running inside that turn structurally cannot tell from inside, the same way a person cannot
+observe their own neurons firing. `modelSignal({ sessionKey, model, firstTurn })` states it
+instead, in code, so the fact never has to be guessed or narrated: "I'm running on X." — plus
+"That changed since my last turn here, which ran on Y." when the model differs from the one that
+answered this conversation's previous turn, plus "This is the first turn of a new conversation."
+on a fresh start with no prior assistant turn [@model-signal-js].
+
+This exists because the self-rule inventory behind [Plain facts about limits, never a
+verdict](../decisions/plain-facts-about-limits) turned up two self-observations the Familiar had
+adopted without the app ever confirming either one: "I cannot verify my own engine from inside"
+and "after a context crash or model swap, I check my memory before speaking." Both were true
+guesses about a fact the app already had and had never said. `modelSignal` closes the gap the
+same way the rest of [Exact values are code's job](../decisions/exact-values-in-code) does:
+code states the exact value once, and the model is left to interpret it rather than reconstruct
+or hallucinate it.
+
+The "changed since last turn" comparison needs a place to remember the previous answer across
+turns, so `tomes/.last-model.json` stores the last model seen per session id, capped at 200
+tracked sessions (oldest-by-timestamp evicted first) [@model-signal-js]. The key is the bare
+session id, not a per-surface key, because a conversation shared between the web client and
+Discord through [Unified ward sessions](session-unification) is one conversation — a different
+model answering on the other surface is a real change worth naming, not a false positive from
+treating one conversation as two [@model-signal-js]. A state-file read/write failure never blocks
+the turn: the function logs a warning and simply drops the "changed" half of the line rather than
+throwing [@model-signal-js].
+
+`selfLine` is computed and threaded into `buildTimeAnchorBlock` at both places a live turn is
+assembled — `server.js`'s `/api/chat` (covering web and voice) and
+`src/discord/discord-gateway.js`'s live Discord turn handler — rather than only on one surface
+[@server] [@discord-gateway-js], following the same cross-surface-mirroring discipline
+[Core prompts and multi-surface assembly](core-prompts) records the cost of skipping.
 
 ## Related
 
@@ -495,3 +589,10 @@ All of these are transformation-only; no events are deleted or modified in the u
   `thalamus.enrich()` flag whose reconciliation half writes to Unruh's ward-scoped state
   (`session_mark_handoff_consumed`, `interest_demote_standing`), and why it must never fire on a
   non-ward turn.
+- [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the
+  self-rule inventory that surfaced the gap `selfLine`/`modelSignal` closes.
+- [Core prompts and multi-surface assembly](core-prompts) — the cross-surface mirroring
+  discipline (a capability wired on only one surface silently vanishes on the rest) that
+  `selfLine`'s web-and-Discord wiring follows from the start.
+- [Unified ward sessions](session-unification) — why `modelSignal` keys its stored state on the
+  bare session id rather than per surface.

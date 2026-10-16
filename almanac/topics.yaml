@@ -160,3 +160,8 @@ topics:
   description: Encrypted export/restore of the Familiar's state -- Phylactery's
     own single-store backup and the later whole-install holistic backup
   parents: [architecture]
+- slug: claude-code-bridge
+  title: Claude Code Bridge
+  description: The fail-closed web-speakers naming gate and the two-way bridge
+    and mailbox it enables between Claude Code and the Familiar
+  parents: [architecture, sessions]
