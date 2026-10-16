@@ -1474,6 +1474,24 @@ turn. **Parity is hand-maintained** (app.js is a classic script, no ES modules,
 so no single shared source without a build step); tests pin the behavior — change
 one engine, change the other. Timed effects (sticky/cooldown) aren't persisted
 across Discord turns yet (v1); `delay` works via the session turn count.
+**Audience gate (entry-level `wardOnly`).** An entry marked `wardOnly: true`
+never reaches a non-ward-private Discord turn: `activeDiscordLore` runs
+`filterByAudience(activated, { wardPrivate: audienceTag === 'ward-private' })`
+(a pure helper in tome-lore.js) which strips `wardOnly` entries from every slot
+unless the turn is the ward's own. The shipped condition tomes' diagnosis
+*constants* (`{{user}} has <condition>`) are tagged `wardOnly` so the medical
+label never surfaces to a villager, while the actionable symptom entries stay
+un-tagged and inject for everyone (ward decision: the guidance is neutral, the
+diagnosis is the sensitive part). **Whole private tomes + the web path (0.14.89):**
+a tome marked `wardOnly`, or the existing "Session Memories" tome by name
+(`PRIVATE_TOME_NAMES`, `tomeIsWardOnly`), passes `wardOnly` down to every entry
+in `activateLore`, so the same filter keeps the whole tome out of shared rooms
+(new Session Memories tomes are created `wardOnly: true`). The web path is NOT
+single-audience: a session with others present (`state.sessionAudience`) is a
+shared room, so app.js mirrors the gate (`tomeIsWardOnly` /
+`filterLoreByAudience` before the prompt is assembled), parity pinned by a test
+that runs both engines. Next: a content-aware gate for the rest of the lore
+(the same per-topic grants memories use) — see known-issues.
 **Live tome macros + the manual tome (0.11.22).** Tome content can carry macros
 that resolve at INJECTION time so the lore reads true now: `tome-macros.js`
 `resolveTomeMacros(text, settings)` folds `{{user}}`/`{{char}}` (via `macros.js`)

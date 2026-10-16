@@ -261,6 +261,7 @@ async function foldImageStandins(messages, settings) {
 
 export function findOrCreateSessionMemoriesTome() {
   return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
+    wardOnly: true,   // summaries of our own conversations never reach a shared room (0.14.89)
     name:        TOME_NAME,
     description: TOME_DESCRIPTION,
     enabled:     true,

@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 13;
+export const MANUAL_TOME_VERSION = 14;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -145,7 +145,7 @@ export function buildManualTome() {
 
   add(
     ['tome', 'tomes', 'lorebook', 'world info', 'lore', 'keyword lore'],
-    `[Manual: Tomes] Tomes are keyword-triggered lore: when a message mentions an entry's keyword, that entry's text is added to my context. {{user}} manages them in the Tomes modal — create a tome, add entries with keywords and content. My scan looks back over the last {{scanDepth}} messages. This manual you're reading is itself a protected tome. Entries can use live macros like {{visionActive}} that fill in the current setting.`,
+    `[Manual: Tomes] Tomes are keyword-triggered lore: when a message mentions an entry's keyword, that entry's text is added to my context. {{user}} manages them in the Tomes modal — create a tome, add entries with keywords and content. My scan looks back over the last {{scanDepth}} messages. This manual you're reading is itself a protected tome. In a room where it isn't just {{user}} and me (a Discord group or someone else's DM, or a web chat with others present), anything private stays out: Session Memories, and the diagnosis lines in the condition tomes. Entries can use live macros like {{visionActive}} that fill in the current setting.`,
     { comment: 'Tomes / lorebook' },
   );
 
