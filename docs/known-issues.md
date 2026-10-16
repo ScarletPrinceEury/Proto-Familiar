@@ -51,9 +51,7 @@ genuinely about who it is.
 Anything typed into the web chat read as the ward: answered as them, filed as
 their words, scored as their distress, counted as them being around. Now the
 ward lists other speakers and the composer has a "Speaking as" picker
-(`src/village/web-speakers.js`). Still open: a direct developer bridge (an
-endpoint whose conversation is Claude Code by construction, so no picker or
-prefix is needed).
+(`src/village/web-speakers.js`). The direct developer bridge followed in 0.14.88 (`POST /api/bridge/claude-code`).
 
 ### Tool calls may be silently dropped when a round doesn't end in 'tool_calls'
 

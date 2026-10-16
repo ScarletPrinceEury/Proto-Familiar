@@ -129,6 +129,7 @@ import { recordUserActivity, getLastUserActivity } from './src/sessions/last-act
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } from './relative-time.js';
 import { modelSignal } from './src/diagnostics/model-signal.js';
 import { speakerOf, labelSpeakers } from './src/village/web-speakers.js';
+import { createClaudeCodeBridge } from './src/bridge/claude-code-bridge.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -2797,6 +2798,22 @@ app.post('/api/interest/engage', async (req, res) => {
 // mid-thought. Fire-and-forget from the client; degrades silently
 // when Unruh is down. The frontend generates intent/threads by asking
 // the chat LLM to summarise the ending session.
+// The Claude Code bridge (0.14.88, ward decision): Claude Code talks with my
+// Familiar in its own conversation, as "Claude Code" by construction — never
+// in my human's seat. Off unless "Claude Code" is on the web-speakers list.
+// Created lazily: PORT is declared further down this file.
+let _claudeCodeBridge = null;
+app.post('/api/bridge/claude-code', async (req, res) => {
+  _claudeCodeBridge ??= createClaudeCodeBridge({
+    port: PORT, readSettings: readSettingsSync, connectionForFeature, logsDir: LOGS_DIR,
+  });
+  const out = await _claudeCodeBridge.send({
+    message: req.body?.message,
+    newConversation: req.body?.newConversation === true,
+  });
+  res.status(out.ok ? 200 : (/isn't on the list/.test(out.error ?? '') ? 403 : 502)).json(out);
+});
+
 app.post('/api/session/handoff', async (req, res) => {
   const { intent, threads, sessionId } = req.body ?? {};
   const ok = await recordHandoff({

@@ -152,6 +152,8 @@ tomes/.voiceprints.json
 tomes/.voiceprints.json.tmp
 # Which model ran my last turn per conversation (model-signal.js, 0.14.85)
 tomes/.last-model.json
+# The Claude Code bridge's current conversation id (0.14.88)
+tomes/.claude-code-bridge.json
 
 # Python bytecode — machine artifacts from any of the Python peers.
 __pycache__/
