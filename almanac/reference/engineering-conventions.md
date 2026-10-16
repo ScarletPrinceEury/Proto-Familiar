@@ -65,6 +65,9 @@ sources:
   - id: pondering-consolidate-js
     type: file
     path: src/pondering/pondering-consolidate.js
+  - id: voice-chat-turn-js
+    type: file
+    path: src/voice/voice-chat-turn.js
 ---
 
 # Engineering Conventions
@@ -351,6 +354,38 @@ fold on an always-thinking connection either timed out or came back with an empt
 `_extract_message_content` is the Python mirror of `extractContent`'s `reasoning_content`
 fallback. See [Phylactery](../architecture/phylactery) for the fix and why the reasoning-content
 fallback is safe there specifically.
+
+**RULE A's ward-facing corollary — `extractContent`'s reasoning fallback is for internal
+artifacts only; a reply the ward can see, store, or hear needs the length-aware shape.**
+`extractContent`'s blanket "fall back to `reasoning_content` when `content` is empty" is correct
+for Phylactery's rollups and other private notes, but it has a failure mode on an interactive
+turn: when a thinking model hits `finish_reason === 'length'`, it spent its entire budget
+reasoning and produced no answer at all — only chain-of-thought parked in `reasoning_content`.
+Folding that into `content` on a ward-facing path surfaces the raw CoT as if it were the reply
+(2026-09-29). Before the fix, `server.js`'s non-stream `/api/chat` path folded reasoning into
+content on ANY empty `content`, with no `finish_reason` check, so a budget-exhausted turn's raw
+CoT reached every non-stream caller that path serves — rendered and stored on the web chat,
+saved as a handoff, shown in guide-chat, and, worst, spoken aloud on a voice call
+[@server-js] [@llm-call-js].
+
+`extractTurnReply(choice)` in `llm-call.js` is the fix: real content wins; empty content with
+`finish_reason === 'length'` returns `''` (budget exhaustion — the caller treats it as no-reply,
+never a CoT dump); empty content otherwise falls back to `reasoning_content`/`reasoning`, the
+case where a proxy legitimately parks a *finished* answer there [@llm-call-js]. Two coordinated
+changes landed together because each has its own callers: `server.js` now skips the reasoning
+fold on `finish_reason === 'length'` (`choice.finish_reason !== 'length'` guards the call to
+`foldReasoningIntoContent`), so content stays empty and the ordinary empty-reply handling fires
+instead [@server-js]; and `voice-chat-turn.js`'s `runVoiceTurn`, which does its own recovery
+rather than relying on the server's fold, swapped `extractContent` for `extractTurnReply` so the
+same guarantee holds on the path that speaks the reply aloud [@voice-chat-turn-js].
+
+The rule of thumb: **use `extractContent`'s reasoning-content fallback for internal artifacts**
+(Phylactery's consolidation summaries, deliberation notes — nothing the ward reads directly),
+**use `extractTurnReply`'s length-aware shape for anything ward-facing** — rendered on screen,
+stored as a handoff or memory, or spoken aloud [@llm-call-js] [@consolidate-module]. This is the
+corollary [Phylactery](../architecture/phylactery) names when it explains why Phylactery's own
+`_call_llm` is safe using the plain reasoning-content fallback: consolidation output is the
+Familiar's own private notes, never a user-facing reply, so the corollary does not apply there.
 
 **RULE B — budget exhaustion is never silence.** Every cap, limit, timeout, or retry ceiling
 must define, before it is built: what the ward sees, what the Familiar is told (its own tool

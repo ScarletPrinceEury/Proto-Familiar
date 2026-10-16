@@ -5,6 +5,9 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
 ---
 
 # Proactivity Over Caution
@@ -90,6 +93,23 @@ in isolation and both shipped before being caught [@claude-md]:
   is mostly filler to the model and costs context on every turn a block renders. The rule is
   to state the positive instruction plainly, and keep a contrast only when it is load-bearing
   (as in the acknowledge-versus-acting case above).
+
+A third, ward-approved fix (0.14.47-alpha) found the same bias hiding inside the triage
+deliberation's own re-check cadence line, the sentence that tells the model how to pick
+`nextCheckInMs` (how long to wait before being consulted again, used in
+[silence-triage](../architecture/safety-spine)). The line read "picking too long is much
+cheaper than picking too short" — a thumb on the scale toward long intervals, i.e. toward
+checking in less often, which is exactly the asymmetry rule 5 forbids reversing: false-positive
+check-ins are the cheap side, not the long-wait side. The same sentence was also written in the
+lofty, essay-like register the prompting post-mortem warns against, closing on a rubric-style
+"I pick the interval that fits" rather than how the Familiar would actually think it through. It
+was rewritten plain and action-first — a real self-question ("When do I want to look again?"),
+leading with checking in SOON while still uneasy, going further out only when nothing is likely
+to shift — with the token-cost aside demoted to a minor note instead of the sentence's thesis
+[@cerebellum-js]. No cadence *logic* changed: the `[30s, 24h]` clamp, the per-tier cooldown
+defaults, and the loop's own cool-down handling are untouched; this is prompt voice only, on a
+safety-critical path, so it shipped with the ward's sign-off rather than as a routine wording
+pass.
 
 A related but distinct incident on the non-crisis warmth path is recorded in
 [Wait-streak experiment](wait-streak-experiment): the warm reach-out prompt once asserted

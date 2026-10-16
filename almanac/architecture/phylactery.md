@@ -116,10 +116,11 @@ into a single oversized prompt (one observed case: 264 source rows) [@consolidat
 The fix brings `_call_llm` up to the same standard as `callProviderChat`, adapted for where the
 output goes: `_extract_message_content(message)` tries `content`, then `reasoning_content`, then
 `reasoning` — the Python mirror of `extractContent` — and this is safe here specifically because
-consolidation output is the Familiar's own private notes, not a user-facing reply, so the
-RULE B corollary against dumping raw chain-of-thought at the ward does not apply. The rule of
-thumb: use the reasoning-content fallback for internal artifacts, use the length-aware turn-reply
-shape for anything ward-facing [@consolidate-module]. `_call_llm` also retries once, but only on
+consolidation output is the Familiar's own private notes, not a user-facing reply, so
+[RULE A's ward-facing corollary](../reference/engineering-conventions) against dumping raw
+chain-of-thought at the ward does not apply here. The rule of thumb: use the reasoning-content
+fallback for internal artifacts, use the length-aware turn-reply shape (`extractTurnReply`) for
+anything ward-facing [@consolidate-module]. `_call_llm` also retries once, but only on
 `httpx.TimeoutException` (an HTTP error status is not blindly re-sent), and reads
 `max_tokens`/`timeout_s` from `cfg` with defaults of `8000` / `240.0` seconds so an old-shaped or
 test `cfg` still works [@consolidate-module]. For periods still too large at that cap,
