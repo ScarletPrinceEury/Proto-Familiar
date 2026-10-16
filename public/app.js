@@ -205,6 +205,7 @@ const state = {
   temperature:       0.8,
   maxTokens:         2048,
   userName:          'My human',
+  webSpeakers:       [],   // others who may type in my web chat (0.14.87)
   charName:          'the Familiar',
   systemPrompt:      '',
   characterProfile:  '',
@@ -614,7 +615,7 @@ const state = {
 // be weird (e.g. device A's idle timer applying to device B).
 const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'baseUrl', 'model', 'streaming', 'temperature', 'maxTokens',
-  'userName', 'charName',
+  'userName', 'charName', 'webSpeakers',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'maxToolsPerTurn', 'toolRoundsPerTurn',
   'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
@@ -1986,6 +1987,9 @@ let _pendingAttachments = null;
 // Set when the server reports the tool-round budget ran out mid-reach
 // (_roundCapHit) — after the reply lands we offer a one-click "Go on".
 let _roundCapHitThisTurn = false;
+// Who is speaking this turn: null = my human, else a listed other speaker
+// (web-speakers, 0.14.87). Set when a message is sent, from the picker.
+let _turnSpeaker = null;
 let _speakButtonsBeforeTurn = -1;
 
 function elapsedBetweenUserMessages() {
@@ -2148,7 +2152,7 @@ function stampContent(content, ts) {
   return tag ? `${tag} ${cleaned}` : cleaned;
 }
 
-function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, attachments }) {
+function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, attachments, speaker }) {
   if (role === 'tool')      return { role, tool_call_id, content };
   // Each historical user/assistant message carries its own timestamp
   // in state.messages — prepended to the API-bound content here (NOT
@@ -2161,7 +2165,8 @@ function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, atta
   // only ever sees the string, so timestamp hygiene is untouched.
   const atts = Array.isArray(attachments) && attachments.length ? { attachments } : {};
   if (tool_calls)           return { role, content: stamped ?? null, tool_calls, ...atts };
-  return { role, content: stamped, ...atts };
+  // A listed other speaker's turn says so; the server labels it "[Name]: …".
+  return { role, content: stamped, ...atts, ...(role === 'user' && speaker ? { speaker } : {}) };
 }
 
 // A tool-scaffolding message — a `role:'tool'` result, or the assistant carrier
@@ -2278,6 +2283,7 @@ function _buildApiMessagesInner(userInput) {
     role: 'user',
     content: stampContent(userInput, _pendingUserMsgTimestamp),
     ...(_pendingAttachments ? { attachments: _pendingAttachments } : {}),
+    ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}),
   });
 
   // ── Post-history prompt ───────────────────────────────────────
@@ -2804,8 +2810,40 @@ function wireCopyButton(btn, getText) {
   });
 }
 
-function appendUserMessage(text, timestamp, attachments = null) {
-  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp, attachments);
+// "Speaking as" (0.14.87, ward decision): someone else at my human's keyboard
+// picks their name, so the message is theirs, not my human's. Shown only when
+// others are listed. It goes back to my human after every send, so my human's
+// own words are never sent under someone else's name by accident.
+function renderSpeakerPicker() {
+  const sel = $('speaker-picker');
+  if (!sel) return;
+  const names = (Array.isArray(state.webSpeakers) ? state.webSpeakers : []).map(s => String(s).trim()).filter(Boolean);
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const me = document.createElement('option');
+  me.value = '';
+  me.textContent = (state.userName || 'My human').trim();
+  sel.appendChild(me);
+  for (const n of names) {
+    const o = document.createElement('option');
+    o.value = n;
+    o.textContent = n;
+    sel.appendChild(o);
+  }
+  sel.hidden = names.length === 0;
+  sel.value = names.includes(prev) ? prev : '';
+  sel.classList.toggle('is-other', !!sel.value);
+}
+
+function takeTurnSpeaker() {
+  const sel = $('speaker-picker');
+  const v = sel && !sel.hidden ? String(sel.value || '').trim() : '';
+  if (sel) { sel.value = ''; sel.classList.remove('is-other'); }
+  return v || null;
+}
+
+function appendUserMessage(text, timestamp, attachments = null, speaker = null) {
+  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp, attachments, speaker);
   wireCopyButton(copyBtn, () => text);   // copy is text only (never the image)
   // Index will be assigned by refreshTopicGutter after state.messages is updated
   el.dataset.msgIndex = String(state.messages.length); // optimistic: will be corrected
@@ -3815,12 +3853,13 @@ async function sendMessage(userInput, moodTag = null) {
   resetSessionTimeout();
 
   const userTimestamp = now;
+  _turnSpeaker = takeTurnSpeaker();
   const apiMessages   = buildApiMessages(userInput, userTimestamp, attachments);
   lastSentMessages    = apiMessages;
   lastThalamus = null; // wait for the live answer to populate this
 
   // Optimistic UI
-  appendUserMessage(userInput, userTimestamp, attachments);
+  appendUserMessage(userInput, userTimestamp, attachments, _turnSpeaker);
   // Claim this as the ward's active private conversation, so their next Discord
   // DM continues THIS session (auto-unify). Fire-and-forget; gated on the toggle.
   claimActiveSession(state.sessionId);
@@ -4080,6 +4119,7 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       // inside `messages` (T1). Server logs it to the Mood tracker; the
       // provider never sees it.
       ...(typeof moodTag === 'string' && moodTag.trim() ? { moodTag: moodTag.trim() } : {}),
+      ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -4255,7 +4295,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}) });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}), ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -4307,6 +4347,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       // inside `messages` (T1). Server logs it to the Mood tracker; the
       // provider never sees it.
       ...(typeof moodTag === 'string' && moodTag.trim() ? { moodTag: moodTag.trim() } : {}),
+      ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -4407,7 +4448,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}) });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}), ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -4666,6 +4707,10 @@ function readSettingsFromUI() {
     state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
   }
   state.userName          = $('user-name').value.trim() || 'My human';
+  if ($('web-speakers')) {
+    state.webSpeakers = $('web-speakers').value.split(',').map(s => s.trim()).filter(Boolean).slice(0, 10);
+    renderSpeakerPicker();
+  }
   state.charName          = $('char-name').value.trim() || 'the Familiar';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
@@ -4874,6 +4919,8 @@ function writeSettingsToUI() {
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
   setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
+  if ($('web-speakers')) setIfNotFocused($('web-speakers'), 'value', (state.webSpeakers || []).join(', '));
+  renderSpeakerPicker();
   setIfNotFocused($('char-name'),          'value',   state.charName ?? 'the Familiar');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
@@ -6723,6 +6770,7 @@ function init() {
   $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
   $('quarantine-review-btn')?.addEventListener('click', () => runQuarantineReview());
   $('cleanup-proposals-btn')?.addEventListener('click', () => runCleanupProposalsView());
+  $('speaker-picker')?.addEventListener('change', (e) => e.target.classList.toggle('is-other', !!e.target.value));
   $('identity-canaries-btn')?.addEventListener('click', () => runIdentityCanariesView());
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));

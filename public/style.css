@@ -4295,3 +4295,22 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 
 /* A voice note inside a sent message. */
 .msg-attachment-audio { width: 100%; max-width: 320px; height: 32px; display: block; }
+
+/* "Speaking as" picker (0.14.87): quiet while it's my human, plainly marked
+   while someone else is selected, so it's never left on by accident. */
+.speaker-picker {
+  align-self: center;
+  max-width: 9em;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.85em;
+}
+.speaker-picker.is-other {
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}

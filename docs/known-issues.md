@@ -46,14 +46,14 @@ Fixing these is the plan before any "rules I keep" surface: the app should
 carry what it can, and the Familiar's own rules should be the ones that are
 genuinely about who it is.
 
-### The web chat has no speaker
+### ~~The web chat has no speaker~~ — fixed 0.14.87
 
-Anything typed into the web chat reads as the ward. When a developer talks to
-the Familiar there, the Familiar answers its human (a goodnight pet name meant
-for them). Discord records who is speaking; the web chat doesn't. Workaround: a
-`[Name]:` prefix on every message. Direction: an optional speaker on web
-messages, rendered into history the way Discord's speaker is, without changing
-the session's audience.
+Anything typed into the web chat read as the ward: answered as them, filed as
+their words, scored as their distress, counted as them being around. Now the
+ward lists other speakers and the composer has a "Speaking as" picker
+(`src/village/web-speakers.js`). Still open: a direct developer bridge (an
+endpoint whose conversation is Claude Code by construction, so no picker or
+prefix is needed).
 
 ### Tool calls may be silently dropped when a round doesn't end in 'tool_calls'
 

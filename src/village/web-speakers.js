@@ -1,0 +1,67 @@
+/**
+ * Other people who may type in my human's web chat (0.14.87, ward decision).
+ *
+ * Everything typed into the web chat used to read as my human: I answered them
+ * when someone else was talking, memory filed that person's words as theirs,
+ * their words were scored as my human's distress, and every message counted as
+ * my human being around. My human lists the others (Settings → "Others who may
+ * type in my web chat"); a message carries `speaker` when one of them sent it
+ * (the composer's "Speaking as" picker, which resets to my human after every
+ * send).
+ *
+ * Fail-closed: only a LISTED name counts. An unlisted or empty speaker is my
+ * human — nobody stops being treated as my human by typing a bracket.
+ */
+
+/** The listed names, trimmed, deduped (case-insensitive), never my human's own. */
+export function listedSpeakers(settings = {}) {
+  const raw = settings?.webSpeakers;
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const ward = String(settings?.userName ?? '').trim().toLowerCase();
+  const out = [];
+  for (const n of list) {
+    const name = String(n ?? '').trim().slice(0, 40);
+    if (!name || name.toLowerCase() === ward) continue;
+    if (!out.some(x => x.toLowerCase() === name.toLowerCase())) out.push(name);
+  }
+  return out;
+}
+
+/** The listed speaker of a user message (the list's own spelling), or null = my human. */
+export function speakerOf(message, settings = {}) {
+  if (!message || message.role !== 'user') return null;
+  const s = String(message.speaker ?? '').trim().toLowerCase();
+  if (!s) return null;
+  return listedSpeakers(settings).find(n => n.toLowerCase() === s) ?? null;
+}
+
+const labelText = (text, name) => {
+  const t = String(text ?? '');
+  return t.trimStart().startsWith(`[${name}]:`) ? t : `[${name}]: ${t}`;
+};
+
+/**
+ * History for the provider: a listed speaker's turns read "[Name]: …" (the way
+ * Discord shows non-ward speakers), and the `speaker` field itself never reaches
+ * the provider. Content arrays (images) get the label on their first text part.
+ */
+export function labelSpeakers(messages = [], settings = {}) {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map(m => {
+    if (!m || typeof m !== 'object' || !('speaker' in m)) return m;
+    const { speaker, ...rest } = m;
+    const name = speakerOf(m, settings);
+    if (!name) return rest;
+    if (typeof rest.content === 'string') return { ...rest, content: labelText(rest.content, name) };
+    if (Array.isArray(rest.content)) {
+      let done = false;
+      const parts = rest.content.map(p => {
+        if (done || p?.type !== 'text') return p;
+        done = true;
+        return { ...p, text: labelText(p.text, name) };
+      });
+      return { ...rest, content: done ? parts : [{ type: 'text', text: `[${name}]:` }, ...parts] };
+    }
+    return rest;
+  });
+}
