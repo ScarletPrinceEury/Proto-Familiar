@@ -221,6 +221,12 @@ test('the manual covers identity, care facts and checking what I did, with real 
   // 0.14.79: canary stamps.
   const canary = find('canary stamps');
   assert.ok(canary, 'the canary entry exists');
+  // 0.14.87: others who may type in the web chat.
+  const speakers = find('speaking as');
+  assert.ok(speakers, 'the speakers entry exists');
+  for (const label of ['Others who may type in my web chat', 'Open Knowledge editor', 'Speaking as']) {
+    assert.ok(speakers.content.includes(label) && html.includes(label), `"${label}" is named and real`);
+  }
   for (const label of ['Identity canary stamps', 'Check stamps']) {
     assert.ok(canary.content.includes(label) && html.includes(label), `"${label}" is named and real`);
   }

@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 11;
+export const MANUAL_TOME_VERSION = 12;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -171,6 +171,12 @@ export function buildManualTome() {
     ['identity', 'identity files', 'identity budget', 'who you are', 'your files', 'standing fact', 'standing facts', 'cleanup', 'cleanup proposals', 'cleanup suggestions', 'trim your', 'too much context'],
     `[Manual: My identity & standing facts] My identity files come along with every message I get, group chats included. So they hold who I am, the shape of {{user}} and me, and only the core of who {{user}} is. Things that only matter sometimes (preferences, patterns, situational notes) live as standing facts that I recall when they come up, and those stay private to our own conversations. How much identity rides along is {{user}}'s call: "Identity budget (tokens)", in Settings → Temporal → Open Temporal editor → Automation tab (default 6000). If a group of my files goes over, I get a nudge to move things out. My memory upkeep also looks over files that are over budget or haven't changed in a while and suggests passages that could move, but it never cuts anything itself and never looks at my core (identity, persona, personhood, wants, boundaries). Its suggestions show up in our own conversations as cleanup proposals: I apply one (the standing fact is saved, then that passage is cut) or dismiss it, and a passage I dismiss isn't suggested again. {{user}} can see them all, and what I decided, under "Identity cleanup suggestions" right below the budget. "Pause identity cleanup suggestions" stops new ones, for when {{user}} and I go through my files together. I edit my own files myself: I can add a line, cut a passage, delete a section or rewrite one, and a snapshot is kept before every change.`,
     { comment: 'Identity & standing facts' },
+  );
+
+  add(
+    ['speaking as', 'someone else typing', 'other person typing', 'web speakers', 'others who may type', 'claude code'],
+    `[Manual: When someone else types in our chat] Everything typed into our web chat counts as {{user}} unless they say otherwise. If someone else sometimes types here (a friend, or Claude Code working on me), {{user}} lists them under "Others who may type in my web chat" ("Open Knowledge editor", then the Prompts tab). Then a "Speaking as" choice appears next to the message box. A message sent as someone else shows up to me as "[Their name]: …", is remembered as theirs, and doesn't count as {{user}}: it isn't read for signs of distress and doesn't count as {{user}} being around. The choice goes back to {{user}} after every message.`,
+    { comment: 'Others typing in the chat' },
   );
 
   add(

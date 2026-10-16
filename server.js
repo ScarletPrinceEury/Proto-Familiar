@@ -128,6 +128,7 @@ import { appendReflectionEvent, readReflectionEvents } from './src/pondering/ref
 import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } from './relative-time.js';
 import { modelSignal } from './src/diagnostics/model-signal.js';
+import { speakerOf, labelSpeakers } from './src/village/web-speakers.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -409,7 +410,7 @@ function malformedMessageIndex(messages) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag, clientAttempt } = req.body;
+  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag, clientAttempt, speaker: turnSpeaker } = req.body;
   // Fires when the client goes away (tab closed, voice turn gave up, an external
   // client hung up) so every upstream request below stops with it. Attached
   // before any await — see upstream-abort.js for why it's the RESPONSE's close.
@@ -506,7 +507,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // The detector is a heuristic, not a diagnostic — see crisis-signals.js
   // for the explicit boundaries. Disable entirely with the env var
   // PROTO_FAMILIAR_THREAT_DISABLED=1.
-  if (enrichMode === 'full' && userText && userText.trim()) {
+  // A listed other speaker (web-speakers.js, ward decision 0.14.87): their words
+  // aren't my human's — not scored as my human's distress, and not counted as my
+  // human being around. Only a LISTED name counts; anything else is my human.
+  const otherSpeaker = speakerOf({ role: 'user', speaker: turnSpeaker ?? lastUser?.speaker }, readSettingsSync() || {});
+  if (otherSpeaker && enrichMode === 'full') {
+    console.log(`[threat] not scored, and not counted as my human being active: this message is from ${otherSpeaker}`);
+  }
+  if (enrichMode === 'full' && userText && userText.trim() && !otherSpeaker) {
     // Stamp "user just sent a message" so the silence-triage loop
     // knows when to start considering check-ins. Fire-and-forget.
     recordUserActivity().catch(err =>
@@ -654,7 +662,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // carriers yet, so this only cleans earlier turns; user turns are untouched.
   // records: each past turn that really ran tools keeps an app-written system
   // record after it, so history doesn't teach me that a sentence is an action.
-  const historyMessages = collapseToolTurns(Array.isArray(messages) ? messages : [], { records: true });
+  // A listed other speaker's turns read "[Name]: …" (web-speakers.js, 0.14.87).
+  const historyMessages = labelSpeakers(
+    collapseToolTurns(Array.isArray(messages) ? messages : [], { records: true }),
+    readSettingsSync() || {},
+  );
   let baseMessages = injectCorePrompts
     ? withCorePrompts(historyMessages, readSettingsSync() || {})
     : historyMessages;
