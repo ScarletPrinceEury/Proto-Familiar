@@ -161,6 +161,13 @@ component menus in the ward's own DM only: `!queue` and `!connection` — see
 [Ward Discord console](ward-console) for the pending memory-consent queue, connection routing,
 and reasoning-effort controls they expose.
 
+A separate, narrower naming gate governs who may type in the ward's own *web* chat box rather
+than who the Familiar may be present with elsewhere: `web-speakers.js` lets the ward list other
+people (and, as its first consumer, the Claude Code coding agent) who may speak there without
+their words being misfiled as the ward's own — see
+[Web Speakers and the Claude Code Bridge](claude-code-bridge) for the fail-closed gate and the
+two-way bridge and mailbox built on top of it.
+
 ## Storage shape
 
 Proto-Familiar keeps almost no state of its own. `logs/` holds session JSON files and
@@ -190,6 +197,7 @@ If you're asking yourself... go to:
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 - **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
+- **How can someone other than the ward (or Claude Code) type in the web chat without being misread as the ward?** → [Web Speakers and the Claude Code Bridge](claude-code-bridge)
 - **How does a saved connection turn into an actual LLM request, and can a local model with no API key be used?** → [Providers and connection readiness](providers)
 - **When do sessions end, and how can the ward manually close an open session?** → [Session lifecycle](session-lifecycle)
 - **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
@@ -268,6 +276,10 @@ If you're asking yourself... go to:
   update, and launch tooling, and the invariants it must preserve.
 - [Update](update) — the self-update mechanism, detection, and the design choice to never
   update automatically without the ward's consent.
+- [Web Speakers and the Claude Code Bridge](claude-code-bridge) — the fail-closed naming gate
+  that lets someone other than the ward type in the web chat without their words being misfiled
+  as the ward's, and the two-way bridge and mailbox it enables between Claude Code and the
+  Familiar.
 - [Entity-as-subject](../concepts/entity-as-subject) and
   [Multi-embodiment](../concepts/multi-embodiment) — the design stance this architecture
   exists to serve.
