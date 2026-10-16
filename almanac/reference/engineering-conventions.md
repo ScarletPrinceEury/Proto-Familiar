@@ -83,6 +83,27 @@ sources:
   - id: voice-notes-test
     type: file
     path: tests/voice-notes.test.mjs
+  - id: resolve-uv
+    type: file
+    path: scripts/lib/resolve-uv.mjs
+  - id: json-state
+    type: file
+    path: src/util/json-state.js
+  - id: core-prompts
+    type: file
+    path: core-prompts.js
+  - id: guide-chat
+    type: file
+    path: guide-chat.js
+  - id: memorization
+    type: file
+    path: src/memory/memorization.js
+  - id: injection-guard
+    type: file
+    path: injection-guard.js
+  - id: own-files
+    type: file
+    path: own-files.js
 ---
 
 # Engineering Conventions
@@ -161,6 +182,49 @@ existing monthly one was built as one tier-parameterized engine (`selectTierTarg
 fold function, with the monthly tier's own exports rewritten as thin wrappers over the shared
 engine so its public contract did not change [@pondering-consolidate-js].
 
+A late-September 2026 pass found and fixed three more instances of the same mistake, all with
+the same shape: logic that should exist once had quietly drifted into two or three places that
+had to be kept in sync by hand.
+
+- **`resolveUv()`** (find the `uv` binary across the install locations Astral's installer uses)
+  existed as three byte-identical copies — in `ensure-phylactery-deps.mjs`, in
+  `ensure-unruh-deps.mjs`, and as `thalamus.js`'s own `resolveUvBinary()` — with one copy's
+  comment literally saying "Mirror thalamus.js's resolveUvBinary()" as an acknowledgment of the
+  duplication rather than a fix for it. It is now one `resolveUv()` in
+  `scripts/lib/resolve-uv.mjs`, imported by all three call sites; `thalamus.js` kept its own
+  comment at the import site explaining the GUI-launcher/ENOENT rationale that is specific to
+  its `StdioClientTransport` use and not captured by the generic helper [@resolve-uv].
+- **`readJsonStateSync`** — six separate modules each hand-rolled the same "parse a JSON file,
+  never throw, fall back on missing/corrupt/non-object" dance for their own sync state file
+  (voice clips catalogue, call-engine active-call check, browser page watches, the weather
+  mirror, the pondering web budget, and `wait-streak.js`'s streak tally). `json-state.js`
+  already owned an async version, `readJsonState`; this added the sync sibling
+  `readJsonStateSync(file, fallback)` with the identical contract, so all six callers adopted
+  one tested implementation instead of six subtly-varying inline `try`/`catch` blocks
+  [@json-state]. The `wait-streak.js` adoption was deliberately scoped as behavior-preserving
+  only — it is a `src/safety/` file (see the Safety-critical sign-off rule below), and the
+  change touches only the streak-tally file read, not any gate or threshold.
+- **The ward-field framing** (the `[Character Profile]`/`[Human Profile]` block: headers, field
+  order, and the `'\n\n---\n\n'` join) was assembled independently in `core-prompts.js`'s
+  `coreSystemSegment` (the server chat path) and in `guide-chat.js`'s `buildGuideSystem` (the
+  settings web-search guide) — the two had to be kept matching by hand, and a header rename in
+  one would silently diverge the other. The un-substituted assembly is now a single
+  `coreFieldsBlock(settings)` in `core-prompts.js`; `coreSystemSegment` calls it and substitutes
+  macros over the result, and `guide-chat.js` imports it and folds it into its own larger
+  assembly before substituting once over the whole thing, so no caller double-substitutes
+  macros [@core-prompts] [@guide-chat].
+
+Recomputing the same thing inside one call site, every time it runs, is the same waste as
+copy-pasting logic across files — it just costs cycles instead of maintenance risk.
+`injection-guard.js`'s `sanitizeExternal` used to rebuild all 13 of its global-flagged
+detection regexes with `new RegExp(...)` on every call, on every inbound web/Discord message;
+they are now precomputed once at module load as `INJECTION_PATTERNS_G`, which is safe because
+`String.replace` resets a global regex's own `lastIndex` on each call [@injection-guard].
+`own-files.js`'s `readOwnFile` used to call `stat` twice — once to size the read cap, again only
+to compute `truncated` — when the first stat's size already answers both questions; it now
+stats once and reuses the result, which is also more correct, since a second stat could observe
+a different size if the file changed between the two calls [@own-files].
+
 ## Modular by default; orchestration files are the exception
 
 New logic defaults to a focused module. `cerebellum.js` and `thalamus.js` are deliberately
@@ -169,6 +233,20 @@ architecture, not a single-responsibility violation, and should not be reflexive
 unrelated logic that could live in its own file should not be piled into them either
 [@claude-md]. See [Architecture](../architecture) for what each of those two files actually
 owns.
+
+The same judgment applies one level down, inside a single wide function: split off the
+self-contained sub-steps, but keep the true connective spine intact. `processJob` in
+`src/memory/memorization.js` — the ~400-line memorization orchestrator — had four genuinely
+self-contained, narrow-surface concerns (building the name/alias lookup, filing deferred
+session follow-ups, logging passive tracker observations, and routing extracted relations to
+the graph) pulled out into named module-level helpers (`buildByNameLookup`,
+`createSessionFollowups`, `logTrackerObservations`, `routeRelationsToGraph`), each independently
+testable and each already covered by its own pipeline test [@memorization]. The per-fact loop
+itself was deliberately **not** extracted: it reads about ten shared-state values, mutates
+`created`/`pendingConsent` across iterations, is the function's true connective spine, and has
+a recorded crash history of its own. Splitting it for symmetry would have added regression
+surface for a readability gain that is low compared to the risk — the same reasoning that keeps
+`cerebellum.js` and `thalamus.js` whole above, applied to a single function rather than a file.
 
 ## Ride existing requests; gate in code
 
