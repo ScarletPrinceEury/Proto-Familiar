@@ -6,6 +6,24 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### Intentions aren't reliable enough yet — revisit, comparing heartbeat designs
+
+The ward finds intentions (Unruh's intention store, which the noticing loop
+acts on) not as reliable as they want them to be: intentions the Familiar sets
+don't always fire or get followed through when they should. Not yet diagnosed
+case by case; the next pass should collect concrete misses first (the noticing
+event log, `logs/noticing-events.jsonl`, and the turn log show what woke and
+what ran).
+
+Worth comparing against how other agentic harnesses keep an agent's own
+commitments alive. Heartbeats are the obvious reference: a periodic wake where
+the agent re-reads its standing list (OpenClaw's heartbeat is one example). This
+codebase deliberately went the other way for noticing — code decides when
+there's something to look at, no fixed checklist cadence (see CLAUDE.md,
+"Noticing") — so the question is whether intentions need a heartbeat-style
+backstop on top of the wake conditions, or better wake conditions. Noticing is
+a ward-sign-off path: any change to when or whether it acts needs the ward.
+
 ### A relayed message carried the ward's full legal name into a group channel (privacy; mostly prompting)
 
 **What happened (2026-10-16).** The ward showed the Familiar an email: signing
