@@ -1331,11 +1331,11 @@ function discordTomesOff() {
 // for the room by content (0.14.90): my human's own DM gets everything, a
 // shared room only what its grants cover, my own lore (`self`) anywhere.
 // Returns { lead, tail, atDepth }; never throws into the turn.
-async function activeDiscordLore({ content, session, settings, locationKey, topicGrants = null }) {
+async function activeDiscordLore({ content, session, settings, locationKey, topicGrants = null, audiences = null, registry = null }) {
   const none = { lead: '', tail: '', atDepth: '' };
   if (discordTomesOff()) return none;
   const lore = await loreForTurn({
-    content, messages: session.messages ?? [], settings, topicGrants,
+    content, messages: session.messages ?? [], settings, topicGrants, audiences, registry,
     tomesDir: path.join(REPO_ROOT, 'tomes'),
   });
   if (lore.count) console.log(`[discord] tomes: ${lore.count} lore entr${lore.count === 1 ? 'y' : 'ies'} activated in ${locationKey}${topicGrants == null ? '' : ' (gated for the room)'}`);
@@ -2791,7 +2791,11 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // (after_char + sys_bottom) BELOW the system block; at-depth rides near the
   // turn (added to apiMessages below). session.messages here is prior history —
   // the current message (`content`) is scanned as the live input, not yet in it.
-  const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey, topicGrants: audienceTag === 'ward-private' ? null : (audienceTopics ?? {}) });
+  const lore = await activeDiscordLore({
+    content, session, settings, locationKey: decision.locationKey, registry,
+    topicGrants: audienceTag === 'ward-private' ? null : (audienceTopics ?? {}),
+    audiences: audienceVisible ?? [],
+  });
   const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
   const history = buildHistoryForPrompt(session);
 

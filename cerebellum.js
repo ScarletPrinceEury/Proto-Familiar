@@ -3339,7 +3339,7 @@ export const TOOL_EXECUTORS = {
     elapsedMsSinceLastMessage: ctx?.sessionInfo?.elapsedMsSinceLastMessage ?? null,
   }, null, 2),
 
-  save_to_tome: async ({ title, content, keywords, tome, content_tag }) => {
+  save_to_tome: async ({ title, content, keywords, tome, content_tag }, ctx = {}) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save to Tome: content is required.';
     if (content.length > 16384) return 'Failed to save to Tome: content exceeds 16 KB limit.';
     const keys = Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean);
@@ -3347,7 +3347,11 @@ export const TOOL_EXECUTORS = {
     const named = typeof tome === 'string' && tome.trim();
     // The share tag I picked, checked in code: a note that names a person is
     // held at sensitive (tome-tags.js). Unreadable or absent → not sorted yet.
-    const { share, shareNote } = await tomeShareForSave(content_tag, `${title ?? ''}\n${content}`);
+    const { share: tagFields, shareNote } = await tomeShareForSave(content_tag, `${title ?? ''}\n${content}`);
+    // A note saved in a shared room stays within that room's circle, like a
+    // memory made there (tome-audience.js derives the rest in code).
+    const roomTag = typeof ctx?.audienceTag === 'string' && ctx.audienceTag && ctx.audienceTag !== 'ward-private' ? ctx.audienceTag : null;
+    const share = roomTag ? { ...tagFields, roomTag } : tagFields;
     try {
       if (named) {
         if (!_toolDeps.addTomeEntryByName) return 'Failed to save to Tome: named tomes are not available right now.';

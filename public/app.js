@@ -8271,6 +8271,9 @@ async function savePendingSummary() {
     learnedAt:        new Date().toISOString(),
     session_id:       ctx?.sessionId ?? state.sessionId,
     message_range:    [topic.startIndex, topic.endIndex],
+    // The room it came from, when others were present: the server gates the
+    // note within that circle (tome-audience.js, 0.14.95).
+    ...(sessionIsSharedRoom() ? { room: state.sessionAudience } : {}),
   };
 
   try {
@@ -8633,7 +8636,7 @@ function tomeShareSelectHTML(tome) {
   const cur = tome.roomShare ?? 'content';
   const opts = Object.entries(TOME_SHARE_LABELS)
     .map(([v, l]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('');
-  return `<select class="ke-select tome-share-select" data-id="${esc(tome.id)}" aria-label="Whether this tome comes along to shared rooms" title="In a friend's DM, a Discord channel or a chat with others present: follow each note's own setting, always bring this tome, or never">${opts}</select>`;
+  return `<select class="ke-select tome-share-select" data-id="${esc(tome.id)}" aria-label="Whether this tome comes along to shared rooms" title="In a friend's DM, a Discord channel or a chat with others present: follow each note's own setting; or always bring this tome (a note with its own topics still follows them); or never">${opts}</select>`;
 }
 
 async function setTomeRoomShare(tomeId, roomShare) {
@@ -8654,7 +8657,7 @@ function tomeEntryShareBadge(entry) {
   if (entry?.wardOnly === true) return '<span class="ke-badge ke-badge-cw-high" title="Never comes along to shared rooms">Just us</span>';
   const tag = String(entry?.contentTag ?? '').trim();
   if (tag === 'self') return '<span class="ke-badge ke-badge-register" title="Your Familiar\'s own note: comes along to any room">Familiar\'s own</span>';
-  if (tag) return keContentTagBadge(tag);
+  if (tag) return tag.split('+').map(t => keContentTagBadge(t.trim())).join('');
   return entry?.contentTagReviewedAt
     ? '<span class="ke-badge ke-badge-cw-low" title="Looked at, couldn\'t tell: stays out of shared rooms">Unsure</span>'
     : '<span class="ke-badge ke-badge-cw-low" title="Not sorted yet: stays out of shared rooms">Not sorted</span>';
@@ -12137,25 +12140,41 @@ function openLoreEditor(uid) {
 // "In shared rooms" in the entry editor: the Familiar's own (any room) / just between us /
 // not sorted / a topic + level (the memory vocabulary). Whatever my human
 // picks here stands; the server only canonicalises it.
+// A note's topic tags ("work:open+mental-health:sensitive") as { topic: level }.
+function tomeTagTopicMap(tag) {
+  const out = {};
+  for (const part of String(tag ?? '').split('+')) {
+    const [topic, level] = part.trim().split(':');
+    if (topic && topic !== 'self' && topic !== 'private') out[topic] = level === 'open' ? 'open' : 'sensitive';
+  }
+  return out;
+}
+
 function loreEditorFillShare(entry) {
-  const sel = $('lore-ed-share'), lvl = $('lore-ed-share-level');
-  if (!sel || !lvl) return;
+  const sel = $('lore-ed-share'), box = $('lore-ed-share-topics');
+  if (!sel || !box) return;
   const tag = String(entry?.contentTag ?? '').trim();
-  const p = keContentTagParts(tag && tag !== 'self' ? tag : '');
-  const cur = entry?.wardOnly === true ? 'private' : (tag === 'self' ? 'self' : (p?.topic ?? ''));
+  const topics = tomeTagTopicMap(tag);
+  const cur = entry?.wardOnly === true ? 'private' : (tag === 'self' ? 'self' : (Object.keys(topics).length ? 'topics' : ''));
   const opts = [
-    ['', 'Not sorted yet (stays out)'],
+    ['', 'Not sorted yet (treated as everyday, sensitive)'],
     ['self', "Your Familiar's own (comes along anywhere)"],
     ['private', 'Just between us (never)'],
-    ...VL_CONTENT_TOPICS.map(t => [t.key, `About: ${t.label}`]),
+    ['topics', 'About these topics…'],
   ];
   sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(l)}</option>`).join('');
-  lvl.innerHTML = ['open', 'sensitive'].map(l => `<option value="${l}"${(p?.level ?? 'sensitive') === l ? ' selected' : ''}>${l}</option>`).join('');
+  box.innerHTML = VL_CONTENT_TOPICS.map(t => {
+    const c = topics[t.key] ?? 'none';
+    const o = [['none', 'Not in it'], ['open', 'Open'], ['sensitive', 'Sensitive']]
+      .map(([v, l]) => `<option value="${v}"${v === c ? ' selected' : ''}>${l}</option>`).join('');
+    return `<div class="vl-topic-row" data-topic="${esc(t.key)}"><span class="vl-topic-label">${esc(t.label)}</span>` +
+      `<select class="vl-topic-val" aria-label="${esc(t.label)}: whether this note is about it, and how sensitively">${o}</select></div>`;
+  }).join('');
   const sync = () => {
-    const isTopic = !['', 'self', 'private'].includes(sel.value);
-    lvl.classList.toggle('hidden', !isTopic);
-    $('lore-ed-share-hint').textContent = isTopic
-      ? 'Comes along only where everyone present is trusted with this topic at this level.'
+    const isTopics = sel.value === 'topics';
+    box.classList.toggle('hidden', !isTopics);
+    $('lore-ed-share-hint').textContent = isTopics
+      ? 'Comes along only where everyone present is trusted with every topic it covers, at that level.'
       : '';
   };
   sel.onchange = sync;
@@ -12164,16 +12183,21 @@ function loreEditorFillShare(entry) {
 
 function loreEditorShareFields(existing) {
   const v = $('lore-ed-share')?.value ?? '';
-  const lvl = $('lore-ed-share-level')?.value === 'open' ? 'open' : 'sensitive';
+  const picked = v === 'topics'
+    ? [...($('lore-ed-share-topics')?.querySelectorAll('.vl-topic-row') ?? [])]
+        .map(r => [r.dataset.topic, r.querySelector('select')?.value])
+        .filter(([, l]) => l === 'open' || l === 'sensitive')
+        .map(([t, l]) => `${t}:${l}`)
+    : [];
   const out = { ...existing };
   const before = JSON.stringify([existing.contentTag ?? null, existing.wardOnly === true]);
   delete out.contentTag; delete out.wardOnly;
   if (v === 'private') out.wardOnly = true;
   else if (v === 'self') out.contentTag = 'self';
-  else if (v) out.contentTag = `${v}:${lvl}`;
+  else if (picked.length) out.contentTag = picked.sort().join('+');
   if (JSON.stringify([out.contentTag ?? null, out.wardOnly === true]) !== before) {
     delete out.contentTagReviewedAt;
-    if (v) { out.contentTagSource = 'ward'; out.contentTagAt = new Date().toISOString(); }
+    if (out.contentTag || out.wardOnly) { out.contentTagSource = 'ward'; out.contentTagAt = new Date().toISOString(); }
     else { delete out.contentTagSource; delete out.contentTagAt; }
   }
   return out;
