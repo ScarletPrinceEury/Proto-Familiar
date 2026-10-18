@@ -6,6 +6,51 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### A relayed message carried the ward's full legal name into a group channel (privacy; mostly prompting)
+
+**What happened (2026-10-16).** The ward showed the Familiar an email: signing
+up for a site needed an existing member to vouch, and the site's referral code
+is the account holder's full legal name in a handle shape
+(`Firstname_Lastname01`). The ward asked the Familiar to ask a group channel
+whether anyone there had an account and could vouch. The Familiar did, through
+`relay_message`, and included the referral code, so the ward's full legal name
+went to everyone in the channel.
+
+**Why nothing stopped it.**
+- No code check could have matched it: the name wasn't stored anywhere as a
+  protected string. `relay_message`'s only send check (`searchRestricted`) looks
+  for stored restricted memories in the draft, and the room gates govern what
+  reaches the Familiar's context, not what it composes from the conversation in
+  front of it.
+- The prompt side, which the ward puts at about 80% of the problem, pushed the
+  other way. `relay_message`'s `message` parameter asks for "Concrete and
+  complete — the person on the other end has none of our conversation as
+  context", and nothing says that some details stay out of a message to others
+  by default. A token like `Firstname_Lastname01` is recognisably a person's
+  name, and codes of any kind (referral, invite, verification, booking, account
+  ids) rarely need passing on.
+
+**Fix direction.**
+1. **Prompting (the main fix).** In `relay_message`'s description and in the
+   shared-room presence block (every surface where the Familiar writes to
+   people other than the ward), say plainly what a message to others carries:
+   what they need in order to answer, without codes or ids of any kind, anything
+   shaped like a full name or a handle built from one, or contact details,
+   unless the ward asked for that exact detail to be passed on. Keep "concrete
+   and complete" scoped to the ask itself.
+2. **A pre-send tripwire (safety net, the Familiar's suggestion).** Before a
+   relay or a post into a shared room, a cheap code check for name-weld shapes
+   (`First_Last`, `First.Last`, `FirstLast` plus digits), matched against the
+   ward's and villagers' known names, and for code-like tokens (long letter-digit
+   runs, referral/invite URLs). On a hit, hold the message and offer to send that
+   part to the ward's DM instead of posting it. Never drop it silently (RULE B):
+   the Familiar and the ward both see what was held and why.
+3. **The ward's legal name as a protected string.** The app only knew the
+   ward's display name; let the ward add other names or identifiers that must
+   never leave a private room, so the tripwire and the outgoing check can match
+   them exactly.
+
+
 ### Web memorization always says "my human's own room"
 
 `buildMemorizePayload` in `public/app.js` sends `audienceTag: 'ward-private'`
