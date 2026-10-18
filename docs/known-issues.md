@@ -6,12 +6,23 @@ delete it) rather than leaving it here stale.
 
 ---
 
-### Older tome notes stay out of shared rooms until they're sorted
+### Web memorization always says "my human's own room"
+
+`buildMemorizePayload` in `public/app.js` sends `audienceTag: 'ward-private'`
+for every web session, including one with others present (`sessionAudience`).
+It fails safe for facts about other people (they stay private), but a fact
+about my human from a shared web chat becomes content-gated rather than
+staying within that room's circle, and the extraction prompt treats it as a
+private session. Fix: send the session's real room (the server derives the
+tag from `sessionAudience` with `audienceTagFor`, as `/api/chat` does).
+
+### Older tome notes count as general:sensitive until they're sorted
 
 New notes get a share tag when they're saved (0.14.92), and the Familiar can
 sort the older ones with "Sort my tome notes for shared rooms" in the Tomes
 modal (opt-in, a batch every 10 minutes). Until a note is sorted it's treated
-as `general:sensitive`, so it only reaches a circle trusted with that much.
+as `general:sensitive`, so it only reaches a circle trusted with that much
+(ward decision, 0.14.95, also for Session Memories).
 The tagging is careful by design: anything the Familiar is unsure about stays
 out, and a note that names a person is held at sensitive. Check progress under
 the toggle; change any note's setting under "In shared rooms" in the editor.

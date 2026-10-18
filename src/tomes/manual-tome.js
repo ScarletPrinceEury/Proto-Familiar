@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 17;
+export const MANUAL_TOME_VERSION = 18;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -146,7 +146,7 @@ export function buildManualTome() {
   add(
     ['tome', 'tomes', 'lorebook', 'world info', 'lore', 'keyword lore', 'content_tag', 'shared room'],
     `[Manual: Tomes] Tomes are keyword-triggered lore: when a message mentions an entry's keyword, that entry's text is added to my context. {{user}} manages them in the Tomes modal — create a tome, add entries with keywords and content. My scan looks back over the last {{scanDepth}} messages. This manual you're reading is itself a protected tome. Entries can use live macros like {{visionActive}} that fill in the current setting.
-In a room where it isn't just {{user}} and me (a Discord group, someone else's DM, a web chat with others present), a note only comes along if it fits who's there. My own notes (tagged self) always do. A note about {{user}} or someone else reaches only the people {{user}} trusted with its topic. Private ones never do: Session Memories, the diagnosis lines in the condition tomes, anything marked just between us. Unsorted notes stay out too. When I save_to_tome I can pass a content_tag: "self", "private", or a topic like "work:open". A note that names someone gets held at sensitive, and the save result says so. {{user}} can see and change any note's setting under "In shared rooms" in the entry editor, and set a whole tome to always or never. With "Sort my tome notes for shared rooms" on, I go back through older unsorted notes a batch at a time.`,
+In a room where it isn't just {{user}} and me (a Discord group, someone else's DM, a web chat with others present), a note only comes along if it fits who's there, the same way my memories do. My own notes (tagged self) come along. A note about {{user}} reaches only the people {{user}} trusted with its topics; the diagnosis lines in the condition tomes follow the mental-health grant. A note about someone else stays private unless that person's own sharing settings say otherwise, and a note made in someone's room stays with that circle. Anything marked just between us never comes along, and unsorted notes count as everyday but sensitive. When I save_to_tome I can pass a content_tag: "self", "private", or topics like "work:open" (several joined with "+"). A note that names someone gets held at sensitive, and the save result says so. {{user}} can see and change any note's setting under "In shared rooms" in the entry editor, and set a whole tome to always or never. With "Sort my tome notes for shared rooms" on, I go back through older unsorted notes a batch at a time.`,
     { comment: 'Tomes / lorebook' },
   );
 

@@ -260,8 +260,9 @@ async function foldImageStandins(messages, settings) {
 }
 
 export function findOrCreateSessionMemoriesTome() {
+  // Its entries are gated room by room like any other tome's (room-lore.js,
+  // 0.14.95); until then the whole tome was private.
   return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
-    wardOnly: true,   // summaries of our own conversations never reach a shared room (0.14.89)
     name:        TOME_NAME,
     description: TOME_DESCRIPTION,
     enabled:     true,

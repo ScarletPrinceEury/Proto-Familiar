@@ -328,6 +328,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS, resolveProviderUrl, providerRequiresKey, authHeader, connectionReady, resolveReasoningEffort } from './providers.js';
 import { ensureManualTome } from './src/tomes/manual-tome.js';
+import { migrateTomeSharing } from './src/tomes/tome-migrations.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './src/voice/voice-bench-run.js';
 import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes, modelById, isPinned } from './src/voice/voice-models.js';
@@ -552,9 +553,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let audienceTag     = 'ward-private';
   let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
   let audienceTopics  = null; // the room's per-topic content grants (null = ward sees all)
+  let audienceRegistry = null; // the registry those were derived from (tome lore's circle check)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
+      audienceRegistry = registry;
       audienceGrants  = resolveAudience(sessionAudience, registry);
       audienceTag     = audienceTagFor(sessionAudience, registry);
       // Pillar E recall gate — circle MEMBERSHIP: the set of circles everyone
@@ -682,7 +685,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   if (serverLore === true && enrichMode !== 'none') {
     const lore = await loreForTurn({
       content: userText, messages: historyMessages, settings: readSettingsSync() || {},
-      topicGrants: audienceTopics, tomesDir: path.join(__dirname, 'tomes'),
+      topicGrants: audienceTopics, audiences: audienceVisible, registry: audienceRegistry,
+      tomesDir: path.join(__dirname, 'tomes'),
     });
     if (lore.count) {
       baseMessages = placeRoomLore(baseMessages, lore);
@@ -6218,6 +6222,15 @@ const httpServer = app.listen(PORT, HOST, async () => {
       else if (r.reason === 'ward-edited') console.log('[manual] a newer manual shipped, but yours is edited — leaving it as-is');
     })
     .catch(err => console.error('[manual] seed failed (skipping):', err?.message ?? err));
+  // Room-gate migrations (0.14.95): the shipped diagnosis lines move to
+  // mental-health:sensitive and Session Memories stops being private as a
+  // whole. Applied to the live files in code (the shipped JSON stays frozen).
+  migrateTomeSharing(TOMES_DIR, { modifyTomeFile })
+    .then(c => {
+      if (c.diagnosis.length) console.log(`[tomes] diagnosis lines now follow the mental-health grant: ${c.diagnosis.join(', ')}`);
+      if (c.unprivate.length) console.log('[tomes] Session Memories is gated entry by entry now');
+    })
+    .catch(err => console.error('[tomes] room-gate migration failed (skipping):', err?.message ?? err));
   // Load the learned `name`-field capability cache (provider:model → yes/no) and
   // enable write-through, so a provider that 400'd on the field stays bare across
   // restarts until its model changes. Optimistic until something is learned.

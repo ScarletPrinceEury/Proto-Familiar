@@ -46,10 +46,10 @@ test("the ward's own room has all of it", () => {
   assert.deepEqual(uids(activateIn(OWN_ROOM)), ['diag', 'g1', 'g2', 'k1', 'medical', 'mine', 's1', 'untagged', 'workish']);
 });
 
-test('a shared room gets my own lore and what its grants cover, nothing private', () => {
-  assert.deepEqual(uids(activateIn(FRIENDS)), ['g1', 'mine', 'workish'],
-    'self flows; work:open is granted; medical is not; untagged is unsure; wardOnly, Session Memories and a never-share tome stay out; an always-share tome comes along minus its wardOnly entry');
-  assert.deepEqual(uids(activateIn({})), ['g1', 'mine'], 'a room with no grants still has me and the always-share tome');
+test('a shared room gets my own lore and what its grants cover, nothing marked private', () => {
+  assert.deepEqual(uids(activateIn(FRIENDS)), ['g1', 'mine', 's1', 'workish'],
+    'self flows (Session Memories included: it is gated entry by entry since 0.14.95); work:open is granted; medical is not; untagged is general:sensitive; wardOnly and a never-share tome stay out; an always-share tome comes along minus its wardOnly entry');
+  assert.deepEqual(uids(activateIn({})), ['g1', 'mine', 's1'], 'a room with no grants still has me and the always-share tome');
 });
 
 test('the per-entry rule, one case at a time', () => {
@@ -57,7 +57,8 @@ test('the per-entry rule, one case at a time', () => {
   assert.equal(entryReachesRoom({}, { topicGrants: { general: 'sensitive' } }), true, 'untagged needs general:sensitive, as with memories');
   assert.equal(entryReachesRoom({}, { topicGrants: FRIENDS }), false);
   assert.equal(entryReachesRoom({ wardOnly: true }, { share: 'always', topicGrants: FRIENDS }), false, 'wardOnly beats always');
-  assert.equal(tomeRoomShare({ name: 'Session Memories', roomShare: 'always' }), 'never', 'a private tome is never shared');
+  assert.equal(tomeRoomShare({ name: 'x', wardOnly: true, roomShare: 'always' }), 'never', 'a tome marked private is never shared');
+  assert.equal(tomeRoomShare({ name: 'Session Memories' }), 'content', 'Session Memories is an ordinary tome now (0.14.95)');
   assert.equal(tomeRoomShare({ roomShare: 'bogus' }), 'content');
   assert.equal(tomeIsWardOnly({ name: 'x', wardOnly: true }), true);
 });
@@ -96,7 +97,7 @@ test('pipeline: loreForTurn reads real files and gates them for the room; placeR
 
 const CONDITION_TOMES = ['ADHD-Tome.json', 'Depression-Tome.json', 'Agoraphobia-Tome.json', 'OCD-Tome.json', 'Bipolar-Tome.json'];
 
-test('every shipped condition-tome constant is tagged wardOnly (diagnosis never leaks)', async () => {
+test('the shipped files keep their frozen wardOnly diagnosis flag (the boot migration converts it in code)', async () => {
   for (const f of CONDITION_TOMES) {
     const tome = JSON.parse(await fs.readFile(path.join(REPO, 'tomes', f), 'utf8'));
     const constants = Object.values(tome.entries).filter(x => x.constant === true);
@@ -105,12 +106,21 @@ test('every shipped condition-tome constant is tagged wardOnly (diagnosis never 
   }
 });
 
-test("the shipped condition tomes keep the ward's decision: guidance shared, diagnosis held back", async () => {
+test("after the migration: guidance is shared, the diagnosis line follows the mental-health grant", async () => {
+  const { plannedMigrations, DIAGNOSIS_TAG } = await import('../src/tomes/tome-migrations.js');
   for (const f of CONDITION_TOMES) {
     const tome = JSON.parse(await fs.readFile(path.join(REPO, 'tomes', f), 'utf8'));
+    const uid = plannedMigrations(tome).diagnosis;
+    assert.ok(uid, `${f} has a shipped diagnosis line to migrate`);
+    const { wardOnly: _w, ...rest } = tome.entries[uid];
+    tome.entries[uid] = { ...rest, contentTag: DIAGNOSIS_TAG, contentTagSource: 'shipped' };
     assert.equal(tomeRoomShare(tome), 'always', `${f} guidance reaches shared rooms`);
-    const shared = tomesForRoom([tome], { topicGrants: FRIENDS })[0];
-    assert.ok(!Object.values(shared.entries).some(x => x.wardOnly), `${f} diagnosis stays out`);
-    assert.ok(Object.keys(shared.entries).length > 0, `${f} guidance comes along`);
+    const friends = tomesForRoom([tome], { topicGrants: FRIENDS })[0];
+    assert.ok(!(uid in friends.entries), `${f} diagnosis stays out of a room not trusted with mental health`);
+    assert.ok(Object.keys(friends.entries).length > 0, `${f} guidance comes along`);
+    const trusted = tomesForRoom([tome], { topicGrants: { ...FRIENDS, 'mental-health': 'sensitive' } })[0];
+    assert.ok(uid in trusted.entries, `${f} diagnosis reaches a room trusted with mental health at sensitive`);
+    const openOnly = tomesForRoom([tome], { topicGrants: { ...FRIENDS, 'mental-health': 'open' } })[0];
+    assert.ok(!(uid in openOnly.entries), `${f} diagnosis needs the sensitive level, not open`);
   }
 });

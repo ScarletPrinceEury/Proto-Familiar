@@ -6,7 +6,10 @@
  *   - `contentTag: 'self'`        my own thinking, interests or general
  *                                 knowledge that isn't about anyone: any room;
  *   - `contentTag: 'topic:level'` the memory vocabulary (content-tags.js):
- *                                 reaches a room whose grants cover it;
+ *                                 reaches a room whose grants cover it. A note
+ *                                 can cover several topics, joined with '+'
+ *                                 ('work:open+mental-health:sensitive', 0.14.95);
+ *                                 a room then needs every one of them;
  *   - `wardOnly: true`            just between my human and me;
  *   - nothing                     not sorted yet, treated as general:sensitive.
  *
@@ -26,17 +29,37 @@ export const TOME_SELF_TAG = 'self';
 export const TOME_PRIVATE_TAG = 'private';
 
 /**
- * A share tag as written by me or the editor → 'self' | 'private' |
- * 'topic:level' | null (unsure, empty, or not a real tag). A topic without a
- * level reads as sensitive (normalizeTag's safe default).
+ * A share tag as written by me or the editor → 'self' | 'private' | one or
+ * more 'topic:level' joined with '+' (sorted, one per topic, the stricter
+ * level kept) | null (unsure, empty, or not a real tag). A topic without a
+ * level reads as sensitive (normalizeTag's safe default). Several topics may
+ * come as an array or separated by '+' or ','; if ANY part isn't a real topic
+ * the whole tag is unreadable (null), so a typo can't quietly drop a topic.
  */
 export function normalizeTomeTag(raw) {
-  const s = String(raw ?? '').trim().toLowerCase();
-  if (!s || s === 'unsure') return null;
-  if (s === TOME_SELF_TAG || s === 'mine') return TOME_SELF_TAG;
-  if (s === TOME_PRIVATE_TAG || s === 'ward-only' || s === 'wardonly') return TOME_PRIVATE_TAG;
-  const t = normalizeTag(s);
-  return t ? `${t.topic}:${t.level}` : null;
+  const parts = (Array.isArray(raw) ? raw : String(raw ?? '').split(/[+,]/))
+    .map(p => String(p ?? '').trim().toLowerCase()).filter(Boolean);
+  if (!parts.length) return null;
+  if (parts.length === 1) {
+    const s = parts[0];
+    if (s === 'unsure') return null;
+    if (s === TOME_SELF_TAG || s === 'mine') return TOME_SELF_TAG;
+    if (s === TOME_PRIVATE_TAG || s === 'ward-only' || s === 'wardonly') return TOME_PRIVATE_TAG;
+  }
+  const byTopic = new Map();
+  for (const p of parts) {
+    const t = normalizeTag(p);
+    if (!t) return null;
+    if (byTopic.get(t.topic) !== 'sensitive') byTopic.set(t.topic, t.level);
+  }
+  return [...byTopic].sort(([a], [b]) => a.localeCompare(b)).map(([t, l]) => `${t}:${l}`).join('+');
+}
+
+/** The topics a tag covers: [{ topic, level }] ([] for self / private / none). */
+export function tagTopics(tag) {
+  const t = normalizeTomeTag(tag);
+  if (!t || t === TOME_SELF_TAG || t === TOME_PRIVATE_TAG) return [];
+  return t.split('+').map(p => { const [topic, level] = p.split(':'); return { topic, level }; });
 }
 
 /**
@@ -79,10 +102,10 @@ export function checkTomeTag(tag, text, names = []) {
   const t = normalizeTomeTag(tag);
   if (!t || t === TOME_PRIVATE_TAG) return { tag: t, heldBy: null };
   const isSelf = t === TOME_SELF_TAG;
-  if (!isSelf && !t.endsWith(':open')) return { tag: t, heldBy: null };
+  if (!isSelf && !t.includes(':open')) return { tag: t, heldBy: null };
   const who = mentionedPerson(text, names);
   if (!who) return { tag: t, heldBy: null };
-  return { tag: isSelf ? 'general:sensitive' : t.replace(/:open$/, ':sensitive'), heldBy: who };
+  return { tag: isSelf ? 'general:sensitive' : t.replace(/:open\b/g, ':sensitive'), heldBy: who };
 }
 
 /**

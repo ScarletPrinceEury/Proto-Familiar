@@ -1476,23 +1476,33 @@ turn. **Parity is hand-maintained** (app.js is a classic script, no ES modules,
 so no single shared source without a build step); tests pin the behavior — change
 one engine, change the other. Timed effects (sticky/cooldown) aren't persisted
 across Discord turns yet (v1); `delay` works via the session turn count.
-**Room gate (`room-lore.js`, 0.14.89–0.14.92).** Lore is gated for the room
-BEFORE activation by `tomesForRoom(tomes, { topicGrants })` (`null` = the ward's
-own room, everything). In a shared room an entry reaches the prompt when it's
-tagged `self` (the Familiar's own lore), or its `contentTag` is covered by the
-room's per-topic grants (`memoryVisibleToVillager` — the memory gate; untagged =
-`general:sensitive`); never when it's `wardOnly`; never from a private tome
-(`tomeIsWardOnly`: `wardOnly: true` or `PRIVATE_TOME_NAMES` = Session Memories).
-A tome's `roomShare` ('content' | 'always' | 'never') overrides. Shipped: the
-condition tomes are 'always' with their diagnosis constants `wardOnly` (ward
-decision: guidance shared, diagnosis held back); the Manual is 'always'.
+**Room gate (`room-lore.js`, 0.14.89–0.14.95).** Lore is gated for the room
+BEFORE activation by `tomesForRoom(tomes, { topicGrants, audiences, registry })`
+(`topicGrants: null` = the ward's own room, everything) — full parity with
+memory recall since 0.14.95 (ward decision). In a shared room an entry must clear
+both halves of the memory gate: (1) the circle check — `entryAudience`
+(`tome-audience.js`) derives the note's circle with `deriveMemoryAudience`, from
+the villagers it names, the room it was made in (`roomTag` from `save_to_tome` on
+a shared turn, or `room` = the session audience a web topic-save records; none =
+the ward's own room) and its sensitivity (medical / mental-health topics), and
+that circle must be in the room's `visibleAudiences` (no set from the caller →
+only `ward-content-gated` notes pass); (2) the topic check — `self` passes;
+topic tags (`a:x+b:y`, several allowed) need EVERY topic covered; untagged =
+`general:sensitive`. Never when it's `wardOnly`; never from a `wardOnly` tome. A
+tome's `roomShare`: 'never' blocks the tome; 'always' lets its UNTAGGED entries
+through the topic check (an entry with its own topics still follows them).
+Shipped: the condition tomes are 'always'; their diagnosis constants are
+`mental-health:sensitive` (converted at boot from the frozen shipped `wardOnly`
+by `tome-migrations.js`, which never touches an entry the ward set); the Manual is
+'always'. Session Memories is an ordinary tome since 0.14.95 (the same migration
+drops the tome-level `wardOnly` 0.14.89 gave new ones).
 `loreForTurn` reads the files, gates, activates and folds; Discord's
 `activeDiscordLore` uses it, and so does `/api/chat` for a web session with
 others present (the client sends `serverLore: true` and skips its own lore;
 `placeRoomLore` puts lead/tail in the system message and at-depth above the
 current message). `tome-lore.js` itself stays audience-agnostic.
-**Share tags (`tome-tags.js`, 0.14.92).** An entry carries `contentTag: 'self'`,
-`contentTag: 'topic:level'`, `wardOnly: true`, or nothing (unsorted =
+**Share tags (`tome-tags.js`, 0.14.92; several topics 0.14.95).** An entry carries `contentTag: 'self'`,
+`contentTag: 'topic:level'` (or several, `'a:open+b:sensitive'`), `wardOnly: true`, or nothing (unsorted =
 `general:sensitive`), plus `contentTagSource` (familiar / review / ward) and
 `contentTagAt`; the review stamps `contentTagReviewedAt` for "looked, couldn't
 tell". Three writers: `save_to_tome`'s optional `content_tag` (checked by

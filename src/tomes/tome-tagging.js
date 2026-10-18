@@ -102,7 +102,7 @@ ${circlesSummary}
 
 For each note I pick one tag:
 - "self": my own thinking, my interests, or general knowledge that isn't about anyone. These go everywhere, so I only pick it when no person is in the note.
-- "<topic>:open" or "<topic>:sensitive": it's about my human or someone else. If it names or describes a person, it's sensitive.
+- "<topic>:open" or "<topic>:sensitive": it's about my human or someone else. If it names or describes a person, it's sensitive. A note that covers more than one topic gets all of them, joined with "+" ("work:open+mental-health:sensitive"); a room then needs every one.
 - "private": it stays between my human and me, wherever I am.
 - "unsure": I can't tell. Unsure notes stay out of shared rooms.
 

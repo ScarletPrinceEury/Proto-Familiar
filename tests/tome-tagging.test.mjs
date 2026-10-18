@@ -125,9 +125,9 @@ test('only unsorted notes that could reach a room are candidates', () => {
     { file: 'c.json', tome: { id: 'C', name: 'Guide', enabled: true, roomShare: 'always', entries: { y: ent('y') } } },
     { file: 'd.json', tome: { id: 'D', name: 'Session Memories', enabled: true, entries: { z: ent('z') } } },
   ];
-  assert.deepEqual(selectTaggingCandidates(files).map(c => c.uid), ['u']);
+  assert.deepEqual(selectTaggingCandidates(files).map(c => c.uid), ['u', 'z'], 'Session Memories is sorted like any tome since 0.14.95');
   const s = tomeTaggingStatus(files.map(f => f.tome));
-  assert.deepEqual(s, { total: 4, unsorted: 1, self: 1, topic: 0, private: 1, unsure: 1, alwaysTomes: 1, neverTomes: 1 });
+  assert.deepEqual(s, { total: 5, unsorted: 2, self: 1, topic: 0, private: 1, unsure: 1, alwaysTomes: 1, neverTomes: 0 });
 });
 
 test('parseTaggingDecision is careful: garbage, unknown refs and unreadable tags all count as not answered', () => {
