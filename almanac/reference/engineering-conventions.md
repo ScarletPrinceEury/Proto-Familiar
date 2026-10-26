@@ -119,6 +119,12 @@ sources:
   - id: turn-log-js
     type: file
     path: src/diagnostics/turn-log.js
+  - id: text-tool-calls-js
+    type: file
+    path: src/util/text-tool-calls.js
+  - id: dsml-tool-calls-test
+    type: file
+    path: tests/dsml-tool-calls.test.mjs
 ---
 
 # Engineering Conventions
@@ -588,6 +594,53 @@ X written out as text, which doesn't run it." for anything written but never cal
 a fact about what happened, not as a mistake — and a real call of the same name in the same turn
 clears the note. The turn log records `textToolCalls` per round so the pattern is visible outside
 the live prompt too.
+
+**DeepSeek's own markup is recovered, not just stripped (0.14.98-alpha).** DeepSeek writes tool
+calls in a provider-specific markup, DSML (`<｜DSML｜tool_calls>` wrapping one or more
+`<｜DSML｜invoke name="…">` blocks, each with `<｜DSML｜parameter name="…">` children). The
+provider usually turns that into structured `tool_calls`; twice on 2026-10-26 it didn't, and the
+markup went out as the reply's text instead — once mid-turn with a misremembered tool name, once
+in the closing round after the tool budget ran out, when tools are off [@text-tool-calls-js]. Unlike
+the other written-out shapes `findTextToolCalls` only detects (a `<tool_call>` tag, a bare JSON
+blob — shapes ordinary prose can also produce, so they stay detection-only), DSML's fullwidth-bar
+tags never occur in prose: a match is always a real call, so it is the one shape this fix actually
+recovers rather than only naming [@text-tool-calls-js].
+
+`src/util/text-tool-calls.js` holds the parsing and the one shared decision: `extractDsmlToolCalls`
+pulls the complete invokes out of a text (an invoke cut off mid-call, by a length stop, is dropped
+and never run half-formed) plus the text with the markup removed; `settleTextToolCalls({ content,
+toolCalls, closing, idPrefix })` is the single rule both tool loops apply every round — on a
+**working** round with no structured calls already present, the DSML calls become real
+`tool_calls` (synthetic ids `${idPrefix}-n`) and run like any other call, so a wrong tool name gets
+the ordinary unknown-tool result instead of silently going nowhere; on the **closing** round, where
+tools are off and a written call cannot be executed without breaking the round budget, the markup
+is stripped and nothing extra runs [@text-tool-calls-js]. `cerebellum.js`'s `runToolCallLoop` (via
+its `settleRoundText` wrapper) and the streaming loop in `server.js`'s `/api/chat` both call
+`settleTextToolCalls`, so the recover/strip decision cannot drift between the two loops — the same
+RULE C reasoning as the shared turn-path convention above [@cerebellum-js] [@server-js].
+
+When the closing round's reply turns out to be nothing but a stripped call with no words left
+around it, `cerebellum.js` and `server.js` each retry once with `CLOSING_WORDS_NOTE` — "My tools
+are off for this last reply, so a call I write out as text won't run. I answer in words with what
+I have." — appended as a system message, asking in plain first-person language for the answer in
+words rather than running the budget-breaking call [@cerebellum-js]. If that retry is markup too,
+the turn ends in an empty reply, never in raw markup reaching the human.
+
+The live streaming path needs a guard rather than a post-hoc fix, because `/api/chat`'s SSE loop
+forwards each delta as it arrives — by the time a round ends and content could be re-parsed, a
+partial DSML block has already rendered in the browser. `createDsmlStreamGuard()` holds back any
+text currently inside an open block, plus any trailing fragment that could still turn into an
+opening tag on the next delta, and `guardStreamEvent` rewrites each SSE event's `delta.content` to
+the guard's safe output before forwarding it [@text-tool-calls-js]. History gets the same
+treatment: `collapseToolTurns` strips DSML out of stored assistant turns too, for the same reason
+the `tool_calls` field itself is stripped there — stored markup must not teach a later turn that
+writing a call out as text is how calls are made, the same lesson the 0.14.76 tool-record fix above
+protects against [@text-tool-calls-js]. `findTextToolCalls` in `message-sanitize.mjs` now also
+folds in `dsmlInvokeNames(text)`, so `lastTurnRecord`'s "written out as text" note names a DSML
+call the same way it already named the other shapes [@message-sanitize]. `tests/dsml-tool-calls.test.mjs`
+pins the live 2026-10-26 reply byte-for-byte, the recover/strip split through a real
+`runToolCallLoop` with a stubbed provider, and the stream guard's hold-and-release behavior
+[@dsml-tool-calls-test].
 
 ## A clipped view of your own past words reads as an unfinished sentence (0.14.69-alpha)
 
