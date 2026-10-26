@@ -3082,7 +3082,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
     } : null;
     const turnDiagStart = Date.now();
     try {
-      const { data, toolRounds } = await runToolCallLoop({
+      const { data, toolRounds, usage } = await runToolCallLoop({
         // opts.forceText (round-cap closing round): call WITHOUT tools so the
         // model must answer in text instead of ending the turn silent.
         callUpstream: (msgs, roundTools, opts) => callChatRaw({
@@ -3104,6 +3104,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
         // The turn deadline stops the loop between rounds, not just mid-call.
         signal: turnSignal,
       });
+      if (turnDiag && usage) turnDiag.tokens = usage;   // the turn's whole token cost (0.14.96)
       const finalChoice = data?.choices?.[0];
       if (turnSignal?.aborted && finalChoice?.finish_reason === 'tool_calls') {
         // The deadline cut the loop off between tool rounds, with calls still

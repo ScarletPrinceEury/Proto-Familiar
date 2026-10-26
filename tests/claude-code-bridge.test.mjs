@@ -50,7 +50,7 @@ test('off unless "Claude Code" is on the ward\'s list; nothing is sent', async (
 
 test('every turn is Claude Code\'s: speaker on the turn and the message, ward-private, core prompts in', async () => {
   const out = await make().send({ message: 'hello there' });
-  assert.deepEqual(out, { ok: true, reply: 'Hi, Claude Code.', toolsUsed: [], sessionId: out.sessionId, notes: [] });
+  assert.deepEqual(out, { ok: true, reply: 'Hi, Claude Code.', toolsUsed: [], sessionId: out.sessionId, notes: [], usage: null });
   const b = sent[0];
   assert.equal(b.speaker, BRIDGE_SPEAKER);
   assert.deepEqual(b.messages.at(-1), { role: 'user', content: 'hello there', speaker: BRIDGE_SPEAKER });
@@ -94,5 +94,8 @@ test('an empty reply comes back as not ok, never as silence', async () => {
   replyFor = () => ({ choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'thinking…' } }] });
   const out = await make().send({ message: 'hm' });
   assert.equal(out.ok, false);
-  assert.match(out.error, /no reply came back/);
+  assert.match(out.error, /used its whole budget \(8000 tokens\) thinking and wrote no reply \(finish: length\)/, 'a budget-exhausted turn says what ran out (0.14.96)');
+  replyFor = () => ({ choices: [{ finish_reason: 'stop', message: { content: '' } }] });
+  const other = await make().send({ message: 'hm' });
+  assert.match(other.error, /no reply came back/);
 });

@@ -38,8 +38,16 @@ export { BRIDGE_SPEAKER, BRIDGE_LOCATION };
 // A thinking model on high effort can take minutes per turn, and a turn may run
 // several tool rounds. Long, but finite.
 const BRIDGE_TURN_TIMEOUT_MS = 9 * 60_000;
-// RULE A: thinking models bill reasoning against max_tokens.
-const BRIDGE_MAX_TOKENS = 8000;
+// RULE A: thinking models bill reasoning against max_tokens. A fixed 8000 was
+// too small for an always-on-thinking model at max effort: on a dense message it
+// spent the whole cap reasoning and returned no reply (finish 'length', 0.14.96).
+// The bridge follows my human's own reply cap, like their web chat, with 8000
+// as the floor.
+export const BRIDGE_MIN_TOKENS = 8000;
+export function bridgeMaxTokens(settings = {}) {
+  const n = Math.floor(Number(settings?.maxTokens));
+  return Number.isFinite(n) && n > BRIDGE_MIN_TOKENS ? n : BRIDGE_MIN_TOKENS;
+}
 
 /**
  * What one bridge turn stores: Claude Code's message, each tool round in the
@@ -108,7 +116,7 @@ export function createClaudeCodeBridge({
           userMessage: text,
           speaker: BRIDGE_SPEAKER,
           stream: false, runToolLoop: true, enrich: true,
-          max_tokens: BRIDGE_MAX_TOKENS,
+          max_tokens: bridgeMaxTokens(s),
           injectCorePrompts: true,           // no browser: the server folds in the four core prompts
           sessionAudience: 'ward-private',   // my human's own instance, on their behalf
           sessionInfo: { sessionId },
@@ -127,8 +135,16 @@ export function createClaudeCodeBridge({
       }, { logsDir, merge: true });
       if (!saved.ok) log('could not save the bridge turn:', saved.reason);
       const notes = await mailbox.takeNotes({ via: 'bridge' }).catch(() => []);
-      if (!reply) return { ok: false, error: 'no reply came back (an empty turn)', toolsUsed, sessionId, notes };
-      return { ok: true, reply, toolsUsed, sessionId, notes };
+      const usage = data?._usage ?? data?.usage ?? null;
+      if (!reply) {
+        // RULE B: budget exhaustion is never silence. Say what ran out.
+        const spent = usage?.completion_tokens ?? usage?.total_tokens;
+        const error = data?.choices?.[0]?.finish_reason === 'length'
+          ? `the model used its whole budget (${bridgeMaxTokens(s)} tokens${spent ? `, ${spent} spent` : ''}) thinking and wrote no reply (finish: length)`
+          : 'no reply came back (an empty turn)';
+        return { ok: false, error, toolsUsed, sessionId, notes, usage };
+      }
+      return { ok: true, reply, toolsUsed, sessionId, notes, usage };
     } catch (err) {
       return { ok: false, error: err?.name === 'AbortError' ? `no reply within ${BRIDGE_TURN_TIMEOUT_MS / 60000} minutes` : (err?.message ?? String(err)) };
     } finally {

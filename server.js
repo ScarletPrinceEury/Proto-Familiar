@@ -1181,7 +1181,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         if (imagesLiveThisTurn > 0 && !visionFellBack) {
           cacheVisionCapability(provider, model, 'yes').catch(() => {});
         }
-        const { data, toolRounds, roundCapHit } = loopOutcome;
+        const { data, toolRounds, roundCapHit, usage } = loopOutcome;
+        // The turn's whole token cost, every round included (0.14.96).
+        if (usage) { data._usage = usage; if (turnDiag) turnDiag.tokens = usage; }
         // Tell the client the round budget ran out mid-reach, so it can offer
         // the ward a one-click "go on" (a fresh turn = a fresh budget).
         if (roundCapHit) data._roundCapHit = true;

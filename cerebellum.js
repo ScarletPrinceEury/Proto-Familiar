@@ -6066,6 +6066,27 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
  *   [{ toolCalls, results: [{tool_call_id, name, content}],
  *      content, timestamp }]
  */
+/**
+ * Add one provider round's token usage to a running total (OpenAI-shape
+ * `usage`). Rounds with no usage leave the total as it was; a total starts at
+ * null so "no provider reported anything" stays distinguishable from zero.
+ * Pure. Used by runToolCallLoop so a turn's cost covers every round, not
+ * just the last one (0.14.96; the ward's weekly token budget is finite).
+ */
+export function addUsage(total, usage) {
+  if (!usage || typeof usage !== 'object') return total;
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const t = total ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, rounds: 0 };
+  return {
+    prompt_tokens:     t.prompt_tokens + n(usage.prompt_tokens),
+    completion_tokens: t.completion_tokens + n(usage.completion_tokens),
+    total_tokens:      t.total_tokens + n(usage.total_tokens ?? n(usage.prompt_tokens) + n(usage.completion_tokens)),
+    reasoning_tokens:  t.reasoning_tokens + n(usage.completion_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens),
+    cached_tokens:     t.cached_tokens + n(usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens),
+    rounds:            t.rounds + 1,
+  };
+}
+
 export async function runToolCallLoop({
   callUpstream,
   baseMessages,
@@ -6084,6 +6105,7 @@ export async function runToolCallLoop({
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
   let currentMsgs    = baseMessages;
   const toolRounds   = [];
+  let usage          = null;   // summed across every round (addUsage)
   let   data         = null;
   const report = (r) => { try { onRound?.(describeRound(r)); } catch { /* diagnostics never break a turn */ } };
 
@@ -6101,6 +6123,7 @@ export async function runToolCallLoop({
       ? [...currentMsgs, { role: 'system', content: anchor }]
       : currentMsgs;
     data = await callUpstream(payloadMessages, grownTools);
+    usage = addUsage(usage, data?.usage);
 
     const choice  = data?.choices?.[0];
     const message = choice?.message;
@@ -6148,6 +6171,7 @@ export async function runToolCallLoop({
     ];
     try {
       data = await callUpstream(closingMsgs, undefined, { forceText: true });
+      usage = addUsage(usage, data?.usage);
       const c = data?.choices?.[0];
       report({ round: 'closing', finishReason: c?.finish_reason, toolCalls: c?.message?.tool_calls, ran: false,
         content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true });
@@ -6157,5 +6181,5 @@ export async function runToolCallLoop({
     }
   }
 
-  return { data, toolRounds, roundCapHit };
+  return { data, toolRounds, roundCapHit, usage };
 }
