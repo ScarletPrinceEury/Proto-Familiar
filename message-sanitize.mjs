@@ -10,6 +10,8 @@
 // Browser-side mirror: public/app.js `stripDisplayTimestamps` — kept
 // separate because the browser can't import server ESM modules.
 
+import { stripDsmlToolCalls, dsmlInvokeNames } from './src/util/text-tool-calls.js';
+
 const _TS_CHEVRON = /⫸\d{1,2}:\d{2}⫷\s*/g;   // web-chat format
 const _TS_BRACKET = /\[\d{1,2}:\d{2}\]\s*/g;    // Discord / legacy web format
 
@@ -88,7 +90,9 @@ export function collapseToolTurns(messages = [], { records = false } = {}) {
     if (m.role === 'assistant') {
       const isCarrier = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
       const calls = isCarrier ? m.tool_calls.map(tc => ({ id: tc?.id, name: tc?.function?.name })) : [];
-      const text = textOf(m);
+      // A call written out as DSML markup (text-tool-calls.js) never re-enters
+      // history: a stored one would teach me that writing it is calling it.
+      const text = stripDsmlToolCalls(textOf(m));
       const prev = out[out.length - 1];
       // Merge only within a tool-scaffolding run: the previous emitted turn was a
       // carrier, or this message is one. Never fold two standalone replies together.
@@ -144,6 +148,7 @@ export function findTextToolCalls(text) {
   for (const m of s.matchAll(/<function=([A-Za-z_][\w.-]*)>/g)) add(m[1]);
   for (const m of s.matchAll(/\{\s*"name"\s*:\s*"([A-Za-z_][\w.-]*)"\s*,\s*"(arguments|parameters)"\s*:/g)) add(m[1]);
   for (const m of s.matchAll(/^\s*(?:functions\.)?([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\(\s*\{/gm)) add(m[1]);
+  for (const n of dsmlInvokeNames(s)) add(n);   // DeepSeek's own markup (text-tool-calls.js)
   return found;
 }
 

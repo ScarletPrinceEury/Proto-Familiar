@@ -521,6 +521,25 @@ Currently owns:
   streaming variant lives in /api/chat because it is SSE transport; its
   `getTools` hook lets /api/chat re-compose the tool list between rounds so
   a `request_tools` call grows the set within the same turn).
+  **Calls written as DSML markup (0.14.98, `src/util/text-tool-calls.js`):**
+  DeepSeek writes tool calls in its own markup (`<｜DSML｜tool_calls>` →
+  `invoke name=…` → `parameter name=… string="true|false"`). When a provider
+  doesn't turn that into structured `tool_calls`, it arrives as reply text:
+  nothing runs, and the person gets markup. Both loops settle every round with
+  the same pure helper, `settleTextToolCalls`. On a working round with no
+  structured calls, the DSML calls become real ones (ids `textcall-r<round>-n`,
+  complete invokes only; a wrong tool name gets the ordinary unknown-tool
+  result). On the closing round (tools off), or beside real calls, the markup
+  is stripped and nothing extra runs. A closing reply that was ONLY markup gets
+  one retry with `CLOSING_WORDS_NOTE`; if that is markup too, the reply is
+  empty, never markup. The streaming loop also runs each content delta through
+  `createDsmlStreamGuard`/`guardStreamEvent`, so the markup is held back and
+  never renders in the browser. `collapseToolTurns` strips it from history,
+  `findTextToolCalls` names DSML calls in records, and Discord delivery strips
+  it as a last resort. The turn log records `recoveredFromText` /
+  `textCallsNotRun` per round. Only DSML is recovered: its fullwidth-bar tags
+  never occur in prose. `<tool_call>{…}` and bare JSON blobs stay
+  detection-only.
   `request_tools` itself lives here as a core builtin: it validates the
   requested module names against `tool-surfacing.js` and stashes them on
   `toolCtx._requestedModules` for the recompose step.
