@@ -149,7 +149,7 @@ import {
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
-  composeActiveTools, executeToolCall, toolRoundsPerTurn, ROUND_CAP_NOTE,
+  composeActiveTools, executeToolCall, toolRoundsPerTurn, ROUND_CAP_NOTE, CLOSING_WORDS_NOTE,
   trackersEnabled,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
@@ -208,6 +208,7 @@ import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
 import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
 import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord } from './message-sanitize.mjs';
+import { settleTextToolCalls, createDsmlStreamGuard, guardStreamEvent } from './src/util/text-tool-calls.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1256,9 +1257,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // pending — ONE extra round runs with tools stripped so the turn ends in
     // honest text instead of silence (mirrors runToolCallLoop's closing round).
     let forceTextRound = false;
+    // The closing round's one retry in words, when its reply was only a call
+    // written out as DSML markup (text-tool-calls.js). Needs the +2 below.
+    let closingRetried = false;
     // Live ward conversation → the ward-configurable round budget.
     const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
-    for (let round = 0; round <= liveMaxRounds + 1; round++) {
+    for (let round = 0; round <= liveMaxRounds + 2; round++) {
       if (clientGone() || clientSignal.aborted) break;
       // The time anchor, with this round's tool roster under it, goes LAST
       // (a closing text round has no tools, so no roster).
@@ -1346,6 +1350,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const decoder = new TextDecoder();
       let buffer = '', fullContent = '', fullReasoning = '', finishReason = null;
       const toolCallsAcc = {};
+      // DSML markup (a call written as text) is held back, never rendered.
+      const dsmlGuard = createDsmlStreamGuard();
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -1358,6 +1364,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
             if (!line.startsWith('data: ')) { if (line.trim()) res.write(line + '\n'); continue; }
             const raw = line.slice(6).trim();
             if (raw === '[DONE]') continue; // emitted once, at the true end
+            let forward = line;
             try {
               const evt = JSON.parse(raw);
               const choice = evt.choices?.[0];
@@ -1374,22 +1381,45 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
                 if (tc.function?.name)      acc.function.name      += tc.function.name;
                 if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
               }
+              forward = guardStreamEvent(evt, line, dsmlGuard);
             } catch { /* malformed line — forward as-is */ }
-            res.write(line + '\n\n');
+            if (forward) res.write(forward + '\n\n');
           }
         }
+        // Text held back only because it might have started a DSML tag.
+        const heldTail = dsmlGuard.end();
+        if (heldTail) res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: heldTail } }] })}\n\n`);
       } catch (err) {
         if (turnDiag) turnDiag.error = `stream read failed: ${err?.message ?? err}`;
         if (!res.writableEnded) res.end();
         return;
       }
 
-      const toolCalls = Object.values(toolCallsAcc);
+      let toolCalls = Object.values(toolCallsAcc);
+      // A call written as DSML text: recovered into a real call on a working
+      // round, stripped on the closing round (same decision as runToolCallLoop).
+      const settled = settleTextToolCalls({ content: fullContent, toolCalls, closing: forceTextRound, idPrefix: `textcall-r${round}` });
+      if (settled.stripped) {
+        fullContent = settled.content;
+        if (settled.recovered) {
+          toolCalls = settled.toolCalls;
+          finishReason = 'tool_calls';
+          console.log(`[tools] ${settled.recovered} call(s) written as DSML text recovered as real calls (stream): ${settled.names.join(', ')}`);
+        }
+      }
       turnDiag?.rounds.push(describeRound({
         round, finishReason, toolCalls,
         ran: finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound,
         content: fullContent, reasoning: fullReasoning, closing: forceTextRound,
+        textCalls: settled.stripped ? { recovered: settled.recovered ? settled.names : [], notRun: settled.recovered ? [] : settled.names } : null,
       }));
+      // The closing reply was nothing but a written-out call: one more try, in words.
+      if (forceTextRound && settled.stripped && !fullContent.trim() && !closingRetried) {
+        closingRetried = true;
+        currentMsgs = [...currentMsgs, { role: 'system', content: CLOSING_WORDS_NOTE }];
+        console.log('[tools] closing reply was only a call written as text — asking once more for words (stream)');
+        continue;
+      }
       if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound) {
         const timestamp = new Date().toISOString();
         const results = await Promise.all(toolCalls.map(async tc => ({

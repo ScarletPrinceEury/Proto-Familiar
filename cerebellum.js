@@ -101,6 +101,7 @@ import { selectSurfaceCandidates } from './src/pondering/surface-context.js';
 import { rekeyCueState } from './src/gcal/gcal-projection.js';
 import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules, anchorWithToolRoster, toolCeiling, shouldSurface } from './tool-surfacing.js';
 import { describeRound } from './src/diagnostics/turn-log.js';
+import { settleTextToolCalls } from './src/util/text-tool-calls.js';
 import { rekeyPonderingUids } from './src/pondering/pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
 import {
@@ -1235,6 +1236,10 @@ export const MAX_TOOL_ROUNDS = 5;
 // didn't run, said plainly so I don't present them as done. One copy, shared by
 // both tool loops (it was pasted into server.js too); plain words, no verdict (0.14.83).
 export const ROUND_CAP_NOTE = "[My tool budget for this turn is used up, so the calls I just asked for didn't run. I answer my human with what I have and say which checks or changes I didn't get to. If they tell me to go on, I get a fresh budget and carry on.]";
+
+// The closing round's one retry, when its reply was only a call written out as
+// markup (text-tool-calls.js): tools are off there, so that text runs nothing.
+export const CLOSING_WORDS_NOTE = "[My tools are off for this last reply, so a call I write out as text won't run. I answer in words with what I have.]";
 
 // Tool-round budget for a LIVE ward turn (web chat + ward Discord turns).
 // Ward-configurable via settings.toolRoundsPerTurn; clamped so a typo can't
@@ -6087,6 +6092,28 @@ export function addUsage(total, usage) {
   };
 }
 
+// A call written as DSML markup (src/util/text-tool-calls.js), settled on the
+// provider response in place so everything downstream reads one shape:
+// recovered into a real call on a working round, stripped on the closing one.
+function settleRoundText(data, { closing, round }) {
+  const choice = data?.choices?.[0];
+  const message = choice?.message;
+  if (!message || typeof message.content !== 'string') return { stripped: false, recovered: [], notRun: [] };
+  const s = settleTextToolCalls({
+    content: message.content, toolCalls: message.tool_calls ?? [], closing, idPrefix: `textcall-r${round}`,
+  });
+  if (!s.stripped) return { stripped: false, recovered: [], notRun: [] };
+  message.content = s.content || (s.recovered ? null : '');
+  if (s.recovered) {
+    message.tool_calls = s.toolCalls;
+    choice.finish_reason = 'tool_calls';
+    console.log(`[tools] ${s.recovered} call(s) written as DSML text recovered as real calls: ${s.names.join(', ')}`);
+  } else if (s.names.length) {
+    console.log(`[tools] stripped ${s.names.length} call(s) written as DSML text, not run: ${s.names.join(', ')}`);
+  }
+  return { stripped: true, recovered: s.recovered ? s.names : [], notRun: s.recovered ? [] : s.names };
+}
+
 export async function runToolCallLoop({
   callUpstream,
   baseMessages,
@@ -6124,13 +6151,14 @@ export async function runToolCallLoop({
       : currentMsgs;
     data = await callUpstream(payloadMessages, grownTools);
     usage = addUsage(usage, data?.usage);
+    const textCalls = settleRoundText(data, { closing: false, round });
 
     const choice  = data?.choices?.[0];
     const message = choice?.message;
     const isToolTurn = choice?.finish_reason === 'tool_calls'
       && Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
     report({ round, finishReason: choice?.finish_reason, toolCalls: message?.tool_calls,
-      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: message?.reasoning_content });
+      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: message?.reasoning_content, textCalls });
     if (!isToolTurn || round >= maxRounds) break;
 
     const toolCalls = message.tool_calls;
@@ -6172,10 +6200,21 @@ export async function runToolCallLoop({
     try {
       data = await callUpstream(closingMsgs, undefined, { forceText: true });
       usage = addUsage(usage, data?.usage);
-      const c = data?.choices?.[0];
+      let textCalls = settleRoundText(data, { closing: true, round: 'closing' });
+      let c = data?.choices?.[0];
       report({ round: 'closing', finishReason: c?.finish_reason, toolCalls: c?.message?.tool_calls, ran: false,
-        content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true });
+        content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true, textCalls });
       console.log('[tools] round cap reached with tools still pending — forced a closing text round');
+      // The closing reply was nothing but a written-out call: one more try, in words.
+      if (textCalls.stripped && !String(c?.message?.content ?? '').trim()) {
+        data = await callUpstream([...closingMsgs, { role: 'system', content: CLOSING_WORDS_NOTE }], undefined, { forceText: true });
+        usage = addUsage(usage, data?.usage);
+        textCalls = settleRoundText(data, { closing: true, round: 'closing-retry' });
+        c = data?.choices?.[0];
+        report({ round: 'closing-retry', finishReason: c?.finish_reason, toolCalls: c?.message?.tool_calls, ran: false,
+          content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true, textCalls });
+        console.log('[tools] closing reply was only a call written as text — asked once more for words');
+      }
     } catch (err) {
       console.warn('[tools] round-cap closing round failed (keeping tool_calls response):', err?.message ?? err);
     }

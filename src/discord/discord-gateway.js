@@ -98,6 +98,7 @@ import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mir
 import { sanitizeExternal } from '../../injection-guard.js';
 import { recordEvent as hippoRecord } from '../memory/hippocampus.js';
 import { BLOCKED_NAME, blockedIds, isBlockedAccount, withoutBlockedLines } from '../village/blocklist.js';
+import { stripDsmlToolCalls } from '../util/text-tool-calls.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from '../../updater.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -2109,6 +2110,8 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
   }
 
   reply = stripLlmTimestamps(reply);
+  // A call written out as DSML markup never posts into a room (text-tool-calls.js).
+  reply = stripDsmlToolCalls(reply);
   // Last-resort guard: a leading [pass]/[silence]/[later:…] is a control
   // token, never room content — strip it whatever path led here. A reply
   // that was ONLY tags means I chose silence; sending nothing is the
