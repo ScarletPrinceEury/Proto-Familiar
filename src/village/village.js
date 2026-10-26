@@ -29,6 +29,7 @@ import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { withLock } from '../../thalamus.js';
 import { CONTENT_TOPICS, sanitizeTopicGrants } from '../memory/content-tags.js';
+import { sanitizeBlocked, sanitizeBlockedNames, validBlockTarget } from './blocklist.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -247,6 +248,7 @@ function emptyRegistry() {
     categories: [...builtinCategories(), ...DEFAULT_CATEGORY_SEEDS.map(d => ({ ...d }))],
     villagers: [],
     locations: [],
+    blocked: [],
   };
 }
 
@@ -429,24 +431,42 @@ export function normalizeRegistry(raw) {
     categories: [...byId.values()],
     villagers,
     locations,
+    // Accounts my human never wants reaching me (blocklist.js).
+    blocked: sanitizeBlocked(reg.blocked),
   };
 }
 
 // ── File I/O ──────────────────────────────────────────────────────
 
 async function readRegistryFile(filePath) {
+  let reg;
   try {
-    const raw = JSON.parse(await fsp.readFile(filePath, 'utf8'));
-    return normalizeRegistry(raw);
+    reg = normalizeRegistry(JSON.parse(await fsp.readFile(filePath, 'utf8')));
   } catch {
-    return emptyRegistry();
+    reg = emptyRegistry();
   }
+  if (filePath === DEFAULT_VILLAGE_PATH) rememberBlocked(reg);
+  return reg;
 }
 
 async function writeRegistryFile(filePath, reg) {
   const tmp = `${filePath}.tmp`;
   await fsp.writeFile(tmp, JSON.stringify(reg, null, 2), 'utf8');
   await fsp.rename(tmp, filePath);
+  if (filePath === DEFAULT_VILLAGE_PATH) rememberBlocked(reg);
+}
+
+// The block list as of the last registry read or write, for the one caller
+// that has to decide synchronously: the voice receiver, which subscribes to
+// a speaker's audio the moment Discord says they started talking. Every text
+// message re-reads the registry anyway, so this is never older than the last
+// message or edit.
+let blockedCache = new Set();
+function rememberBlocked(reg) {
+  blockedCache = new Set((reg?.blocked ?? []).map(b => `${b.platform}:${b.id}`));
+}
+export function isBlockedAccountSync({ platform = 'discord', id } = {}) {
+  return !!id && blockedCache.has(`${platform}:${id}`);
 }
 
 // ── Sync (Phylactery canonical) ───────────────────────────────────
@@ -819,6 +839,41 @@ export async function deleteVillager({ id }, { filePath = DEFAULT_VILLAGE_PATH }
     const before = reg.villagers.length;
     reg.villagers = reg.villagers.filter(v => v.id !== id);
     if (reg.villagers.length === before) throw new Error(`unknown villager: ${id}`);
+    return { ok: true };
+  });
+}
+
+// ── Block list ────────────────────────────────────────────────────
+//
+// Ward-only (the Village editor). The endpoint refuses the ward's own
+// account; the gateway also checks the ward before the list, so even a
+// hand-edited village.json can't silence them.
+
+export async function blockAccount({ platform = 'discord', id, label, names }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  return mutate(filePath, (reg) => {
+    const t = validBlockTarget(platform, id);
+    if (!t) throw new Error('a Discord user ID (numbers only) is required');
+    reg.blocked = Array.isArray(reg.blocked) ? reg.blocked : [];
+    const existing = reg.blocked.find(b => b.platform === t.platform && b.id === t.id);
+    const entry = existing ?? { ...t, addedAt: new Date().toISOString() };
+    if (label !== undefined) {
+      const l = typeof label === 'string' ? label.trim().slice(0, 80) : '';
+      if (l) entry.label = l; else delete entry.label;
+    }
+    if (names !== undefined) {
+      const n = sanitizeBlockedNames(names);
+      if (n.length) entry.names = n; else delete entry.names;
+    }
+    if (!existing) reg.blocked.push(entry);
+    return entry;
+  });
+}
+
+export async function unblockAccount({ platform = 'discord', id }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  return mutate(filePath, (reg) => {
+    const before = (reg.blocked ?? []).length;
+    reg.blocked = (reg.blocked ?? []).filter(b => !(b.platform === platform && b.id === String(id ?? '')));
+    if (reg.blocked.length === before) throw new Error(`unknown blocked account: ${id}`);
     return { ok: true };
   });
 }

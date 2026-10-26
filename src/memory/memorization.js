@@ -218,6 +218,7 @@ async function persistQueue() {
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow, listTrackers, logTrackerEntry } from '../../thalamus.js';
 import { applyMemoryIntegrityGate } from '../safety/memory-integrity.js';
 import { getRegistry, standingConsentActive } from '../village/village.js';
+import { withoutBlockedLines } from '../village/blocklist.js';
 import { disclosableVillagerFields } from '../village/village-card.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../village/audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
@@ -1153,15 +1154,18 @@ export async function processJob(job, deps = {}) {
     } catch { /* no tracker legend this job */ }
   }
 
-  // Fold image stand-ins into the slice so image-carrying turns are memorable.
-  const visionMessages = await foldImageStandins(job.messages, settings);
-
   // Who from the Village appears in this slice — injected so the extraction gets
   // their names and PRONOUNS right and doesn't re-note standing facts. Loaded
   // once here and reused for the remember gate below. Gated by the branch:
   // ward-private slice → full card; a shared room → privateNotes withheld (the
   // disclosableVillagerFields policy). Best-effort: registry down → no block.
   const registry = await getRegistryDep().catch(() => ({ villagers: [] }));
+
+  // Fold image stand-ins into the slice so image-carrying turns are memorable.
+  // A blocked account's lines (stored before the block) are left out: nothing
+  // they said becomes a memory of mine.
+  const visionMessages = await foldImageStandins(withoutBlockedLines(job.messages, registry), settings);
+
   const villagerLegendBlock = buildVillagerLegendBlock(visionMessages, registry, {
     wardPrivate: promptFn === buildPrompt, wardName,
   });

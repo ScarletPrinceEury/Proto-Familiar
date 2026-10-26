@@ -97,6 +97,7 @@ import { modelSignal } from '../diagnostics/model-signal.js';
 import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mirror.js';
 import { sanitizeExternal } from '../../injection-guard.js';
 import { recordEvent as hippoRecord } from '../memory/hippocampus.js';
+import { BLOCKED_NAME, blockedIds, isBlockedAccount, withoutBlockedLines } from '../village/blocklist.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from '../../updater.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -186,8 +187,10 @@ function formatMsgTime(isoString) {
 // collapsed (collapseToolTurns), capped at HISTORY_LIMIT, each line timestamp-
 // stamped and carrying its speaker + any media attachments. The live turn and
 // the [later:…] revisit path built this identically — one builder now.
-export function buildHistoryForPrompt(session) {
-  return collapseToolTurns(session.messages ?? [], { records: true })   // app records of real tool runs ride along (web parity)
+export function buildHistoryForPrompt(session, registry = null) {
+  // Lines from an account my human blocked stay out (blocklist.js) — the ones
+  // stored before the block, since nothing new from them is stored at all.
+  return collapseToolTurns(withoutBlockedLines(session.messages ?? [], registry), { records: true })   // app records of real tool runs ride along (web parity)
     .filter(m => m.role === 'user' || m.role === 'assistant' || isToolRecord(m))
     .slice(-HISTORY_LIMIT)
     .map(m => {
@@ -366,7 +369,7 @@ async function fireRevisit(item) {
     } catch { /* non-critical — a Village read never blocks the turn */ }
   }
 
-  const directedAt = carriedExchange(session.messages);
+  const directedAt = carriedExchange(withoutBlockedLines(session.messages, registry));
   const preamble   = presenceBlock({
     kind: 'guild', locationLabel: label, speakerName: null,
     participants: session.participants, settings,
@@ -379,7 +382,7 @@ async function fireRevisit(item) {
   // Familiar being itself in this room, so it carries its identity too.
   const coreSeg = coreSystemSegment(settings);
   const systemContent = [enriched.static, coreSeg, preamble].filter(Boolean).join('\n\n---\n\n');
-  const history = buildHistoryForPrompt(session);
+  const history = buildHistoryForPrompt(session, registry);
 
   const phMsg = postHistoryMessage(settings);
   // Same web-parity order as the live turn: dynamic is depth-injected above the
@@ -628,6 +631,14 @@ export function classifyMessage(msg, { registry, botUserId, wardUserId }) {
   // whatever a location's settings say. This is the inner loop guard and
   // sits above the readBots opt-in deliberately.
   if (author.id && author.id === botUserId) return { action: 'ignore', reason: 'own-message' };
+  // My human's block list (blocklist.js): a blocked account's message stops
+  // here, before it is stored, scored, ingested, recorded as a knock or
+  // answered. My human is checked first, so no list can take their words
+  // (and the safety path that reads them) away.
+  if (!(wardUserId && author.id === wardUserId)
+    && isBlockedAccount(registry, { platform: 'discord', id: author.id })) {
+    return { action: 'ignore', reason: 'blocked', locationKey: discordLocationKey(msg) };
+  }
   // Other bots (including other Familiars) are ignored by default — the
   // outer loop guard. A location can opt in via readBots, in which case
   // the bot's message flows through normal classification below: answered
@@ -745,7 +756,7 @@ export function mergeParticipant(participants, entry) {
  *  mine. Names resolve in priority: my own character name for my id, a
  *  registered villager's configured name, then the mentioned user's
  *  display name from the payload, then a plain @someone. */
-export function resolveMentions(content, { mentions = [], botUserId = null, charName = 'the Familiar', villagers = [] } = {}) {
+export function resolveMentions(content, { mentions = [], botUserId = null, charName = 'the Familiar', villagers = [], blocked = null } = {}) {
   const text = String(content ?? '');
   if (!/<@!?\d+>/.test(text)) return text;
   const villagerName = (id) => (villagers ?? []).find(v =>
@@ -756,6 +767,8 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
   }
   const nameFor = (id) => {
     if (botUserId && id === botUserId) return charName || 'the Familiar';
+    // A blocked account's display name is their own text — it stays out too.
+    if (blocked?.has(id)) return BLOCKED_NAME;
     return villagerName(id) ?? fromPayload.get(id) ?? 'someone';
   };
   return text.replace(/<@!?(\d+)>/g, (_m, id) => `@${nameFor(id)}`);
@@ -779,9 +792,9 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
  * is for third-party INBOUND text only, which is what keeps the relay
  * system and trusted-contact delivery structurally unblockable by it.
  */
-export function inboundContent(msg, { botUserId, charName, villagers, isWard, speakerName } = {}) {
+export function inboundContent(msg, { botUserId, charName, villagers, isWard, speakerName, blocked = null } = {}) {
   const resolved = resolveMentions(String(msg?.content ?? ''), {
-    mentions: msg?.mentions, botUserId, charName, villagers,
+    mentions: msg?.mentions, botUserId, charName, villagers, blocked,
   }).slice(0, INPUT_CHAR_CAP);
   if (isWard) return resolved;
   return sanitizeExternal(resolved, { source: 'discord', context: `discord/${speakerName ?? 'unknown speaker'}` });
@@ -816,11 +829,11 @@ export function attributeUserContent({ isWard, kind, speakerName, wardName, cont
   return speakerName ? `[${speakerName}]: ${body}` : body;
 }
 
-export function directedAtOthers(msg, { botUserId = null, villagers = [] } = {}) {
+export function directedAtOthers(msg, { botUserId = null, villagers = [], blocked = null } = {}) {
   const names = [];
   const add = (user) => {
     if (!user?.id || user.id === botUserId) return;
-    const name = nameForUser(user, villagers);
+    const name = blocked?.has(user.id) ? BLOCKED_NAME : nameForUser(user, villagers);
     if (name && !names.includes(name)) names.push(name);
   };
   for (const u of (Array.isArray(msg?.mentions) ? msg.mentions : [])) add(u);
@@ -2175,10 +2188,14 @@ export function discordChannelIdFromKey(key) {
  * Never throws: returns { ok: false, error } on any failure so the tool
  * path stays clean.
  */
-export async function relayToDiscord({ channelId, recipientUserId, message } = {}) {
+export async function relayToDiscord({ channelId, recipientUserId, message, registry = null } = {}) {
   try {
     if (!message || typeof message !== 'string' || !message.trim()) {
       return { ok: false, error: 'no message to relay' };
+    }
+    // I don't open a DM with an account my human blocked (blocklist.js).
+    if (recipientUserId && isBlockedAccount(registry ?? await getRegistry(), { platform: 'discord', id: String(recipientUserId) })) {
+      return { ok: false, error: "that account is on my human's block list, so I don't message it" };
     }
     const settings = readSettingsSync();
     const token = typeof settings?.discordBotToken === 'string' ? settings.discordBotToken.trim() : '';
@@ -2513,7 +2530,7 @@ async function observeMessage(gw, msg, decision) {
   const content = inboundContent(msg, {
     botUserId: gw.botUserId,
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
-    isWard: decision.isWard, speakerName: decision.speakerName,
+    isWard: decision.isWard, speakerName: decision.speakerName, blocked: blockedIds(registry),
   });
   // Ingest image attachments at arrival (§5) — observing counts too, so when
   // someone finally turns to me I can see what the room was looking at. A
@@ -2527,11 +2544,13 @@ async function observeMessage(gw, msg, decision) {
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
   const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
-  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers });
+  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers, blocked: blockedIds(registry) });
   const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
+  // authorId: the speaker's Discord id, so a later block can hide this line
+  // (withoutBlockedLines). It is never rendered into a prompt.
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...(obsAttachments.length ? { attachments: obsAttachments } : {}) },
+    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, authorId: msg.author?.id ?? null, targets: msgTargets, namedMe: msgNamedMe, ...(obsAttachments.length ? { attachments: obsAttachments } : {}) },
   ];
   session.audienceTag = audienceTag;
   session.updatedAt   = new Date().toISOString();
@@ -2599,7 +2618,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   const content  = inboundContent(msg, {
     botUserId: gw.botUserId,
     charName: settings?.charName, villagers: registry.villagers,
-    isWard: decision.isWard, speakerName: decision.speakerName,
+    isWard: decision.isWard, speakerName: decision.speakerName, blocked: blockedIds(registry),
   });
   const nowIso   = new Date().toISOString();
 
@@ -2752,7 +2771,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // to (carriedExchange). One naming basis (Village name ?? Discord
   // display) so speaker and targets compare cleanly across turns.
   const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
-  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers });
+  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers, blocked: blockedIds(registry) });
   const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
 
   // On an ambient turn, whom is this exchange actually between? If this
@@ -2762,7 +2781,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   const directedAt = decision.ambient
     ? (msgTargets.length
         ? msgTargets
-        : carriedExchange(session.messages, { currentSpeaker: turnSpeaker }))
+        : carriedExchange(withoutBlockedLines(session.messages, registry), { currentSpeaker: turnSpeaker }))
     : [];
 
   const preamble = presenceBlock({
@@ -2797,7 +2816,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
     audiences: audienceVisible ?? [],
   });
   const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
-  const history = buildHistoryForPrompt(session);
+  const history = buildHistoryForPrompt(session, registry);
 
   // Speakers are name-prefixed so a multi-party room stays legible to me
   // across turns — my human included, marked (WARD), so I never read their
@@ -2820,7 +2839,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // the next turn had no idea what was asked (the reported vanishing-message
   // loop). Written once here; the reply is appended when it lands. Every later
   // branch reuses this object and never re-adds it.
-  const userTurn = { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField };
+  const userTurn = { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, authorId: msg.author?.id ?? null, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField };
   session.messages    = [...(session.messages ?? []), userTurn];
   session.audienceTag = audienceTag;
   session.updatedAt   = nowIso;
@@ -3597,6 +3616,14 @@ function onDispatch(t, d) {
           botUserId: gw.botUserId,
           wardUserId: (settings.discordWardUserId ?? '').trim(),
         });
+        // Blocked account (blocklist.js): nothing below runs — no knock, no
+        // call-text interleave, no observe. Counted so the drop is visible in
+        // /api/discord/status; never logged with content.
+        if (decision.reason === 'blocked') {
+          gw.status.blockedDropped = (gw.status.blockedDropped ?? 0) + 1;
+          gw.status.lastBlockedAt = new Date().toISOString();
+          return;
+        }
         // Knock capture: unregistered people who deliberately contacted
         // me (DMed, or @-mentioned me in a guild) get their identity
         // METADATA recorded — platform id + handle, never message

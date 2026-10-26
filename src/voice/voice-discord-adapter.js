@@ -269,7 +269,7 @@ export async function loadDiscordVoiceDeps({ log = () => {} } = {}) {
 /**
  * @param {object}   opts
  * @param {object}   opts.hooks    engine hooks: { pushAudio, endUtterance, rosterChanged }
- * @param {object}   opts.joinSpec { guildId, channelId, adapterCreator, wardUserId?, nameForUser? }
+ * @param {object}   opts.joinSpec { guildId, channelId, adapterCreator, wardUserId?, nameForUser?, isBlocked? }
  * @param {object}   opts.deps     injected transport lib (defaults to loadDiscordVoiceDeps())
  * @param {function} [opts.slugId] display-name → readable speakerRef slug
  * @param {function} [opts.log]
@@ -338,6 +338,9 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
   }
 
   function ensureSpeaker(userId) {
+    // A blocked account (my human's Village block list) is never subscribed:
+    // no audio, no transcript, nothing for a turn to hear.
+    if (joinSpec.isBlocked?.(userId)) return null;
     const speakerRef = speakerRefFor(userId);
     let entry = decoders.get(speakerRef);
     if (entry) return { speakerRef, entry };

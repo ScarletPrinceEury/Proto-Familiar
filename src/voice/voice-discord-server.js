@@ -33,7 +33,8 @@ import { connectionReady } from '../../providers.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
-import { findVillagerByAlias, getRegistry, villagerByAlias } from '../village/village.js';
+import { findVillagerByAlias, getRegistry, villagerByAlias, isBlockedAccountSync } from '../village/village.js';
+import { BLOCKED_NAME, isBlockedAccount } from '../village/blocklist.js';
 import {
   isGroupCall, attributeSpeaker, prefixTurn, diffRoster,
   formatPresenceNote, buildGreetingPrompt, parseGreeting,
@@ -172,6 +173,8 @@ export function attachDiscordVoice(deps) {
     const out = new Map();
     for (const id of ids) {
       if (meta?.wardUserId && id === meta.wardUserId) { out.set(id, { name: wn, isWard: true }); continue; }
+      // A blocked account is named neutrally: their display name is their own text.
+      if (isBlockedAccount(reg, { platform: 'discord', id })) { out.set(id, { name: BLOCKED_NAME, isWard: false, blocked: true }); continue; }
       const v = reg ? villagerByAlias(reg, { platform: 'discord', id }) : null;
       out.set(id, { name: v?.name || discordVoiceDisplayName(id) || `guest-${String(id).slice(0, 6)}`, isWard: false });
     }
@@ -221,6 +224,7 @@ export function attachDiscordVoice(deps) {
     if (greetingsEnabled()) {
       for (const id of joined) {
         if (meta.wardUserId && id === meta.wardUserId) continue;
+        if (names.get(id)?.blocked) continue;   // no hello for a blocked account
         if (seen.has(id)) continue;
         seen.add(id);
         greetArrival(callId, nameOf(id)).catch(err => log(`greet failed: ${err?.message ?? err}`));
@@ -275,6 +279,12 @@ export function attachDiscordVoice(deps) {
     let speakerName = null;
     if (!isWard) {
       const userId = refToUser.get(ctx.speakerRef);
+      // Belt to the receiver's braces: the adapter never subscribes to a
+      // blocked account, so this only catches a block added mid-utterance.
+      if (userId && isBlockedAccountSync({ platform: 'discord', id: userId })) {
+        log(`heard from a blocked account — dropped`);
+        return null;
+      }
       let villager = null;
       try { villager = userId ? await findVillagerByAlias({ platform: 'discord', id: userId }) : null; } catch { /* treat as stranger */ }
       if (!villager || !meta) {
@@ -506,7 +516,11 @@ export function attachDiscordVoice(deps) {
     engine.registerCallAdapter((hooks) => {
       const { adapter } = createDiscordCallAdapter({
         hooks,
-        joinSpec: { guildId, channelId, adapterCreator, wardUserId, nameForUser: trackedNameForUser },
+        joinSpec: {
+          guildId, channelId, adapterCreator, wardUserId, nameForUser: trackedNameForUser,
+          // My human's block list: their audio is never received or transcribed.
+          isBlocked: (id) => !(wardUserId && id === wardUserId) && isBlockedAccountSync({ platform: 'discord', id }),
+        },
         deps: voiceDeps,
         slugId,
         log,
