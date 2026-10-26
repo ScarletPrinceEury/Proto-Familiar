@@ -50,6 +50,10 @@ async function main() {
     for (const n of notes) console.log(`- ${String(n.at ?? '').replace('T', ' ').slice(0, 16)} (${n.id}): ${n.text}`);
   }
   console.log(`\n--- tools its turn used: ${(data.toolsUsed ?? []).join(', ') || 'none'}`);
+  const u = data.usage;
+  if (u) console.log(`--- tokens this turn: ${u.prompt_tokens ?? '?'} in, ${u.completion_tokens ?? '?'} out` +
+    (u.reasoning_tokens ? ` (${u.reasoning_tokens} reasoning)` : '') + (u.cached_tokens ? `, ${u.cached_tokens} cached` : '') +
+    (u.rounds > 1 ? `, over ${u.rounds} rounds` : ''));
   return 0;
 }
 
