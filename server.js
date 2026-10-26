@@ -186,6 +186,7 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
   pendingCategoryAudienceRemap,
+  blockAccount as blockVillageAccount, unblockAccount as unblockVillageAccount,
 } from './src/village/village.js';
 import { parseRegistryJson } from './src/village/village-registry-json.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/village-presence.js';
@@ -5884,6 +5885,28 @@ app.delete('/api/village/knocks/:platform/:id', async (req, res) => {
   const result = await dismissKnock({ platform: req.params.platform, id: req.params.id });
   if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
   res.json({ ok: true });
+});
+
+// Block list — accounts my human never wants reaching the Familiar
+// (src/village/blocklist.js). Ward-only: nothing here is a Familiar tool. The
+// ward's own Discord account is refused (their words carry the safety path).
+// Blocking settles any knock from the same account.
+app.post('/api/village/blocked', async (req, res) => {
+  const { platform = 'discord', id, label, names } = req.body ?? {};
+  const wardId = String(readSettingsSync()?.discordWardUserId ?? '').trim();
+  if (wardId && String(id ?? '').trim() === wardId) {
+    return res.status(400).json({ error: "That's your own Discord account. It can't be blocked." });
+  }
+  try {
+    const saved = await blockVillageAccount({ platform, id, label, names });
+    dismissKnock({ platform: saved.platform, id: saved.id }).catch(() => {});
+    res.json(saved);
+  } catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/blocked/:platform/:id', async (req, res) => {
+  try { res.json(await unblockVillageAccount({ platform: req.params.platform, id: req.params.id })); }
+  catch (err) { villageError(res, err); }
 });
 
 // Location knock list (V4.x) — unregistered Discord channels the

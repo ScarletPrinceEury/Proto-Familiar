@@ -14546,6 +14546,98 @@ async function vlLoadPeople() {
     vlRenderPeopleGrid(await vlFetch(true));
   } catch (err) { grid.innerHTML = vlErr(err); }
   vlLoadKnocks();
+  vlRenderBlocked();
+}
+
+// ── Block list ──
+// Accounts my human never wants reaching the Familiar (src/village/blocklist.js).
+// Not a Discord block: their messages and voice are dropped as they arrive, so
+// the Familiar never sees them, and it stays in the room with everyone else.
+
+let _vlBlockedCollapsed = true;
+
+function vlRenderBlocked() {
+  const box = $('vl-blocked');
+  if (!box) return;
+  const blocked = Array.isArray(_vlReg?.blocked) ? _vlReg.blocked : [];
+  const villagers = _vlReg?.villagers ?? [];
+  const registeredAs = (b) => villagers.find(v =>
+    (v.aliases ?? []).some(a => a.platform === b.platform && a.id === b.id))?.name ?? '';
+  const rows = blocked.map((b, i) => {
+    const sub = [
+      `Discord ID ${esc(b.id)}`,
+      registeredAs(b) ? `registered as ${esc(registeredAs(b))}` : '',
+      b.names?.length ? `older messages hidden under: ${b.names.map(esc).join(', ')}` : '',
+      b.addedAt && !b.addedAt.startsWith('1970') ? `since ${new Date(b.addedAt).toLocaleDateString()}` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="vl-knock" data-bi="${i}">
+      <div class="vl-knock-info">
+        <div class="vl-knock-name">${esc(b.label || b.id)}</div>
+        <div class="vl-knock-sub">${sub}</div>
+      </div>
+      <div class="vl-knock-actions">
+        <button class="btn-ghost vl-unblock" type="button">Unblock</button>
+      </div>
+    </div>`;
+  }).join('');
+  const collapsed = _vlBlockedCollapsed;
+  box.innerHTML = `<button class="vl-servers-toggle vl-knocks-head" type="button" aria-expanded="${!collapsed}" aria-controls="vl-blocked-body">
+      <span class="hint-chev">▶</span> 🚫 Blocked accounts <span class="vl-servers-count">(${blocked.length})</span>
+    </button>
+    <div id="vl-blocked-body" class="vl-servers-body${collapsed ? ' hidden' : ''}">
+      <p class="field-hint">My Familiar never sees what these accounts write or say. Their messages and voice are dropped as they arrive, before anything is saved or remembered. This isn't a Discord block: my Familiar stays in the room with everyone else, and they can still read what it posts there.</p>
+      ${rows || '<p class="field-hint">Nobody is blocked.</p>'}
+      <form class="vl-block-form" autocomplete="off">
+        <input type="text" class="vl-block-id" inputmode="numeric" pattern="[0-9]{5,25}" placeholder="Discord user ID" aria-label="Discord user ID to block" required>
+        <input type="text" class="vl-block-label" maxlength="80" placeholder="Note for me (private)" aria-label="Private note about this account">
+        <input type="text" class="vl-block-names" placeholder="Names they show up as (optional)" aria-label="Names they show up as, separated by commas">
+        <button class="btn-secondary" type="submit">Block</button>
+      </form>
+      <p class="field-hint">To copy an ID in Discord: turn on Developer Mode (Settings → Advanced), then right-click the person → Copy User ID. Names are optional; they also hide messages saved before this update, which only carry a name. My note stays with me and never reaches my Familiar.</p>
+    </div>`;
+  box.querySelector('.vl-servers-toggle')?.addEventListener('click', () => {
+    _vlBlockedCollapsed = !_vlBlockedCollapsed;
+    vlRenderBlocked();
+  });
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const b = blocked[Number(row.dataset.bi)];
+    row.querySelector('.vl-unblock').addEventListener('click', () => vlUnblockAccount(b));
+  });
+  box.querySelector('.vl-block-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const id = form.querySelector('.vl-block-id').value.trim();
+    const label = form.querySelector('.vl-block-label').value.trim();
+    const names = form.querySelector('.vl-block-names').value.split(',').map(s => s.trim()).filter(Boolean);
+    if (id) await vlBlockAccount({ id, label, names });
+  });
+}
+
+async function vlBlockAccount({ id, label = '', names = [] }) {
+  try {
+    const r = await fetch('/api/village/blocked', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: 'discord', id, label, names }),
+    });
+    if (!r.ok) { alert(await vlErrMsg(r)); return false; }
+  } catch (err) { alert(String(err?.message ?? err)); return false; }
+  _vlBlockedCollapsed = false;
+  try { await vlFetch(true); } catch { /* the list re-renders from what we have */ }
+  vlRenderBlocked();
+  vlLoadKnocks();
+  return true;
+}
+
+async function vlUnblockAccount(b) {
+  if (!b) return;
+  if (!confirm(`Unblock ${b.label || b.id}? My Familiar sees their new messages again. Anything they sent while blocked was never kept.`)) return;
+  try {
+    const r = await fetch(`/api/village/blocked/${encodeURIComponent(b.platform)}/${encodeURIComponent(b.id)}`, { method: 'DELETE' });
+    if (!r.ok) { alert(await vlErrMsg(r)); return; }
+  } catch (err) { alert(String(err?.message ?? err)); return; }
+  try { await vlFetch(true); } catch { /* re-render from cache */ }
+  vlRenderBlocked();
 }
 
 // ── Knock list (V4.x) ──
@@ -14594,6 +14686,7 @@ function vlRenderKnocks(knocks) {
           <select class="vl-knock-target" aria-label="Register as">${options}</select>
           <button class="btn-secondary vl-knock-bind" type="button">Register</button>
           <button class="btn-ghost vl-knock-me" type="button" title="This is my own Discord account">This is me</button>
+          <button class="btn-ghost vl-knock-block" type="button" title="Block this account: my Familiar never sees what they write or say">Block</button>
           <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)" aria-label="Dismiss knock">${msIcon('close')}</button>
         </div>
       </div>`;
@@ -14607,6 +14700,11 @@ function vlRenderKnocks(knocks) {
       else vlStartNewPersonFromKnock(k);
     });
     row.querySelector('.vl-knock-me').addEventListener('click', () => vlClaimKnockAsWard(k));
+    row.querySelector('.vl-knock-block').addEventListener('click', () => {
+      const name = k.displayName || k.handle || k.id;
+      if (!confirm(`Block ${name}? My Familiar won't see anything they write or say from now on.`)) return;
+      vlBlockAccount({ id: k.id, label: name, names: [k.displayName, k.handle].filter(Boolean) });
+    });
     row.querySelector('.vl-knock-x').addEventListener('click', () => vlDismissKnock(k));
   });
 }

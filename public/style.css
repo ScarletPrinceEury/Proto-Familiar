@@ -4072,6 +4072,9 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   flex-wrap: wrap;
 }
 .vl-knock-actions select { font-size: 0.78rem; max-width: 11em; }
+.vl-block-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.vl-block-form input { flex: 1 1 10em; min-width: 0; font-size: 0.8rem; }
+.vl-block-form .btn-secondary { font-size: 0.78rem; padding: 3px 9px; }
 .vl-knock-actions .btn-secondary,
 .vl-knock-actions .btn-ghost { font-size: 0.78rem; padding: 3px 9px; }
 

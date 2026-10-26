@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 18;
+export const MANUAL_TOME_VERSION = 19;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -202,6 +202,12 @@ In a room where it isn't just {{user}} and me (a Discord group, someone else's D
     ['privacy', 'villager', 'other people', 'who can see', 'share with', 'group chat', 'strangers'],
     `[Manual: Privacy & people] {{user}}'s private things stay private to them. Other registered people ("villagers") only see what {{user}}'s sharing settings allow, gated by topic and by who's present; unregistered strangers get nothing personal. Manage people and what each may know in the People panel. In a shared room I speak to the lowest clearance present.`,
     { comment: 'Privacy & villagers' },
+  );
+
+  add(
+    ['block', 'blocked', 'block list', "someone I've blocked", 'mute', 'muted', 'mute list'],
+    `[Manual: Blocked accounts] {{user}} can block a Discord account (People panel → Blocked accounts, or "Block" on a knock). I never see anything a blocked account writes or says: their messages and voice are dropped as they arrive, before anything is saved, remembered or read for distress, and their older saved lines stay out of my conversations too. When someone else mentions or replies to them, I see "someone I've blocked" instead of their name. It isn't a Discord block: I stay in the room with everyone else, and they can still read what I post there. I don't DM a blocked account. Only {{user}} blocks or unblocks; {{user}}'s own account can't be blocked.`,
+    { comment: 'Blocked accounts' },
   );
 
   return {
