@@ -136,7 +136,10 @@ what is still deliberately excluded (Phylactery/Unruh recall, the ward's own wor
 event titles) [@architecture-doc]. Two turn-assembly blocks ride this same audience gate into a
 villager's own chat turn: [Village presence](village-presence) injects a known villager's
 pronouns and distinguishing facts, and [Villager proactive context](villager-proactive-context)
-gives a warm villager the same knock-and-memory continuity the ward's own turns get.
+gives a warm villager the same knock-and-memory continuity the ward's own turns get. A
+narrower, ward-only control sits in front of all of this: the [Village block list](village-blocklist)
+drops a named account's messages and voice on arrival, before storage or any gate, while
+leaving that account's presence in a room or call otherwise unchanged.
 
 `knocks.js` tracks contact attempts from people who are not yet registered villagers — a DM or
 an @-mention in a guild the Familiar has not been told to treat as a known Location. A knock
@@ -216,6 +219,8 @@ If you're asking yourself... go to:
   not others.
 - [Village presence block](village-presence) — the code-assembled `[Village]` block that injects
   a known villager's pronouns and distinguishing facts into a turn without a new LLM call.
+- [Village block list](village-blocklist) — the ward-only per-account mute that drops a named
+  Discord account's messages and voice before storage, scoring, or any other gate runs.
 - [Villager proactive context](villager-proactive-context) — the villager-side mirror of the
   ward's own turn continuity: reach-out recall and gated recent-memory recall in a warm 1:1
   villager DM.

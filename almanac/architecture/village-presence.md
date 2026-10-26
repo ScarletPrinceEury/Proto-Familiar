@@ -177,3 +177,6 @@ instead of a model file-lookup; see [Voice](voice) for the earlier occurrence [@
 - [Session Memory Extraction](session-memory-extraction) — the villager legend block (0.12.16)
   that reuses `disclosableVillagerFields` a third time, this time inside the memorization prompt
   rather than a live chat turn.
+- [Village block list](village-blocklist) — a separate, earlier-running check on the same
+  registry: a blocked account's own words never reach `classifyMessage`'s normal flow, so this
+  presence block never has a chance to surface them either.
