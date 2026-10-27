@@ -128,7 +128,7 @@ import { appendReflectionEvent, readReflectionEvents } from './src/pondering/ref
 import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } from './relative-time.js';
 import { modelSignal } from './src/diagnostics/model-signal.js';
-import { speakerOf, labelSpeakers } from './src/village/web-speakers.js';
+import { speakerOf, labelSpeakers, speakerAnchorLine } from './src/village/web-speakers.js';
 import { createClaudeCodeBridge } from './src/bridge/claude-code-bridge.js';
 import { createClaudeCodeMailbox, bridgeEnabled, BRIDGE_OFF_MESSAGE } from './src/bridge/claude-code-mailbox.js';
 import { loreForTurn, placeRoomLore, tomeRoomShare, tomeIsWardOnly, ROOM_SHARE_MODES } from './src/tomes/room-lore.js';
@@ -768,8 +768,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         : readWeatherVagueLine(),
     }) || '';
     // What my previous turn actually ran, from the stored record — beside the
-    // clock at the end of the context, so I start this turn knowing it.
-    timeAnchor = [timeAnchor, lastTurnRecord(Array.isArray(messages) ? messages : [])].filter(Boolean).join('\n\n');
+    // clock at the end of the context, so I start this turn knowing it. And who
+    // is typing, when it isn't my human (the same speaker the threat gate above
+    // already worked out; the label on their message alone wasn't enough).
+    timeAnchor = [timeAnchor, speakerAnchorLine(otherSpeaker), lastTurnRecord(Array.isArray(messages) ? messages : [])].filter(Boolean).join('\n\n');
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
