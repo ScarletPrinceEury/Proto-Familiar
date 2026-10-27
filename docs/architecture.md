@@ -1529,7 +1529,16 @@ non-ward read scopes to the room's `audienceVisible` set, **fail-closed to
 `recall` routes through it, `searchMemory` forwards the Pillar E `audiences`
 filter. Villager writes carry provenance (`discordWriteProvenance` →
 `source_meta` in `source_json`, surfaced on recall by `_source_label`) and
-are audit-logged (`discord-write-log.js` → `GET /api/discord-writes`). A
+are audit-logged (`discord-write-log.js` → `GET /api/discord-writes`).
+**By-id writes read their target first (0.14.105, `src/village/gated-writes.js`).**
+On a gated turn `executeToolCall` reads every item a write in
+`GATED_BY_ID_WRITES` names and refuses unless the room could read it: a memory
+needs its audience in the room's set AND its `content_tag` passing the topic
+grants (`memoryVisibleToVillager`, the Node mirror of recall's
+`memory_visible_to_grants`); a schedule item must not be `isSensitiveNode`. A
+missing id gets the same refusal as a hidden one; a failed read refuses. A
+`full` schedule grant still includes resolving and deleting non-sensitive
+schedule items. A
 whole-loop failure falls back to a plain reply; a tool chain with no closing
 text stays quiet. Default ON (`discordToolsEnabled`); off-switch
 `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED=1`.

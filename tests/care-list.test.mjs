@@ -31,7 +31,9 @@ beforeEach(() => {
   __setPhylacteryClientForTest({
     callTool: async ({ name, arguments: args }) => {
       calls.push({ name, args });
-      const body = name === 'memory_list_care_facts' ? { items } : { ok: true };
+      const body = name === 'memory_list_care_facts' ? { items }
+        : name === 'memory_read_by_id' ? { ok: true, id: args.id, audience: 'friends', content_tag: 'general:open' }
+        : { ok: true };
       return { content: [{ type: 'text', text: JSON.stringify(body) }] };
     },
   });
@@ -89,11 +91,17 @@ test('list_care_facts never runs on a group or villager turn', async () => {
 });
 
 test('taking a fact off the care list is refused on a villager turn; flagging is not', async () => {
-  const off = await run('update_memory_by_id', { id: 'eat-before-c3', high_care: false }, GATED);
+  // A room that can read the fact (0.14.105: a by-id write needs that first).
+  const ROOM = { discord: true, wardPrivate: false, audiences: ['friends'], topicGrants: { general: 'sensitive' } };
+  const off = await run('update_memory_by_id', { id: 'eat-before-c3', high_care: false }, ROOM);
   assert.match(off, /only take facts off my care list in my own conversations/);
-  assert.equal(calls.length, 0);
-  await run('update_memory_by_id', { id: 'eat-before-c3', high_care: true }, GATED);
+  assert.ok(!calls.some(c => c.name === 'memory_update_by_id'));
+  await run('update_memory_by_id', { id: 'eat-before-c3', high_care: true }, ROOM);
   assert.equal(calls.find(c => c.name === 'memory_update_by_id')?.args.careWeight, 'high');
+  calls = [];
+  const hidden = await run('update_memory_by_id', { id: 'eat-before-c3', high_care: true }, GATED);
+  assert.match(hidden, /isn't one I can change from this conversation/, 'a room that can\'t read the fact can\'t flag it either');
+  assert.ok(!calls.some(c => c.name === 'memory_update_by_id'));
   calls = [];
   await run('update_memory_by_id', { id: 'eat-before-c3', high_care: false });
   assert.equal(calls.find(c => c.name === 'memory_update_by_id')?.args.careWeight, 'low', 'fine in my own conversations');
