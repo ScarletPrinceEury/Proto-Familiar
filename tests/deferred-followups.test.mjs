@@ -41,7 +41,9 @@ test('parseFollowups: valid array parsed', () => {
   ] });
   const out = parseFollowups(raw);
   assert.equal(out.length, 2);
-  assert.match(out[0], /vet call/);
+  assert.match(out[0].what, /vet call/);
+  // A plain string (the pre-0.14.99 shape) has no when: it reads as "none".
+  assert.deepEqual(out[0].when, { day: 'none', part: 'none', time: null });
 });
 
 test('parseFollowups: malformed JSON → []', () => {
@@ -51,9 +53,9 @@ test('parseFollowups: malformed JSON → []', () => {
 
 test('parseFollowups: missing field / non-commitment (blank) lines omitted', () => {
   assert.deepEqual(parseFollowups(JSON.stringify({ facts: [] })), []); // no follow_ups key
-  const raw = JSON.stringify({ follow_ups: ['', '   ', 'a real one', null, 42] });
+  const raw = JSON.stringify({ follow_ups: ['', '   ', 'a real one', null, 42, { what: '' }] });
   const out = parseFollowups(raw);
-  assert.deepEqual(out, ['a real one', '42']);
+  assert.deepEqual(out.map(f => f.what), ['a real one']);
 });
 
 // ── followupsFeatureEnabled ───────────────────────────────────────────────
@@ -200,8 +202,10 @@ test('PIPELINE: an un-toolnamed commitment in a stubbed provider response lands 
     const followups = parseFollowups(stubbedProviderRaw, null);
     assert.equal(followups.length, 1);
 
-    // The storage step processJob runs per extracted follow-up.
-    for (const summary of followups) {
+    // Since 0.14.99 processJob keeps a follow-up as a timed intention
+    // (promise-catch.js); this tome path is its fallback when Unruh is down or
+    // the intention cap is full, and it surfaces the same way it always did.
+    for (const { what: summary } of followups) {
       const r = await createSessionFollowup({ summary, tomesDir: dir });
       assert.equal(r.ok, true);
     }

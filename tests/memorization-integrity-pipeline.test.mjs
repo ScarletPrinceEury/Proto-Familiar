@@ -58,7 +58,7 @@ function deps(dir, facts, writes) {
     listTrackers: async () => ({ ok: true, trackers: [] }),
     logTrackerEntry: async () => ({ ok: true, id: 'tke-x' }),
     graphRelate: async () => ({ ok: true }),
-    createSessionFollowup: async () => {},
+    heldPromisesSince: async () => [], backPromises: async () => [],
     createMemoryFull: async (args) => { writes.push(args); return { ok: true, id: `mem-${writes.length}` }; },
     applyMemoryIntegrityGate: (a) => applyMemoryIntegrityGate({ ...a, tomesDir: dir }),
   };

@@ -224,7 +224,7 @@ describe('PIPELINE — nothing a blocked account said becomes a memory', () => {
       listTrackers: async () => ({ ok: true, trackers: [] }),
       logTrackerEntry: async () => ({ ok: true }),
       graphRelate: async () => ({ ok: true }),
-      createSessionFollowup: async () => {},
+      heldPromisesSince: async () => [], backPromises: async () => [],
       createMemoryFull: async () => ({ ok: true, id: 'mem-x' }),
       applyMemoryIntegrityGate: async () => ({ hold: false }),
     }).catch(() => {});

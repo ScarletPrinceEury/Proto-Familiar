@@ -92,6 +92,15 @@ sources:
   - id: intention-py
     type: file
     path: unruh/src/unruh/intention.py
+  - id: promise-catch-js
+    type: file
+    path: src/schedule/promise-catch.js
+  - id: promise-time-js
+    type: file
+    path: src/schedule/promise-time.js
+  - id: promise-catch-test
+    type: file
+    path: tests/promise-catch.test.mjs
 ---
 
 # Unruh
@@ -254,6 +263,69 @@ immediately rather than silently dead [@intention-py] [@server-py]. The lesson g
 this one field: a free-text label typed against a canonical value needs forgiveness at read time
 *and* canonicalization at write time — either alone leaves a way for a legacy or hand-typed round
 to go silently unfulfillable.
+
+## Promises made in chat become timed intentions (0.14.99)
+
+Before this, a spoken promise such as "I'll do that tonight" had no backing at all: the only
+catch was memorization's `follow_ups` extraction, which only ran once a session had sat idle
+for `SESSION_IDLE_ROTATE_MS` (around six hours), filed the commitment with no time attached,
+and only surfaced it in a later live chat — so "tonight" routinely came and went with nothing
+waking the Familiar [@promise-catch-js].
+
+`src/schedule/promise-catch.js` and `promise-time.js` close this by backing a promise as an
+Unruh `at`-triggered intention, `source: 'promise'`, the moment it is recognized, with three
+design rules worth keeping intact:
+
+- **Catch at the turn, gated cheaply in code.** `promiseCue(text)` is a regex gate — one
+  sentence containing both a promise phrase (`I'll`, `let me`, `I'm going to`, …) and a
+  later-time word (`tonight`, `tomorrow`, a weekday, `at HH:MM`, …) — checked after every live
+  reply in the ward's own room (web, voice, the Claude Code bridge, the ward's Discord DM).
+  Only a cue, and only when the turn didn't already back the promise with a real tool call
+  (`intention_set`, `schedule_add_reminder/task/event` — `BACKING_TOOLS`), triggers one small
+  LLM call (`buildPromisePrompt`) that reads just that exchange and returns each promise as
+  `{what, day, part, time}` [@promise-catch-js]. Most turns pay nothing extra. Memorization's
+  `follow_ups` field stays as a backstop (`backPromises`) for anything the per-turn gate
+  misses, deduped against intentions already held (`sameCommitment`, lexical containment) so
+  catching the same promise twice — once from the turn gate, once from the backstop — lands
+  once.
+- **The time comes from when the promise was said, never from when it was caught.** This is
+  the core rule `resolvePromiseTime(when, saidAt, now)` enforces: a promise said Monday 18:03
+  and only picked up Tuesday 00:05 is still due Monday evening, so it resolves as both in the
+  past and due immediately (`late: true`), never as a brand-new Tuesday commitment
+  [@promise-time-js] [@promise-catch-test]. Relative day words inside the stored `what` text
+  are pinned to the day the promise was said (`anchorRelativeWords`: "tonight" said Monday
+  becomes "Monday night (26 Oct)" in storage), so a later read of the intention never carries a
+  bare "tonight" that could mean the wrong night [@promise-time-js].
+- **The model names words; code turns them into times.** `normalizeWhen` reduces the model's
+  output to a fixed vocabulary — `day` (`today`/`tomorrow`/a weekday/`next_contact`/`none`),
+  `part` (`soon`/`morning`/`afternoon`/`evening`/`night`/`none`), and `time` as a validated
+  `HH:MM` or `none` — and every date/time computation from there is arithmetic in
+  `promise-time.js`, never a string the model types [@promise-time-js]. This is the same rule
+  as [Exact values are code's job](../decisions/exact-values-in-code): the backstop path even
+  resolves "when was this said" without asking the model — `saidAtFor(quote, messages)` matches
+  the model's quoted words against the session's own messages to find the real timestamp
+  [@promise-catch-js].
+- **Plain clock conventions, not routine-phase names.** `PART_START` maps `morning`/
+  `afternoon`/`evening`/`night` to fixed clock times (08:00/12:00/17:00/20:00), and the day is
+  defined as starting at 05:00 (`DAY_START_HOUR`), so a promise made at 00:30 reads "tonight" as
+  now and "tomorrow" as the coming day rather than the calendar date [@promise-time-js]. These
+  are deliberately plain clock words, not the ward's own named routine phases (an "Evening
+  Wind-Down" phase might start at 22:00) — matching "evening" against a personal phase label
+  would put "tonight" hours later than intended.
+- **One home for a backed promise.** A promise that becomes an intention is not also kept as a
+  tome follow-up, so closing it (via `intention_done`) closes it once, not twice
+  [@promise-catch-js]. The tome follow-up (`createSessionFollowup`) is only the fallback path —
+  when Unruh is unreachable, the open-intention cap (`openOneShots`) is full, or the
+  `setIntention` write itself fails — so a promise is never silently dropped, just relegated to
+  the older, timeless mechanism [@promise-catch-js].
+- **A due intention now ends noticing's self-set cool-down.** See [Noticing](noticing) for the
+  matching fix on the read side: without it, a promise could come due and sit for up to six
+  hours before noticing looked again.
+
+The `followupsEnabled` setting (default on, `PROTO_FAMILIAR_FOLLOWUPS_DISABLED=1` as the hard
+kill-switch) gates both the older follow-up catch and this promise catch, and now has a web UI
+toggle ("Keep the promises my Familiar makes in chat") where previously it was a synced setting
+with no control surface [@promise-catch-js].
 
 ## Origin: a schedule, not a cronjob checklist
 
@@ -572,6 +644,9 @@ assembled — `server.js`'s `/api/chat` (covering web and voice) and
 
 ## Related
 
+- [Noticing](noticing) — reads the `source:'promise'` and other intentions this page describes
+  via its due-intention wake condition, and its cool-down fix is the read-side half of the
+  promise-catch fix above.
 - [Phylactery](phylactery) — the canonical store Unruh deliberately sits outside of.
 - [Safety spine](safety-spine) — how threat level, silence-triage, and escalation are wired
   together downstream of Unruh's data.

@@ -162,6 +162,7 @@ import {
 import { expandWindow } from './src/schedule/recurrence.js';
 import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES, shouldSurface, toolCeiling, enforceToolCeiling, anchorWithToolRoster } from './tool-surfacing.js';
 import { logTurn, readTurns, describeRound, toolNames, turnLogEnabled } from './src/diagnostics/turn-log.js';
+import { catchPromisesAfterTurn } from './src/schedule/promise-catch.js';
 import { readStewardshipState, recordRoutineReview } from './src/schedule/stewardship.js';
 import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './src/schedule/routine-review.js';
 import {
@@ -570,6 +571,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
   }
+  // A promise I make in my human's own room ("I'll do that tonight") gets a
+  // timed intention behind it (src/schedule/promise-catch.js). Called at each
+  // place a live reply finishes; cheap code decides whether there's anything to
+  // read. Fire-and-forget, never touches the reply.
+  const catchPromises = (replyText, toolCallNames = []) => {
+    if (enrichMode !== 'full' || audienceTag !== 'ward-private' || !replyText) return;
+    catchPromisesAfterTurn({
+      reply: replyText, heard: userText ?? '', toolsUsed: toolCallNames,
+      partner: otherSpeaker || 'my human', surface: voiceMode ? 'voice' : 'web',
+      sessionId: sessionInfo?.sessionId ?? null,
+    }).catch(() => {});
+  };
 
   // My human actively replying is the escalation VETO for pending check-ins — it
   // stands down a triage item's trusted-contact escalation. Ward decision:
@@ -1215,7 +1228,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
-          tickSurfacing((toolRounds ?? []).flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name)));
+          const ranToolNames = (toolRounds ?? []).flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name));
+          tickSurfacing(ranToolNames);
+          catchPromises(responseText, ranToolNames);
           if (enriched.surfacedBookmarks?.length > 0) {
             reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
               .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
@@ -1260,6 +1275,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // The closing round's one retry in words, when its reply was only a call
     // written out as DSML markup (text-tool-calls.js). Needs the +2 below.
     let closingRetried = false;
+    const streamToolNames = [];   // every tool this turn ran, for the promise catch
     // Live ward conversation → the ward-configurable round budget.
     const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
     for (let round = 0; round <= liveMaxRounds + 2; round++) {
@@ -1422,6 +1438,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       }
       if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound) {
         const timestamp = new Date().toISOString();
+        streamToolNames.push(...toolCalls.map(tc => tc.function?.name));
         const results = await Promise.all(toolCalls.map(async tc => ({
           tool_call_id: tc.id,
           name:         tc.function.name,
@@ -1498,6 +1515,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       res.write('data: [DONE]\n\n');
       res.end();
     }
+    catchPromises(finalText, streamToolNames);
     // M8 idle-mode outcome reporting (streaming path). Fire-and-forget.
     const streamBookmarksLoop = enriched.surfacedBookmarks ?? [];
     if (streamBookmarksLoop.length > 0 && finalText) {
@@ -1589,6 +1607,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       parsed._thalamus = thalamusEnvelope;
       // M8 idle-mode outcome reporting: fire-and-forget after response sent.
       const responseText = parsed.choices?.[0]?.message?.content ?? '';
+      catchPromises(responseText);
       if (enriched.surfacedBookmarks?.length > 0) {
         reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
           .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
@@ -1635,7 +1654,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // candidates were offered this turn.
   const streamBookmarks = enriched.surfacedBookmarks ?? [];
   const streamTasks     = enriched.surfacedTasks ?? [];
+  const wantsReplyText  = enrichMode === 'full' && audienceTag === 'ward-private';
   let accumulatedText = '';
+  let pendingSse = '';
 
   const reader = upstream.body.getReader();
   try {
@@ -1643,6 +1664,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const { done, value } = await reader.read();
       if (done) {
         res.end();
+        catchPromises(accumulatedText);
         // Report outcomes with whatever text was accumulated. Fire-and-forget.
         if (streamBookmarks.length > 0 && accumulatedText) {
           reportSurfacingOutcomes({ responseText: accumulatedText, bookmarks: streamBookmarks })
@@ -1659,9 +1681,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // Extract text content from SSE delta chunks for outcome detection.
       // Each chunk may contain multiple `data: {...}\n\n` events. We only
       // need the assistant text, so parse each line's `choices[0].delta.content`.
-      if (streamBookmarks.length > 0 || streamTasks.length > 0) {
-        const chunkStr = chunk.toString('utf8');
-        for (const line of chunkStr.split('\n')) {
+      // An event can also be split across chunks, so a trailing partial line
+      // waits for the next chunk. The promise catch reads this text too.
+      if (streamBookmarks.length > 0 || streamTasks.length > 0 || wantsReplyText) {
+        const lines = (pendingSse + chunk.toString('utf8')).split('\n');
+        pendingSse = lines.pop() ?? '';
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const jsonStr = line.slice(6).trim();
           if (jsonStr === '[DONE]') continue;
@@ -7826,6 +7851,11 @@ function startNoticing() {
     },
     getThreat,
     getWakeInputs: gatherNoticingWakeInputs,
+    // A newly due intention ends the cool-down (ward-signed 0.14.99).
+    getDueIntentionIds: async () => {
+      const r = await getDueIntentions({ now: wardLocalNowISO(readSettingsSync().wardTimeZone) });
+      return (Array.isArray(r?.due) ? r.due : []).map(i => i?.id).filter(Boolean);
+    },
     // Quiet hours gate only KNOCKING (reach_out), passed through to the
     // deliberation — the turn itself still runs so intentions/reads work.
     isQuietHours: async () => isWarmthQuietHours(),
@@ -7846,6 +7876,7 @@ function startNoticing() {
         threatTier:       r.threat?.tier ?? null,
         streakAtDecision: r.streakAtDecision ?? null,
         nextCheckInMs:    r.nextCheckInMs ?? null,
+        dueWake:          r.dueWake ?? false,
         error:            r.error ?? null,
         timedOut:         r.timedOut ?? false,
       }).catch(() => {});

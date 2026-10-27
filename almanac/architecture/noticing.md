@@ -170,6 +170,12 @@ be the moment it ships, with no second registry to keep in sync.
 
 Noticing runs on self-paced cadence via `set_next_check`, clamped to 5 minutes (floor) through 6 hours (ceiling) [@noticing-loop-js]. The default adaptive window is 2 hours after a proactive act (the turn did its thing), or 45 minutes after a stand-down (something was flagged and left) [@noticing-js].
 
+### A newly due intention ends the cool-down (0.14.99, ward-signed)
+
+Before this fix, the self-set cool-down blocked *every* tick, including the due-intention check itself, so an intention — or a chat promise backed by [Unruh's promise catch](unruh) — could come due and sit unseen for up to the full six-hour ceiling. `startNoticingLoop` now takes a `getDueIntentionIds` callback; while a tick is in cool-down, it calls that, and `freshDueIntentions(dueIds, seen)` compares the result against `_seenDue`, a set of due-intention ids the last look already covered [@noticing-loop-js]. Only an id that is due now *and* was not in that set breaks the cool-down early; `seen` is pruned to just the ids still due, so a round-type intention that stops being due and later comes due again (a daily or phase-bound round) is treated as new rather than permanently marked seen [@noticing-loop-js]. A due-wake that finds nothing worth looking at after all (its `condition` didn't pass) keeps the cool-down that was already set, so a recurring near-miss doesn't collapse into checking every base tick [@noticing-loop-js].
+
+Quiet hours were never the blocker here: `isQuietHours()` is passed through to `deliberate` but only gates the warm-knock (`reach_out_to_ward`) — the noticing turn itself still runs and can still read, resolve, and record during quiet hours [@noticing-js].
+
 ## Related
 
 - [Tool surfacing](tool-surfacing) — the live-turn module-surfacing and `request_tools` growth mechanism `composeNoticingTools` now reuses, and the module/trigger map it reads.

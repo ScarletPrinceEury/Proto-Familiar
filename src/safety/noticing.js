@@ -38,6 +38,9 @@
  * PROTO_FAMILIAR_NOTICING_DISABLED=1.
  */
 
+import { naiveLabel } from '../schedule/promise-time.js';
+import { PROMISE_SOURCE } from '../schedule/promise-source.js';
+
 // ── Wake conditions (pure) ───────────────────────────────────────────
 
 // An intention/tell older than this with no trigger that has fired is
@@ -173,8 +176,12 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
     if (c.kind === 'overdue_event') continue;
     if (c.kind === 'due_intention') {
       const it = c.intention;
-      const why = it.why ? ` (I set this because ${it.why})` : '';
-      lines.push(`- An intention of mine has come due: ${it.what}${why} [id ${it.id}]`);
+      // A promise the app caught from chat carries its own why ("I told … I'd
+      // do this …"); I didn't set it, so it isn't "I set this because".
+      const why = !it.why ? '' : it.source === PROMISE_SOURCE ? ` (${it.why})` : ` (I set this because ${it.why})`;
+      // When it was set for, so a late one reads as late against [Now] (0.14.99).
+      const setFor = it.trigger?.kind === 'at' && naiveLabel(it.trigger.at) ? ` [set for ${naiveLabel(it.trigger.at)}]` : '';
+      lines.push(`- An intention of mine has come due: ${it.what}${why}${setFor} [id ${it.id}]`);
     } else if (c.kind === 'rhythm_deviation') {
       lines.push(`- We're past our usual ${c.weekdayClass} rhythm — it's been ${fmt(c.contactGapMs)} since my human was last around, and our longest ordinary gap lately is about ${fmt(c.p90GapMs)}.`);
     } else if (c.kind === 'readiness_gap') {

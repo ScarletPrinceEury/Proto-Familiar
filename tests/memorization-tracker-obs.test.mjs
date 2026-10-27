@@ -125,7 +125,7 @@ function deps({ facts, legend = [], listCalls, logged }) {
     getStandingConsent: async () => ({}),
     getScheduleWindow: async () => ({ nodes: [], linked: [] }),
     graphRelate: async () => ({ ok: true }),
-    createSessionFollowup: async () => {},
+    heldPromisesSince: async () => [], backPromises: async () => [],
     createMemoryFull: async () => ({ ok: true, id: 'mem-x' }),
     applyMemoryIntegrityGate: async ({ memoryArgs }) => ({ write: true, action: 'write', memoryArgs }),
     listTrackers: async () => { listCalls.push(1); return { ok: true, trackers: legend }; },

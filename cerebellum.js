@@ -102,6 +102,7 @@ import { rekeyCueState } from './src/gcal/gcal-projection.js';
 import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules, anchorWithToolRoster, toolCeiling, shouldSurface } from './tool-surfacing.js';
 import { describeRound } from './src/diagnostics/turn-log.js';
 import { settleTextToolCalls } from './src/util/text-tool-calls.js';
+import { PROMISE_SOURCE } from './src/schedule/promise-source.js';
 import { rekeyPonderingUids } from './src/pondering/pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
 import {
@@ -189,6 +190,15 @@ export function intentionStandingPerPhaseCap(settings = readSettingsSync()) {
 export function intentionOpenOneShotsCap(settings = readSettingsSync()) {
   const n = Number(settings?.intentionOpenOneShots);
   return Number.isInteger(n) && n >= 1 && n <= 500 ? n : 30;
+}
+
+// The open one-shot intentions in a listing (everything but a recurring phase
+// round) and whether they've reached the cap. One rule for intention_set and
+// for promises caught from chat (src/schedule/promise-catch.js).
+export function openOneShots(items = [], settings = readSettingsSync()) {
+  const open = (Array.isArray(items) ? items : []).filter(i => !(i?.trigger?.kind === 'phase' && i?.trigger?.recurring));
+  const cap = intentionOpenOneShotsCap(settings);
+  return { open, cap, full: open.length >= cap };
 }
 
 // Human-readable one-liner for an intention's trigger — reused by the
@@ -4306,11 +4316,10 @@ export const TOOL_EXECUTORS = {
           return `I already hold ${inPhase.length} standing round(s) for the ${phase} phase (my cap is ${cap}). To add another I first let one go with intention_drop — current ${phase} rounds: ${ids}.`;
         }
       } else {
-        const cap = intentionOpenOneShotsCap(s);
-        const openOneShots = items.filter(i => !(i.trigger?.kind === 'phase' && i.trigger?.recurring));
-        if (openOneShots.length >= cap) {
-          const oldest = openOneShots.slice(-3).map(i => `${i.id} ("${String(i.what).slice(0, 40)}")`).join(', ');
-          return `I'm already holding ${openOneShots.length} open intentions (my cap is ${cap}). I let one go with intention_drop before adding another — oldest few: ${oldest}.`;
+        const { open, cap, full } = openOneShots(items, s);
+        if (full) {
+          const oldest = open.slice(-3).map(i => `${i.id} ("${String(i.what).slice(0, 40)}")`).join(', ');
+          return `I'm already holding ${open.length} open intentions (my cap is ${cap}). I let one go with intention_drop before adding another — oldest few: ${oldest}.`;
         }
       }
       const data = await setIntention({ what: what.trim(), why, refs, trigger: trig, condition, source: source || 'chat', visibility });
@@ -4332,7 +4341,8 @@ export const TOOL_EXECUTORS = {
       const lines = items.map(i => {
         const when = describeIntentionTrigger(i.trigger) || 'no set time';
         const vis = i.visibility === 'private' ? ' [private]' : '';
-        return `  - (${i.id}) ${i.what} — ${when}${vis}`;
+        const caught = i.source === PROMISE_SOURCE ? ' [caught from chat]' : '';
+        return `  - (${i.id}) ${i.what} — ${when}${vis}${caught}`;
       });
       return `My intentions:\n${lines.join('\n')}`;
     } catch (err) { return `I couldn't read my intentions: ${err.message}`; }
