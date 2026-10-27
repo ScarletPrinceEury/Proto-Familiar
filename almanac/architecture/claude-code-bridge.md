@@ -26,6 +26,9 @@ sources:
   - id: claude-code-mailbox-test
     type: file
     path: tests/claude-code-mailbox.test.mjs
+  - id: memorization-js
+    type: file
+    path: src/memory/memorization.js
 ---
 
 # Web Speakers and the Claude Code Bridge
@@ -83,6 +86,26 @@ and does not call `recordUserActivity` (the ward being silent while a listed
 speaker types does not reset the silence clock) [@server-js]. The web client
 exposes this as a "Speaking as" picker next to the composer, shown only when
 the ward has listed someone, and reset to the ward after every send.
+
+### Memorization needed the same fix separately (0.14.100)
+
+`server.js`'s `labelSpeakers` only covers the live `/api/chat` turn. Session
+memorization builds its own transcript independently (`conversationMessages`
+in `src/memory/memorization.js`, see
+[Session memory extraction](session-memory-extraction)), and until 0.14.100 it
+only stamped a listed speaker's turn with the OpenAI `name` field, not the
+inline `[Name]:` text. On one bridge conversation this let the extractor file
+eight memories crediting the ward with lines Claude Code actually sent — the
+`name` field is not a reliable attribution channel by itself, since a provider
+can accept the field without the model ever acting on it [@memorization-js].
+The fix threads `settings` into `conversationMessages`/
+`buildExtractionMessages` so a listed speaker's turn also carries the same
+`speakerOf`/`labelAsSpeaker` inline label this page describes for live chat,
+plus a short "Others in this conversation" prompt block naming the exact
+bracket text in use [@memorization-js] [@web-speakers-js]. The two surfaces
+reached the same shape — text label first, `name` field as a bonus signal —
+through two separate code paths, because each builds its provider message
+array independently.
 
 ## The Claude Code bridge: its own conversation
 
