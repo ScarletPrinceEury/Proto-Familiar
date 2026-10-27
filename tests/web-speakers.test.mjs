@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { listedSpeakers, speakerOf, labelSpeakers } = await import('../src/village/web-speakers.js');
+const { listedSpeakers, speakerOf, labelSpeakers, speakerAnchorLine } = await import('../src/village/web-speakers.js');
 
 const S = { userName: 'Robin', webSpeakers: ['Claude Code', 'claude code', '  ', 'Robin', 'Sam'] };
 
@@ -43,4 +43,14 @@ test('the provider sees "[Name]: …" and never the speaker field', () => {
   assert.deepEqual(out[3], { role: 'user', content: 'unlisted' }, 'unlisted: no label, field dropped');
   assert.equal(out[4].content[1].text, '[Sam]: look');
   assert.ok(out.every(m => !('speaker' in m)), 'the field never reaches the provider');
+});
+
+// 0.14.104: the label alone wasn't enough on a live turn. Claude Code wrote on
+// the bridge as "[Claude Code]: …" and the Familiar still answered my human by
+// name, because nothing else in the turn said someone else was typing.
+test('the [Now] line names who is typing when it is a listed speaker, and nothing when it is my human', () => {
+  const name = speakerOf({ role: 'user', speaker: 'claude code' }, S);
+  assert.equal(speakerAnchorLine(name), '[Who\'s typing: this message is from Claude Code, not my human. Their lines start "[Claude Code]:".]');
+  assert.equal(speakerAnchorLine(speakerOf({ role: 'user', speaker: 'Stranger' }, S)), '', 'unlisted = my human, so no line');
+  assert.equal(speakerAnchorLine(speakerOf({ role: 'user' }, S)), '');
 });

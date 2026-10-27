@@ -4,8 +4,8 @@
  * Everything typed into the web chat used to read as my human: I answered them
  * when someone else was talking, memory filed that person's words as theirs,
  * their words were scored as my human's distress, and every message counted as
- * my human being around. My human lists the others (Settings → "Others who may
- * type in my web chat"); a message carries `speaker` when one of them sent it
+ * my human being around. My human lists the others ("Others who may type in my
+ * web chat", Knowledge editor → Prompts); a message carries `speaker` when one of them sent it
  * (the composer's "Speaking as" picker, which resets to my human after every
  * send).
  *
@@ -39,6 +39,17 @@ export function speakerOf(message, settings = {}) {
 export function labelAsSpeaker(text, name) {
   const t = String(text ?? '');
   return t.trimStart().startsWith(`[${name}]:`) ? t : `[${name}]: ${t}`;
+}
+
+/**
+ * The line my [Now] block carries while I answer a listed speaker (0.14.104).
+ * The "[Name]: " label on their message wasn't enough on its own: the rest of my
+ * context is all about my human, so I answered Claude Code on the bridge as if
+ * my human had written it. '' when it's my human typing.
+ */
+export function speakerAnchorLine(name) {
+  const n = String(name ?? '').trim();
+  return n ? `[Who's typing: this message is from ${n}, not my human. Their lines start "[${n}]:".]` : '';
 }
 
 /**
