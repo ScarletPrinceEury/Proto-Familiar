@@ -17,6 +17,13 @@
  * cadence gate here is the only pacing; the wake-condition gate inside the
  * tick is what keeps it from firing needlessly.
  *
+ * A newly due intention ends the cool-down (ward-signed 0.14.99). The cool-down
+ * the Familiar sets paces how often it looks around, up to six hours; an
+ * intention coming due is an appointment it made with itself (or a promise the
+ * app caught from chat), and shouldn't wait that out. Only an intention the
+ * last look hadn't covered counts, so one that's still due doesn't re-wake
+ * every base tick.
+ *
  * Off-switch: settings `noticingEnabled` (default ON) or
  * PROTO_FAMILIAR_NOTICING_DISABLED=1 (checked by the wrapper's isEnabled in
  * server.js).
@@ -37,6 +44,18 @@ let _started           = false;
 let _interval          = null;
 let _guard             = null;
 let _nextAllowedTickTs = 0;
+let _seenDue           = new Set();   // due intention ids a look has already covered
+
+/**
+ * Which due intentions haven't been looked at yet. `seen` is pruned to the ids
+ * still due, so an intention that stops being due and later comes due again
+ * (a daily round) counts as new. Pure. Returns { fresh, seen }.
+ */
+export function freshDueIntentions(dueIds = [], seen = new Set()) {
+  const due  = new Set((Array.isArray(dueIds) ? dueIds : []).filter(Boolean));
+  const kept = new Set([...seen].filter(id => due.has(id)));
+  return { fresh: [...due].filter(id => !kept.has(id)), seen: kept };
+}
 
 export function startNoticingLoop({
   tickMs     = DEFAULT_NOTICING_TICK_MS,
@@ -45,6 +64,7 @@ export function startNoticingLoop({
   onError    = () => {},
   isEnabled  = async () => true,
   now        = Date.now,
+  getDueIntentionIds = null,   // async () => [id]; enables the due-intention wake
   ...tickConfig
 }) {
   if (_started) throw new Error('noticing loop already running');
@@ -63,19 +83,37 @@ export function startNoticingLoop({
       // cool-down has elapsed. The wake-condition gate inside the tick is
       // separate — this only paces how often we even look.
       const nowMs = now();
+      let dueWake = false;
       if (nowMs < _nextAllowedTickTs) {
-        onTick({ acted: false, reason: 'in_cooldown', cooldownUntilTs: _nextAllowedTickTs });
-        return;
+        // In cool-down, only an intention that has newly come due gets a look.
+        let ids = [];
+        if (typeof getDueIntentionIds === 'function') {
+          try { ids = await getDueIntentionIds(); } catch (err) { onError(err); }
+        }
+        const { fresh, seen } = freshDueIntentions(ids, _seenDue);
+        _seenDue = seen;
+        if (!fresh.length) {
+          onTick({ acted: false, reason: 'in_cooldown', cooldownUntilTs: _nextAllowedTickTs });
+          return;
+        }
+        for (const id of fresh) _seenDue.add(id);
+        dueWake = true;
       }
       const r = await runOneNoticingTick({ now, ...tickConfig });
       // Set the cool-down from the tick's chosen cadence. A quiet window
       // (no wake condition) uses the base tick interval — cheap to re-check
-      // soon since it costs no LLM call.
+      // soon since it costs no LLM call. A due-intention wake that found
+      // nothing to look at after all (its condition didn't pass) keeps the
+      // cool-down that was already set.
       if (r.reason === 'quiet_window') {
-        _nextAllowedTickTs = nowMs + tickMs;
+        if (!dueWake) _nextAllowedTickTs = nowMs + tickMs;
       } else if (Number.isFinite(r.nextCheckInMs)) {
         _nextAllowedTickTs = nowMs + r.nextCheckInMs;
       }
+      for (const c of r.conditions ?? []) {
+        if (c?.kind === 'due_intention' && c.intention?.id) _seenDue.add(c.intention.id);
+      }
+      if (dueWake) r.dueWake = true;
       try { onTick(r); } catch (err) { onError(err); }
     } catch (err) {
       try { onError(err); } catch { /* swallow */ }
@@ -97,6 +135,7 @@ export async function stopNoticingLoop() {
   const guard = _guard;
   _started           = false;
   _nextAllowedTickTs = 0;
+  _seenDue           = new Set();
   if (guard) await guard.settle();
 }
 

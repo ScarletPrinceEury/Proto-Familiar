@@ -44,6 +44,7 @@ import { buildVillagerContextBlock } from '../warmth/villager-context.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
 import { selectModules, stickyModulesFor, tickSticky, shouldSurface, toolCeiling, enforceToolCeiling, TOOL_MODULES } from '../../tool-surfacing.js';
 import { logTurn, toolNames, turnLogEnabled } from '../diagnostics/turn-log.js';
+import { catchPromisesAfterTurn } from '../schedule/promise-catch.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
@@ -3010,6 +3011,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   }
 
   let rawReply;
+  let ranToolNames = [];   // every tool this turn ran (the promise catch reads them)
   if (discordTools.length) {
     // The result gate rides in toolCtx: a non-ward turn is wardPrivate:false and
     // carries the room's visible-audience set, so audience-scoped reads (recall)
@@ -3152,6 +3154,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
         rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings, signal: turnSignal }).catch(e => { closingErr = e; return ''; });
       }
     }
+    ranToolNames = turnRounds.flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name));
     if (turnDiag) {
       logTurn({
         ...turnDiag,
@@ -3280,6 +3283,15 @@ async function handleTurn(gw, msg, decision, turn = null) {
     signal: turnSignal,
   });
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
+  // A promise I make in my human's DM gets a timed intention behind it
+  // (src/schedule/promise-catch.js) — the same catch the web chat runs.
+  if (decision.kind === 'ward-dm' && audienceTag === 'ward-private') {
+    catchPromisesAfterTurn({
+      reply: rawReply, heard: content,
+      toolsUsed: ranToolNames,
+      surface: 'discord', sessionId: session?.sessionId ?? null,
+    }).catch(() => {});
+  }
 }
 
 // ── Gateway connection ────────────────────────────────────────────

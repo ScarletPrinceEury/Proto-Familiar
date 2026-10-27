@@ -227,8 +227,9 @@ import { segmentByDay, dayDelta } from '../schedule/day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync, trackersEnabled } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
+import { wardLocalNowISO } from '../../relative-time.js';
 import { contentWithStandins, getAssetMeta } from '../vision/media.js';
-import { createSessionFollowup } from './recent-ponderings.js';
+import { parsePromises, promisesEnabled, backPromises, heldPromisesSince } from '../schedule/promise-catch.js';
 import { createTickGuard } from '../util/tick-guard.js';
 
 // Vision (§7): fold image stand-ins into a slice's transcript so an image-
@@ -468,7 +469,7 @@ export function buildVillagerLegendBlock(messages, registry, { wardPrivate = tru
   return `\n\n### People here — who they are\nSo I get their names and pronouns right, and only note what's NEW about them, not what I already hold:\n${lines.join('\n')}\nI use these pronouns when a fact is about them.`;
 }
 
-export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true, villagerLegendBlock = '', trackerLegend = []) {
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true, villagerLegendBlock = '', trackerLegend = [], keptPromises = []) {
   const readable = filterReadable(messages);
   if (readable.length < 2) return null;
 
@@ -495,13 +496,18 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
 
   // Deferred follow-ups (0.9.x, the "I'll do that later" catch). Ward-private
   // only — the mirror of the deferred-"tell" bug: there I said a thing and
-  // forgot the bookkeeping, here I promise a thing and never do it. I only
-  // catch and re-surface it; I never invent the reminder time or the tool.
+  // forgot the bookkeeping, here I promise a thing and never do it. Since
+  // 0.14.99 each one is the backstop for the after-turn promise catch: it names
+  // its when in words and quotes me, and code (promise-catch.js) works out the
+  // time from the message it quotes and keeps it as a timed intention. I never
+  // compute the time or invent the tool. Promises the after-turn catch already
+  // holds are listed so I don't file them twice under different words.
+  const kept = (Array.isArray(keptPromises) ? keptPromises : []).filter(Boolean).slice(0, 20);
   const followupsFieldLine = followupsEnabled
-    ? `,\n  "follow_ups": [\n    "Short summary of the thing I said I'd do but didn't"\n  ]`
+    ? `,\n  "follow_ups": [\n    { "what": "I look up the bus times for Saturday", "quote": "I'll look those up tonight", "day": "today", "part": "evening", "time": "none" }\n  ]`
     : '';
   const followupsFieldRules = followupsEnabled
-    ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but didn't do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
+    ? `\n### Field rules — follow_ups\n\nThings I said I'd do later in this conversation and didn't do in it: "I'll do that tonight" / "I'll remind you tomorrow" / "I'll set that up". If I DID use the right tool for it (intention_set, a schedule tool), it's set up and isn't a follow-up. If nothing qualifies, [].\n- what: what I'll do, in first person and short, without the time words.\n- quote: a few of my own words from the message where I promised it, copied exactly.\n- day: "today" (the day I said it), "tomorrow", a weekday ("wednesday"), "next_contact" (the next time we talk), or "none".\n- part: "soon", "morning", "afternoon", "evening", "night", or "none". Tonight is "evening".\n- time: a clock time I actually named, as 24-hour "HH:MM", or "none".\n${kept.length ? `\nAlready kept as intentions, so I leave these out:\n${kept.map(k => `- ${k}`).join('\n')}\n` : ''}`
     : '';
 
   // Passive tracker capture (trackers build spec §5.2). Ward-private only —
@@ -896,32 +902,28 @@ export function parseRelations(raw, finishReason = null) {
 
 // Deferred follow-ups (0.9.x): pull the optional "follow_ups" array out of the
 // SAME response that carried facts/relations — no extra LLM call (CLAUDE.md
-// "ride existing requests"). Mirrors parseFacts' shape but the payload is
-// just short strings, not objects, so it's a plain filter/trim, never a
-// brace-counting salvage. Enrichment, never load-bearing: malformed or
-// missing → [], same as parseRelations — a follow-up bug can never cost the
-// human a memorized fact.
+// "ride existing requests"). Each item is { what, when, quote } (0.14.99; a
+// plain string from an older-shaped reply still reads as a `what`), parsed by
+// the promise catcher's own parser so the two paths can't drift. Enrichment,
+// never load-bearing: malformed or missing → [], same as parseRelations — a
+// follow-up bug can never cost the human a memorized fact.
 const MAX_FOLLOWUPS_PER_JOB = 10;
 
-export function parseFollowups(raw, finishReason = null) {
-  const cleaned = String(raw).replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
-  const match = cleaned.match(/\{[\s\S]+\}/);
-  if (!match) return [];
-  let parsed;
-  try { parsed = JSON.parse(match[0]); }
-  catch { return []; } // truncated/malformed — a follow-up isn't worth salvaging half a JSON object for
-  const arr = Array.isArray(parsed.follow_ups) ? parsed.follow_ups : [];
-  return arr
-    .map(f => String(f ?? '').trim())
-    .filter(Boolean)
-    .slice(0, MAX_FOLLOWUPS_PER_JOB);
+export function parseFollowups(raw, _finishReason = null) {
+  return parsePromises(raw, { key: 'follow_ups', max: MAX_FOLLOWUPS_PER_JOB });
 }
 
-// The one gate: env off-switch wins outright; otherwise the ward's
-// `followupsEnabled` setting (default ON — the ward asked for this).
-export function followupsFeatureEnabled(settings) {
-  if (process.env.PROTO_FAMILIAR_FOLLOWUPS_DISABLED === '1') return false;
-  return settings?.followupsEnabled !== false;
+// The one gate, shared with the after-turn promise catch: env off-switch wins
+// outright; otherwise the ward's `followupsEnabled` setting (default ON).
+export { promisesEnabled as followupsFeatureEnabled };
+
+// Who a slice's promises were made to: the listed speaker when every message to
+// me in it came from one (the Claude Code bridge), else my human.
+function promisePartner(messages = []) {
+  const said = (Array.isArray(messages) ? messages : []).filter(m => m?.role === 'user');
+  const names = new Set(said.map(m => String(m.speaker ?? '').trim()));
+  const [only] = [...names];
+  return names.size === 1 && only ? only : 'my human';
 }
 
 // Passive tracker observations (trackers build spec §5.2). Pull every
@@ -1022,17 +1024,6 @@ function buildByNameLookup(registry) {
 }
 
 /**
- * File any deferred follow-ups the extraction surfaced. Best-effort per item —
- * a failure is logged, never fails the job. No-op on an empty list.
- */
-async function createSessionFollowups(followups, createSessionFollowupDep) {
-  for (const summary of followups) {
-    try { await createSessionFollowupDep({ summary }); }
-    catch (err) { console.warn('[memorization] createSessionFollowup failed:', err?.message ?? err); }
-  }
-}
-
-/**
  * Log passive tracker observations (§5.2) parsed from the kept facts. Each logs
  * as source:'inferred'; a refusal (off-schema payload, entry cap) is Unruh's
  * own visible verdict — logged, never fabricated as a success.
@@ -1092,7 +1083,8 @@ export async function processJob(job, deps = {}) {
     getScheduleWindow: getScheduleWindowDep = getScheduleWindow,
     createMemoryFull: createMemoryFullDep = createMemoryFull,
     graphRelate: graphRelateDep = graphRelate,
-    createSessionFollowup: createSessionFollowupDep = createSessionFollowup,
+    backPromises: backPromisesDep = backPromises,
+    heldPromisesSince: heldPromisesSinceDep = heldPromisesSince,
     applyMemoryIntegrityGate: applyGateDep = applyMemoryIntegrityGate,
     listTrackers: listTrackersDep = listTrackers,
     logTrackerEntry: logTrackerEntryDep = logTrackerEntry,
@@ -1132,7 +1124,15 @@ export async function processJob(job, deps = {}) {
   // already IS the ward-private branch (buildSharedRoomPrompt never asks for
   // follow_ups), so this is the single flag both the prompt and the parse
   // step read.
-  const followupsOn = promptFn === buildPrompt && followupsFeatureEnabled(settings);
+  const followupsOn = promptFn === buildPrompt && promisesEnabled(settings);
+  // The promises the after-turn catch already holds from this slice's span, so
+  // the backstop doesn't file them again under different words. Best-effort.
+  let keptPromises = [];
+  if (followupsOn) {
+    const firstTs = (job.messages ?? []).map(m => (typeof m?.timestamp === 'number' ? m.timestamp : Date.parse(m?.timestamp ?? ''))).find(Number.isFinite);
+    const since = Number.isFinite(firstTs) ? wardLocalNowISO(settings?.wardTimeZone, firstTs) : '';
+    keptPromises = await heldPromisesSinceDep(since).catch(() => []);
+  }
 
   // Passive tracker capture (§5.2): on a ward-private slice, offer the model a
   // compact tracker legend so a fact carrying a mood / sleep / pantry / upkeep
@@ -1171,7 +1171,7 @@ export async function processJob(job, deps = {}) {
   });
 
   const builtPrompt = promptFn === buildPrompt
-    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn, villagerLegendBlock, trackerLegend)
+    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn, villagerLegendBlock, trackerLegend, keptPromises)
     : promptFn(visionMessages, job.topicLabel ?? null, wardName, villagerLegendBlock);
   // {{char}}/{{user}} in the extraction templates resolve to the configured
   // names here (boundary #1) — the same place every other standalone Familiar-
@@ -1220,7 +1220,13 @@ export async function processJob(job, deps = {}) {
     for (const r of parseRelations(raw, finishReason)) relations.push(r);
     if (followupsOn) for (const fu of parseFollowups(raw, finishReason)) followups.push(fu);
   }
-  await createSessionFollowups(followups, createSessionFollowupDep);
+  // Follow-ups are the after-turn promise catch's backstop (0.14.99): each one
+  // is kept as a timed intention, its time worked out from the message it quotes.
+  if (followups.length) {
+    await backPromisesDep(followups, {
+      messages: job.messages, partner: promisePartner(job.messages), timeZone: settings?.wardTimeZone ?? null,
+    }).catch(err => console.warn('[memorization] keeping follow-ups failed:', err?.message ?? err));
+  }
 
   // Passive tracker observations (§5.2). Collected from ALL parsed facts —
   // independent of the per-fact consent/integrity decisions below, because a

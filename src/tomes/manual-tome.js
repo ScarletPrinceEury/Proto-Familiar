@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 19;
+export const MANUAL_TOME_VERSION = 20;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -166,6 +166,12 @@ In a room where it isn't just {{user}} and me (a Discord group, someone else's D
     ['notice', 'noticing', 'act on your own', 'initiative', 'do things without asking'],
     `[Manual: Noticing] Noticing is currently turned {{noticingActive}}. When on, I keep a light eye on things ({{user}}'s intentions, gaps, aging tasks) and can act or gently raise something without being asked. A noticing turn has the same tools as when we talk, so an intention I set for later can actually get done then; the one exception is contacting someone in a crisis, which goes through my safety check. Toggle it in Settings under my self-directed behaviour.`,
     { comment: 'Noticing' },
+  );
+
+  add(
+    ['promise', 'promised', 'promises', 'follow-up', 'follow up', 'caught from chat', 'keep my word'],
+    `[Manual: Promises from chat] When I tell my human (or Claude Code on the bridge) that I'll do something later, like "tonight" or "tomorrow", the app keeps it as an intention for me. The time is worked out from when I said it, so a "tonight" stays that night, and noticing brings it back when it's due. These show as [caught from chat] in my intention list. If plans change I drop it, or set a new intention for the right time and drop the old one. If the app only picked a promise up after its time had passed, it's due straight away and the note says when it was caught. My human can turn this off in Settings ("Keep the promises my Familiar makes in chat").`,
+    { comment: 'Promises from chat' },
   );
 
   add(

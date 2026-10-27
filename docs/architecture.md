@@ -953,6 +953,49 @@ never fabricates the follow-through (no invented reminder time/tool) — it
 only catches, persists, and re-surfaces; the Familiar completes it or drops
 it.
 
+**Promises get a timed intention (0.14.99, `src/schedule/promise-catch.js` +
+`promise-time.js`).** A follow-up used to be timeless and late: the session
+had to sit idle for 6 h (`SESSION_IDLE_ROTATE_MS`) before memorization caught
+it, and only a later live turn's `[Deferred intents]` showed it, so a promise
+for "tonight" came and went with nothing waking the Familiar for it. Now:
+- **At the turn.** Every place a live reply finishes in my human's own room
+  calls `catchPromisesAfterTurn`: the four `/api/chat` completion points (via
+  one `catchPromises` closure; covers web, voice and the Claude Code bridge,
+  gated `enrichMode==='full' && audienceTag==='ward-private'`) and the end of
+  Discord `handleTurn` for `kind==='ward-dm'`. Surface matrix: web live turn ✓,
+  web tool rounds ✓ (final reply + every tool name the turn ran), Discord ward
+  ✓, Discord villager/ambient N/A (not my human's room), background loops N/A
+  (noticing sets intentions itself). Code gates first (`promiseCue`: one
+  sentence with both "I'll/let me/…" and a later-time word; skipped when the
+  turn already used `intention_set` or a schedule add tool). Only then one small
+  call (memorization connection, `callProviderChat`) over that single exchange
+  returns `{what, day, part, time}` in a fixed vocabulary.
+- **One backing.** `backPromise` resolves the time in code from when the
+  promise was SAID (`resolvePromiseTime`: before 05:00 counts as the night
+  before; morning 08:00 / afternoon 12:00 / evening 17:00 / night 20:00; plain
+  clock times, not routine-phase names, because those are personal; "soon"
+  +30 min, no time +2 h, a later day its morning; a time already begun → +30
+  min), pins relative words in the text to that day (`anchorRelativeWords`:
+  "tonight" → "Monday night (26 Oct)"), and keeps it as an Unruh intention
+  (`trigger {kind:'at'}` or `on_next_contact`, `source:'promise'`, `why` naming
+  who was promised, for when, when said, and — if its time had passed — when
+  the app caught it). A late promise is simply already due. Deduped lexically
+  against every active intention; the open one-shot cap (`openOneShots`, shared
+  with `intention_set`) applies. Unruh down / cap full / write failed → kept
+  as a tome follow-up instead (`createSessionFollowup`), so it isn't lost.
+- **The backstop.** memorization's `follow_ups` items are now
+  `{what, quote, day, part, time}` (`parseFollowups` = `parsePromises`), and
+  `processJob` hands them to `backPromises`, which finds each promise's said-at
+  time from the message its `quote` matches (`saidAtFor`, code lookup; else the
+  slice's last Familiar message). The prompt lists promises already held from
+  the slice's span (`heldPromisesSince`) so the backstop doesn't re-file them
+  under different words.
+- `intention_list` marks these `[caught from chat]`; the noticing report shows a
+  caught promise's own `why` and, for any `at` intention, `[set for …]` so a
+  late one reads as late against `[Now]`. Switch: `followupsEnabled` (Settings →
+  "Keep the promises my Familiar makes in chat", default on) /
+  `PROTO_FAMILIAR_FOLLOWUPS_DISABLED=1`. Log: `logs/promise-events.jsonl`.
+
 **`pondering-cadence.js`** — pure tiered formula:
 `computeRequiredInterval(topWeight, threatLevel, { scale })`. Tiers:
 high=30min / mid=60min / low=2h / idle=6h. Threat multiplies (severe
@@ -1247,7 +1290,12 @@ and when the answer scrolled out of the look-back window it digs with
 `search_conversation` (session-search.js: raw-transcript search, a `since_hours`
 window reads back keyword-free).
 `noticing-loop.js` is the singleton that drives it, self-paced (`set_next_check`,
-clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
+clamped [5min,6h], adaptive default). **A newly due intention ends the cool-down
+(ward-signed 0.14.99):** while cooling down, each 20-min base tick asks Unruh
+for due intention ids (`getDueIntentionIds`); one the last look hadn't covered
+(`freshDueIntentions`, seen ids pruned to what's still due) runs the tick early.
+If that tick finds nothing after all (the intention's condition didn't pass),
+the chosen cool-down stays. Recorded as `dueWake` in noticing-events. The bounded, tool-using deliberation runs
 in `server.js`'s `noticingDeliberate`, through `runNoticingToolLoop` (ward-signed
 0.14.64): each provider call is bounded at `NOTICING_CALL_TIMEOUT_MS` (180s) and
 the whole deliberation — every round and every tool call — at

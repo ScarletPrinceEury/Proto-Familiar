@@ -201,7 +201,7 @@ export const FOLLOWUP_MAX_AGE_DAYS = 7;
 // (normalize, then check one contains the other) — used only to stop the
 // SAME commitment landing twice across overlapping memorization slices, not
 // to judge whether two different follow-ups are "similar enough."
-function normalizeFollowupText(s) {
+export function normalizeFollowupText(s) {
   return String(s ?? '')
     .toLowerCase()
     .replace(/[^\w\s]/g, '')

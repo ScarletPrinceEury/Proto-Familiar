@@ -1149,6 +1149,7 @@ function loadPersisted() {
   if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
   if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
   if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
+  if (typeof state.followupsEnabled !== 'boolean') state.followupsEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (typeof state.villagePresenceEnabled !== 'boolean') state.villagePresenceEnabled = true;
   if (typeof state.villagerContextEnabled !== 'boolean') state.villagerContextEnabled = true;
@@ -4620,6 +4621,7 @@ function readSettingsFromUI() {
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
+  if ($('followups-toggle')) state.followupsEnabled = $('followups-toggle').checked;
   if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
   if ($('page-watch-toggle')) state.pageWatchEnabled = $('page-watch-toggle').checked;
   if ($('browse-site-mode')) state.browseSiteMode = $('browse-site-mode').value;
@@ -4845,6 +4847,7 @@ function writeSettingsToUI() {
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
+  if ($('followups-toggle'))   setIfNotFocused($('followups-toggle'),   'checked', state.followupsEnabled !== false);
   if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
   if ($('page-watch-toggle'))  setIfNotFocused($('page-watch-toggle'),  'checked', state.pageWatchEnabled !== false);
   if ($('browse-site-mode'))   setIfNotFocused($('browse-site-mode'),   'value',   state.browseSiteMode || 'open');
@@ -6350,7 +6353,7 @@ function init() {
     'pondering-toggle', 'pondering-scale', 'pondering-thread-chance', 'ponder-web-toggle', 'ponder-web-reads',
     'ponder-consolidation-toggle',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
-    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'followups-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'organ-status-block',
     'memory-sweep-toggle',
