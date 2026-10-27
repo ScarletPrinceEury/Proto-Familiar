@@ -17,6 +17,9 @@ sources:
   - id: model-signal-js
     type: file
     path: src/diagnostics/model-signal.js
+  - id: promise-time-js
+    type: file
+    path: src/schedule/promise-time.js
 ---
 
 # Exact Values Are Code's Job
@@ -127,6 +130,14 @@ since the conversation's last turn. `src/diagnostics/model-signal.js`'s `modelSi
 in code and appends it to the `[Now]` block instead of leaving the model to guess or assume
 continuity [@model-signal-js] — see [Unruh](../architecture/unruh), "A second line in the same
 anchor," for the mechanism and the self-made rules this closed.
+
+A sibling instance (0.14.99) applies the rule to a promise the Familiar makes in chat rather
+than a fact it files: `src/schedule/promise-time.js`'s `resolvePromiseTime` turns the model's
+fixed-vocabulary answer (`day`/`part`/a validated `HH:MM`) into an exact local-naive timestamp,
+computed from when the promise was said rather than when it was later caught [@promise-time-js] — see
+[Unruh](../architecture/unruh), "Promises made in chat become timed intentions," for the full
+mechanism and the two time-model traps (late relative to the catch, and a bare relative word
+like "tonight" stored without a day) this closes.
 
 `providers.js`'s `normalizeBaseUrl` (0.11.91-alpha) is a narrower, non-model-facing application
 of the same rule to a value the *ward* types by hand rather than the model: a connection's
