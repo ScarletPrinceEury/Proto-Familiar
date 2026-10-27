@@ -35,10 +35,11 @@ export function speakerOf(message, settings = {}) {
   return listedSpeakers(settings).find(n => n.toLowerCase() === s) ?? null;
 }
 
-const labelText = (text, name) => {
+/** "[Name]: text" — the label a listed speaker's line carries wherever a model reads it. Idempotent. */
+export function labelAsSpeaker(text, name) {
   const t = String(text ?? '');
   return t.trimStart().startsWith(`[${name}]:`) ? t : `[${name}]: ${t}`;
-};
+}
 
 /**
  * History for the provider: a listed speaker's turns read "[Name]: …" (the way
@@ -52,13 +53,13 @@ export function labelSpeakers(messages = [], settings = {}) {
     const { speaker, ...rest } = m;
     const name = speakerOf(m, settings);
     if (!name) return rest;
-    if (typeof rest.content === 'string') return { ...rest, content: labelText(rest.content, name) };
+    if (typeof rest.content === 'string') return { ...rest, content: labelAsSpeaker(rest.content, name) };
     if (Array.isArray(rest.content)) {
       let done = false;
       const parts = rest.content.map(p => {
         if (done || p?.type !== 'text') return p;
         done = true;
-        return { ...p, text: labelText(p.text, name) };
+        return { ...p, text: labelAsSpeaker(p.text, name) };
       });
       return { ...rest, content: done ? parts : [{ type: 'text', text: `[${name}]:` }, ...parts] };
     }

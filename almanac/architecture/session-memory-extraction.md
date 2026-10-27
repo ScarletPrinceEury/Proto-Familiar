@@ -26,6 +26,9 @@ sources:
 - id: village-js
   type: file
   path: src/village/village.js
+- id: web-speakers-js
+  type: file
+  path: src/village/web-speakers.js
 ---
 
 # Session Memory Extraction
@@ -154,6 +157,38 @@ The `name` field cannot "split roles" in a way that would let multiple humans ap
 
 The message `speaker` field already carries the same information that the inline `[Name]:` label is generated from (in `discord-gateway` by `attributeUserContent`). Stamping the OpenAI `name` field with a pseudonym handle is what makes the field useful: the model gets a separate identifier namespace that does not depend on the content string. [@memorization-js]
 
+### Listed web speakers: the name field alone isn't enough (0.14.100)
+
+A listed web speaker — someone the ward named in Settings as allowed to type
+in the web chat, resolved by `speakerOf`/`listedSpeakers` in `web-speakers.js`;
+see [Web Speakers and the Claude Code Bridge](claude-code-bridge) for the
+primitive and its first consumer, the Claude Code bridge — exposed a gap the
+three-layer attribution fix above did not cover. Before 0.14.100,
+`conversationMessages` stamped a listed speaker's turn with only the OpenAI
+`name` field, the same handle described above. On one bridge conversation this
+let the extractor file eight memories crediting the ward with lines Claude
+Code actually sent, while other facts from the same slice named Claude Code
+correctly — evidence the model was inferring the speaker from surrounding
+context rather than reading the `name` field at all [@memorization-js]. The
+field is not a reliable attribution channel on its own: a provider can accept
+it without error, so the learned capability cache above still records "yes,"
+even on a call where the model never acts on the value.
+
+The fix threads `settings` into `conversationMessages`/
+`buildExtractionMessages` so a listed speaker's turn also carries `[Name]: `
+inline in its TEXT content, via the same `speakerOf`/`labelAsSpeaker`
+primitives (fail-closed: only a ward-listed name resolves to anything) that
+the live `/api/chat` path already used for this purpose [@memorization-js]
+[@web-speakers-js]. `otherSpeakersNote` adds a short "Others in this
+conversation" block to the extraction prompt itself whenever any turn in the
+slice resolves to a listed speaker, naming the exact bracket text the
+transcript uses [@memorization-js]. The `name` field is kept as a second
+signal rather than removed — the rule going forward is "text label first,
+`name` field as a bonus," never the name field alone, for any surface where
+attribution matters. Discord's inline label and the session-log transcript
+already followed that rule; extraction's `conversationMessages` was the
+outlier until this fix.
+
 ## The villager legend block (0.12.16)
 
 Extraction used to resolve "she"/"they"/"Sam" purely from the transcript, blind to who the
@@ -219,3 +254,4 @@ itself is bounded [@memorization-js].
 - [Vision capability defaults to BLIND; prove capability via allowlist](../decisions/vision-capability-defaults) — the earlier capability-cache decision that the name-field persistence design above mirrors.
 - [Village presence block](village-presence) — the `disclosableVillagerFields` disclosure policy the villager legend block above reuses rather than duplicating.
 - [Villager proactive context](villager-proactive-context) — a related but distinct 0.12.14–0.12.15 extension of the Village surface: villager tells, built around the same registry the legend block reads.
+- [Web Speakers and the Claude Code Bridge](claude-code-bridge) — the `web-speakers.js` primitive behind the 0.14.100 listed-speaker fix above, and the live `/api/chat` path that already used the same inline-label convention.

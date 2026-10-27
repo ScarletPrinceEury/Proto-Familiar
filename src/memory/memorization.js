@@ -219,6 +219,7 @@ import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMa
 import { applyMemoryIntegrityGate } from '../safety/memory-integrity.js';
 import { getRegistry, standingConsentActive } from '../village/village.js';
 import { withoutBlockedLines } from '../village/blocklist.js';
+import { speakerOf, labelAsSpeaker } from '../village/web-speakers.js';
 import { disclosableVillagerFields } from '../village/village-card.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../village/audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
@@ -350,13 +351,22 @@ export function chunkMessagesBySize(messages, maxBytes) {
 // default now — see name-field.js; a provider that 400s on the field is learned
 // and falls back to bare) stamps each user turn with a name-safe `name` handle so
 // the model gets a first-class sender id, not just the inline `[Name]:` text.
-export function conversationMessages(messages, { sharedRoom = false, wardLabel = 'My human', withNames = false } = {}) {
+// A listed web speaker's turns (web-speakers.js — someone my human lets into
+// our chat, like Claude Code on the bridge) carry "[Name]: " in their TEXT, the
+// same label the live chat gives them. The `name` field alone isn't enough: a
+// provider can accept it without the model reading it, and then everything
+// they said was filed as my human's words (seen 2026-10-26 on the bridge).
+// Needs `settings` (who's listed); without it nothing is labelled.
+export function conversationMessages(messages, { sharedRoom = false, wardLabel = 'My human', withNames = false, settings = null } = {}) {
   return filterReadable(messages).map(m => {
     if (m.role !== 'user') return { role: 'assistant', content: m.content ?? '' };
     const c = m.content ?? '';
-    const turn = sharedRoom
-      ? { role: 'user', content: /^\[[^\]]+\]:/.test(c) ? c : `${wardLabel}: ${c}` }
-      : { role: 'user', content: c };
+    const other = settings ? speakerOf(m, settings) : null;
+    const turn = other
+      ? { role: 'user', content: labelAsSpeaker(c, other) }
+      : sharedRoom
+        ? { role: 'user', content: /^\[[^\]]+\]:/.test(c) ? c : `${wardLabel}: ${c}` }
+        : { role: 'user', content: c };
     if (withNames) {
       const name = speakerNameField({ role: 'user', speaker: m.speaker, wardName: wardLabel });
       if (name) turn.name = name;
@@ -378,8 +388,8 @@ const EXTRACTION_CLOSING_CUE = 'End of the logs. Now output only the memories JS
 // turns, then the neutral SYSTEM close cue. `instructions` is already
 // macro-resolved by the caller. Exported so the pipeline shape (system-first,
 // role-faithful middle, cue-last) is testable without stubbing all of processJob.
-export function buildExtractionMessages({ instructions, messages, sharedRoom = false, wardLabel = 'My human', withNames = false }) {
-  const convo = conversationMessages(messages, { sharedRoom, wardLabel, withNames });
+export function buildExtractionMessages({ instructions, messages, sharedRoom = false, wardLabel = 'My human', withNames = false, settings = null }) {
+  const convo = conversationMessages(messages, { sharedRoom, wardLabel, withNames, settings });
   // A slice where only the Familiar spoke — proactive reach-outs, room answers my
   // human never replied to — is all `assistant`, and some providers (z.ai, code
   // 1214) reject a completion with zero user turns. Insert ONE marked placeholder
@@ -417,6 +427,18 @@ content_tag — what this fact is ABOUT and how private it feels, as "topic:leve
   topic — one of: ${CONTENT_TOPICS.join(', ')}. ("general" is the catch-all for ordinary things that aren't one of the others.)
   level — "open" or "sensitive". "sensitive" is anything my human would only want shared with people they really trust on that subject; "open" is the everyday version. Unsure → "sensitive".
   It's separate from category: category is how I file the fact, content_tag is who gets to see it. E.g. "my human came out to me" → "sexuality:sensitive"; "my human works at a bakery" → "work:open"; "we talked about their new medication" → "medical:sensitive"; "they like oat milk" → "general:open".`;
+
+// Who else typed in this slice besides my human — listed web speakers, whose
+// lines carry "[Name]: " (conversationMessages). Empty when it was only us.
+export function otherSpeakersNote(messages = [], settings = {}) {
+  const names = [...new Set((Array.isArray(messages) ? messages : []).map(m => speakerOf(m, settings)).filter(Boolean))];
+  if (!names.length) return '';
+  const list = names.map(n => `"[${n}]:"`).join(', ');
+  return `
+
+### Others in this conversation
+Some lines here aren't my human's. A line starting ${list} is that person, someone my human lets into our chat. I note what they said or asked under their own name, and a promise I made to them is a promise to them. Lines with no label are my human's.`;
+}
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -1088,13 +1110,14 @@ export async function processJob(job, deps = {}) {
     applyMemoryIntegrityGate: applyGateDep = applyMemoryIntegrityGate,
     listTrackers: listTrackersDep = listTrackers,
     logTrackerEntry: logTrackerEntryDep = logTrackerEntry,
+    readSettings: readSettingsDep = readSettingsSync,
   } = deps;
 
   // V7: use reduced-detail prompt for sessions where strangers were present.
   const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
     ? buildSharedRoomPrompt
     : buildPrompt;
-  const settings = readSettingsSync();
+  const settings = readSettingsDep() || {};
   // My human's configured name, never "User". Falls back to "My human".
   const wardName = (settings?.userName || '').trim() || 'My human';
 
@@ -1168,7 +1191,7 @@ export async function processJob(job, deps = {}) {
 
   const villagerLegendBlock = buildVillagerLegendBlock(visionMessages, registry, {
     wardPrivate: promptFn === buildPrompt, wardName,
-  });
+  }) + otherSpeakersNote(visionMessages, settings);
 
   const builtPrompt = promptFn === buildPrompt
     ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn, villagerLegendBlock, trackerLegend, keptPromises)
@@ -1195,7 +1218,7 @@ export async function processJob(job, deps = {}) {
   // given message subset. Factored out so an oversized slice can run it per chunk.
   const extractOne = (msgs) => withNameFieldFallback({
     withNames,
-    buildMessages: (names) => buildExtractionMessages({ instructions, messages: msgs, sharedRoom, wardLabel: wardName, withNames: names }),
+    buildMessages: (names) => buildExtractionMessages({ instructions, messages: msgs, sharedRoom, wardLabel: wardName, withNames: names, settings }),
     callProviderFn: (m) => callProviderDep({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages: m, timeoutMs: extractTimeoutMs, maxTokens: extractMaxTokens }),
     onLearn: (result) => recordNameFieldResult(job, result),
   });
