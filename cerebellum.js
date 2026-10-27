@@ -116,6 +116,8 @@ import { searchSessionLogs, sessionLogKind, isWardReadableLog } from './src/sess
 import { speakerNameField } from './name-field.js';
 import { CONTENT_TOPICS } from './src/memory/content-tags.js';
 import { normalizeTomeTag, checkTomeTag, peopleNames, newEntryTagFields } from './src/tomes/tome-tags.js';
+import { readTomeText } from './src/tomes/tome-reader.js';
+import { resolveTomeMacros } from './src/tomes/tome-macros.js';
 import { bridgeEnabled, NOTE_MAX_CHARS } from './src/bridge/claude-code-mailbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1367,6 +1369,8 @@ const _toolDeps = {
   addTomeEntryByName: null,
   createNamedTome: null,
   listTomes: null,
+  // Every tome, parsed (backs read_tome).
+  readTomes: null,
   // Notes I leave for Claude Code (claude-code-mailbox.js; backs message_claude_code).
   leaveNoteForClaudeCode: null,
 };
@@ -1388,12 +1392,13 @@ async function tomeShareForSave(rawTag, text) {
   };
 }
 
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, leaveNoteForClaudeCode } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, readTomes, leaveNoteForClaudeCode } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof leaveNoteForClaudeCode === 'function') _toolDeps.leaveNoteForClaudeCode = leaveNoteForClaudeCode;
   if (typeof addTomeEntryByName === 'function')  _toolDeps.addTomeEntryByName  = addTomeEntryByName;
   if (typeof createNamedTome === 'function')     _toolDeps.createNamedTome     = createNamedTome;
   if (typeof listTomes === 'function')           _toolDeps.listTomes           = listTomes;
+  if (typeof readTomes === 'function')           _toolDeps.readTomes           = readTomes;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
   if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
@@ -1451,8 +1456,26 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'list_tomes',
-      description: 'I look over the tomes I keep — their names, what each is for, and how much is in them — so I know what I already hold before I add to one or start a new one. I check this before create_tome or a themed save_to_tome so I reuse a collection I already keep instead of making a near-duplicate.',
+      description: 'I look over the tomes I keep — their names, what each is for, and how much is in them — so I know what I already hold before I add to one or start a new one. I check this before create_tome or a themed save_to_tome so I reuse a collection I already keep instead of making a near-duplicate. To see what\'s inside one, I use read_tome.',
       parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_tome',
+      description: 'I open one of my tomes and read what\'s in it, without waiting for a keyword to bring an entry up. With just a tome name I get its entries, newest first, each with a short id. With an entry id (or its title) I get that entry in full; a long one comes in parts and the result says where the next part starts. With query I search inside the tome, or across all my tomes if I leave the tome out. This is how I get back to drafts, notes and lore I filed myself, in a quiet moment too. Only when it\'s just {{user}} and me.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tome:  { type: 'string', description: 'The tome\'s name as list_tomes shows it (part of the name works if only one tome fits). I leave it out to search all my tomes with query.' },
+          entry: { type: 'string', description: 'OPTIONAL — the id of one entry from a listing or search (e.g. "draft-section-4-k2"), or its title. I get the whole entry back.' },
+          query: { type: 'string', description: 'OPTIONAL — words to look for in titles, keywords and text. Every word has to be in an entry for it to come up.' },
+          page:  { type: 'number', description: 'OPTIONAL — which page of a long listing or search, as the result names it.' },
+          from:  { type: 'number', description: 'OPTIONAL — where to carry on in a long entry, the number the previous part gave me.' },
+        },
+        required: [],
+      },
     },
   },
   {
@@ -3397,7 +3420,19 @@ export const TOOL_EXECUTORS = {
         const tag = t.protected ? ' [protected]' : (t.enabled ? '' : ' [off]');
         return `- ${t.name} (${t.entries} entr${t.entries === 1 ? 'y' : 'ies'})${desc}${tag}`;
       });
-      return `Tomes I keep:\n${lines.join('\n')}`;
+      return `Tomes I keep:\n${lines.join('\n')}\nI open one with read_tome to see its entries.`;
+    } catch (err) { return `I couldn't read my tomes: ${err.message}.`; }
+  },
+
+  read_tome: async ({ tome, entry, query, page, from } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I won\'t open my tomes in full right now — they hold {{user}}\'s and my notes. I can read them once we\'re alone.';
+    }
+    if (!_toolDeps.readTomes) return 'I can\'t reach my tomes right now.';
+    try {
+      const tomes = await _toolDeps.readTomes();
+      const settings = readSettingsSync();
+      return readTomeText(tomes, { tome, entry, query, page, from }, { resolve: (s) => resolveTomeMacros(s, settings) });
     } catch (err) { return `I couldn't read my tomes: ${err.message}.`; }
   },
 

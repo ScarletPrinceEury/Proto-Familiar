@@ -4130,6 +4130,7 @@ initCerebellumTools({
   addTomeEntryByName,
   createNamedTome,
   listTomes: () => listTomesSummary(TOMES_DIR),
+  readTomes: () => readAllTomes(TOMES_DIR),
   getVillageRegistry,
   upsertVillager,
   relayToDiscord,

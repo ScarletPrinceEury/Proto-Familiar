@@ -578,6 +578,21 @@ Currently owns:
   deliberately keeps isn't drained by tome graduation). All three are `'core'`
   tools (always advertised). Bounded by the prompt (reuse before create), never a
   hard cap.
+  **`read_tome` (0.14.101, `src/tomes/tome-reader.js`)** is the reading half:
+  keyword activation is the only other way an entry reaches the Familiar, and a
+  quiet moment (noticing) has no conversation to wake one, so notes it filed
+  itself (a draft it was working on) were out of reach there. With a tome
+  name it lists entries newest first (25 a page); with `query` it searches one
+  tome or all of them (every word must appear, with a snippet); with `entry` it
+  reads one in full, a long entry in 16k-char parts whose `from` offset code
+  computes. Entries show as readable aliases, `slugifyLabel(title)` plus a tail
+  taken from the uid (grown within a tome until distinct), derived on every read
+  so nothing is stored; a lookup also accepts an older shorter alias, the raw
+  uid, or the title, raw or with macros filled in. Tome macros are resolved for
+  the read (`resolveTomeMacros`, the same boundary as injection). Ward-private
+  only, like `read_file` (`ctx.wardPrivate === false` refuses); `'core'`, so it
+  reaches noticing turns, and absent from `villagerToolNames`. Backed by
+  `readAllTomes(TOMES_DIR)` passed in as `readTomes`. `list_tomes` points at it.
 - **Village tools (0.6.x)** — `village_lookup` / `village_upsert` let the
   Familiar see and edit the Village and link villagers to graph nodes
   (`graphNodeId`). Gated via `ctx.wardPrivate` (threaded into `toolCtx`

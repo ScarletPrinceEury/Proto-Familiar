@@ -24,6 +24,19 @@ there's something to look at, no fixed checklist cadence (see CLAUDE.md,
 backstop on top of the wake conditions, or better wake conditions. Noticing is
 a ward-sign-off path: any change to when or whether it acts needs the ward.
 
+**Two concrete misses found and fixed so far.**
+- A self-set cool-down of up to six hours blocked the due-intention check, so an
+  intention could come due and wait. Fixed 0.14.99: a newly due intention ends
+  the cool-down. It fired live (`dueWake: true` in the noticing log).
+- An intention woke on time and the Familiar still couldn't act, because the
+  notes it needed sat in a tome and nothing in a quiet moment wakes a tome entry.
+  Fixed 0.14.101 with `read_tome`.
+
+So "intentions don't fire" turned out to be partly "the turn they fire in can't
+reach what the work needs". When collecting the next misses, check the tools a
+woken turn called (`toolsCalled` in `logs/noticing-events.jsonl`) as well as
+whether it woke.
+
 ### A relayed message carried the ward's full legal name into a group channel (privacy; mostly prompting)
 
 **What happened (2026-10-16).** The ward showed the Familiar an email: signing
@@ -119,8 +132,9 @@ below lets the Familiar drop a rule instead of carrying it:
   (see the two identity entries below). Rules it caused: "an ok from
   update_identity means something was added somewhere", "called vs verified",
   "an empty search tells me where it isn't, never where it is".
-- **Tomes.** The Familiar can create tomes and add entries, but can't edit or
-  delete an existing entry (only `create_tome`, `list_tomes`, `save_to_tome`).
+- **Tomes.** The Familiar can create tomes, add entries, and since 0.14.101 read
+  them on purpose (`read_tome`: list, search, read one entry in full), but can't
+  edit or delete an existing entry.
 - ~~**Self-knowledge the app has and never shares.**~~ Fixed 0.14.85: the [Now]
   block says which model is answering, when that changed since the last turn in
   the conversation, and when a conversation is brand new (model-signal.js).
