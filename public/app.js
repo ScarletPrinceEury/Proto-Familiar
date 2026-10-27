@@ -6348,7 +6348,7 @@ function init() {
 
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
-    'provider-select', 'api-key', 'model-input', 'streaming-toggle',
+    'provider-select', 'base-url-input', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale', 'pondering-thread-chance', 'ponder-web-toggle', 'ponder-web-reads',
     'ponder-consolidation-toggle',
@@ -6374,7 +6374,7 @@ function init() {
     'voice-call-offline-toggle', 'voice-call-tools-toggle', 'voice-call-sfx-toggle', 'voice-call-sfx-path', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
-    'user-name', 'char-name',
+    'user-name', 'char-name', 'web-speakers',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
     'web-search-enabled', 'web-search-max-results', 'web-search-max-chars',
@@ -6385,6 +6385,11 @@ function init() {
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
+    // These were read on save but never listened to, so changing one saved
+    // nothing until some other field changed (0.14.103; audit check 9).
+    'session-unify-toggle', 'village-presence-toggle', 'read-aloud-default-toggle',
+    'content-regate-toggle', 'memory-lifecycle-toggle', 'memory-integrity-toggle',
+    'hippocampus-toggle', 'spine-states-toggle',
   ];
 
   settingsIds.forEach(id => {

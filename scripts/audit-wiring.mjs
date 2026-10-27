@@ -9,7 +9,7 @@
  * name a module never exported, or a `$('some-id')` whose id is not in the
  * markup.
  *
- * Eight checks, each mapping to a bug that shipped:
+ * Nine checks, each mapping to a bug that shipped:
  *   1. imports that name something the source module does not export
  *   2. calls to identifiers nothing declares (the ReferenceError class)
  *   3. `$('id')` lookups with no matching id in index.html
@@ -19,6 +19,8 @@
  *   7. env off-switches referenced in code but absent from the docs
  *   8. two keys of the same name in one object literal (a dispatch-table stub
  *      shadowed the real handler and cost four rounds of live testing)
+ *   9. settings fields the save function reads that nothing listens to (ten
+ *      fields, the bridge's speaker list among them, saved nothing on change)
  *
  * Reports and exits non-zero. Deliberately a script, not a test: it sweeps the
  * whole repo and is meant to be run deliberately, not on every `npm test`.
@@ -427,10 +429,52 @@ for (const f of files) {
   }
 }
 
+// ── 9. Settings fields read on save that nothing listens to ──────
+//
+// `readSettingsFromUI` pulls every field into state and saves. A field it reads
+// but that has no change/input listener of its own looks fine and saves
+// nothing: the value only lands when some OTHER field changes later. Check 7
+// passed it, because the save function does reference the id. Ten fields
+// shipped like this (0.14.103), among them the list that switches the Claude
+// Code bridge on, which the ward filled in twice without it saving.
+//
+// Scoped to the one save function, and the list of fields comes from its own
+// body, so a new field can't be forgotten here. A listener counts if the id sits
+// in an array iterated with addEventListener (settingsIds), is wired directly
+// (`$('id').addEventListener`), or through a variable bound to `$('id')`.
+{
+  const js = src['public/app.js'] ?? '';
+  const start = js.indexOf('function readSettingsFromUI() {');
+  if (start < 0) {
+    note('unsaved field', 'public/app.js has no readSettingsFromUI(): this check needs updating');
+  } else {
+    let depth = 0, end = start;
+    for (let i = js.indexOf('{', start); i < js.length; i++) {
+      if (js[i] === '{') depth++;
+      else if (js[i] === '}' && --depth === 0) { end = i; break; }
+    }
+    const readIds = new Set([...js.slice(start, end).matchAll(/\$\('([\w-]+)'\)/g)].map((m) => m[1]));
+    const rest = js.slice(0, start) + js.slice(end);
+    const wired = new Set();
+    for (const m of rest.matchAll(/const ([A-Za-z_$][\w$]*) = \[([\s\S]*?)\];/g)) {
+      if (new RegExp(`\\b${m[1]}\\.forEach\\([\\s\\S]{0,300}?addEventListener`).test(rest)) {
+        for (const id of m[2].matchAll(/'([\w-]+)'/g)) wired.add(id[1]);
+      }
+    }
+    for (const m of rest.matchAll(/\$\('([\w-]+)'\)\??\.addEventListener\(/g)) wired.add(m[1]);
+    for (const m of rest.matchAll(/(?:const|let) ([A-Za-z_$][\w$]*) = \$\('([\w-]+)'\);/g)) {
+      if (new RegExp(`\\b${m[1]}\\??\\.addEventListener\\(`).test(rest)) wired.add(m[2]);
+    }
+    for (const id of readIds) {
+      if (!wired.has(id)) note('unsaved field', `#${id} is read by readSettingsFromUI() but nothing listens to it, so changing it saves nothing until another field changes (add it to settingsIds)`);
+    }
+  }
+}
+
 // ── Report ────────────────────────────────────────────────────────
 const byCheck = {};
 for (const f of findings) (byCheck[f.check] ??= []).push(f.msg);
-const order = ['import/export', 'undeclared call', 'duplicate key', 'dead lookup', 'settings key drift', 'unwired control', 'undocumented switch'];
+const order = ['import/export', 'undeclared call', 'duplicate key', 'dead lookup', 'settings key drift', 'unwired control', 'unsaved field', 'undocumented switch'];
 console.log('');
 for (const c of order) {
   const list = byCheck[c] ?? [];
