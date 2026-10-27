@@ -58,7 +58,7 @@ ward's.
 `web-speakers.js` fixes this with one small, fail-closed primitive rather than
 a parallel chat mode [@web-speakers-js]:
 
-- `listedSpeakers(settings)` reads the ward's own `webSpeakers` list (Settings
+- `listedSpeakers(settings)` reads the ward's own `webSpeakers` list (Open Knowledge editor → Prompts
   → "Others who may type in my web chat"), trims and dedupes it, and always
   excludes the ward's own name.
 - `speakerOf(message, settings)` resolves a message's `speaker` field against
