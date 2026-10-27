@@ -186,19 +186,13 @@ Direction:
 - Delete refuses when a heading appears more than once and names the count, the way `remove_from_identity` refuses a repeated passage.
 - Rewrite warns when the new body contains a heading that already exists further down the file.
 
-### A villager's turn can edit any memory by id (privacy-class; needs the ward)
+### ~~A villager's turn can edit any memory by id~~ — fixed 0.14.105 (ward-signed)
 
-`update_memory_by_id` is in `DISCORD_MEMORY_WRITE_TOOLS`, so a villager whose
-grants allow memory writes gets it on their Discord turn. Its executor doesn't
-check that the target memory is one the room may see: given an id, it rewrites
-the content, subjects or attribution of any memory, ward-private ones included.
-Recall on that turn is scoped, so ids don't leak through it, but slug ids are
-readable and guessable. 0.14.73 closed one slice: taking a fact off the care
-list (`high_care: false`) is refused on a gated turn, since that also removes it
-from triage's view. Direction: a gated write by id first checks the target's
-audience against `discordReadAudiences(ctx)` and the content gate, and refuses
-anything the room couldn't read. This is the same class as the content-gating
-privacy paths, so it needs ward sign-off.
+A villager whose grants allowed writes could rewrite, re-date or re-flag any
+memory by id, my human's private ones included, and resolve, delete or link
+sensitive schedule items the same way; recall was scoped, the writes weren't.
+Now every id a by-id write names is read first and must be readable by the
+room (`src/village/gated-writes.js`).
 
 ### Recall results are cut mid-word with no marker
 

@@ -117,6 +117,7 @@ import { speakerNameField } from './name-field.js';
 import { CONTENT_TOPICS } from './src/memory/content-tags.js';
 import { normalizeTomeTag, checkTomeTag, peopleNames, newEntryTagFields } from './src/tomes/tome-tags.js';
 import { readTomeText } from './src/tomes/tome-reader.js';
+import { GATED_BY_ID_WRITES, gatedWriteRefusal } from './src/village/gated-writes.js';
 import { resolveTomeMacros } from './src/tomes/tome-macros.js';
 import { bridgeEnabled, NOTE_MAX_CHARS } from './src/bridge/claude-code-mailbox.js';
 
@@ -6083,6 +6084,18 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
   if (Object.prototype.hasOwnProperty.call(TOOL_EXECUTORS, name)) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
+      // On a gated (villager / group) turn, a write that names a stored item by
+      // id only goes ahead when the room could read that item (gated-writes.js).
+      const roomAudiences = discordReadAudiences(ctx);
+      if (roomAudiences !== undefined && GATED_BY_ID_WRITES[name]) {
+        const refusal = await gatedWriteRefusal(name, args, {
+          audiences: roomAudiences, topicGrants: discordReadTopicGrants(ctx), readMemoryById, getScheduleNode,
+        });
+        if (refusal) {
+          console.log(`[tools] ${name} refused on a gated turn: it names an item this room can't read`);
+          return substituteMacros(refusal, readSettingsSync());
+        }
+      }
       const t0   = Date.now();
       const out  = renderToolResult(await TOOL_EXECUTORS[name](args, ctx));
       console.log(`[tools] ${name} ok in ${Date.now() - t0}ms`);
