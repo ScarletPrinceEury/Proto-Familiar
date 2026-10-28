@@ -48,6 +48,6 @@ test('a synced item is not deleted; I hear what works instead', async () => {
 });
 
 test('my own items still delete as before', async () => {
-  assert.equal(await run('schedule_delete', { id: MINE.id }), 'ok');
+  assert.match(await run('schedule_delete', { id: MINE.id }), /^ok: /);
   assert.deepEqual(calls.find(c => c.name === 'schedule_delete_node')?.args, { id: MINE.id });
 });

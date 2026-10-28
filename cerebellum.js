@@ -3394,7 +3394,7 @@ export function formatTrackerValue(v) {
 // name hands me what's really there, an amount that can't come off says why.
 export function trackerUseResultText(data, name) {
   if (data?.ok) {
-    if (data.removed) return quietOk(`Took ${data.name ?? name} off the list.`);
+    if (data.removed) return okResult(`Took ${data.name ?? name} off the list.`);
     return `${data.name ?? name}: ${formatTrackerValue(data.left)} left.`;
   }
   if (data?.code === 'no_item') {
@@ -3506,14 +3506,14 @@ export const TOOL_EXECUTORS = {
           name: tome.trim(), comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt, share,
         });
         const text = `Saved to my "${tome.trim()}" tome${created ? ' (new)' : ''} (entry: ${uid ?? 'unknown'}).${shareNote}`;
-        return shareNote ? text : quietOk(text, { id: uid });
+        return shareNote ? text : okResult(text, { id: uid });
       }
       if (!_toolDeps.addDefaultTomeEntry) return 'Failed to save to Tome: tome storage is not available right now.';
       const { uid } = await _toolDeps.addDefaultTomeEntry({
         comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt, share,
       });
       const text = `Saved to Tome (entry: ${uid ?? 'unknown'}).${shareNote}`;
-      return shareNote ? text : quietOk(text, { id: uid });
+      return shareNote ? text : okResult(text, { id: uid });
     } catch (err) {
       return `Failed to save to Tome: ${err.message}`;
     }
@@ -3611,12 +3611,12 @@ export const TOOL_EXECUTORS = {
         return 'Memory saved and marked high-care, so it won\'t fade. It\'s not in my care list, though: only a standing fact about my human (register "ward") goes there.';
       }
       if (careWeight === 'high') {
-        return quietOk("Saved as a high-care standing fact about my human: it's in my care list on every turn of our own conversations, never in group chats.");
+        return okResult("Saved as a high-care standing fact about my human: it's in my care list on every turn of our own conversations, never in group chats.");
       }
       // me/ward standing truths read back in their own voice so I know where it landed.
       if (reg !== 'episodic') {
         const whose = reg === 'me' ? 'about myself' : "about my human";
-        return quietOk(`Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`);
+        return okResult(`Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`);
       }
       // For significant memories, hand back the composite key — it's how
       // the entry is addressed later (update_memory / delete_memory take
@@ -3627,7 +3627,7 @@ export const TOOL_EXECUTORS = {
         // server a UTC key would name the wrong day and a later update/delete by
         // that key would miss.
         const today = wardLocalNowISO(readSettingsSync()?.wardTimeZone || null).slice(0, 10);
-        return quietOk(`Memory saved (significant/${today}_${slug}).`);
+        return okResult(`Memory saved (significant/${today}_${slug}).`);
       }
       return 'Memory saved.';
     } catch (err) { return `Failed to save memory: ${err.message}`; }
@@ -3658,7 +3658,7 @@ export const TOOL_EXECUTORS = {
   list_deferred_intents: async () => {
     try {
       const intents = await getUnactedIntents({ limit: 25 });
-      if (!intents.length) return quietOk('My deferred-intents queue is empty — nothing pending to file or say.');
+      if (!intents.length) return okResult('My deferred-intents queue is empty — nothing pending to file or say.');
       const now = Date.now();
       const lines = intents.map(t => {
         const age = Number.isFinite(t.created_ms) ? (relativeTime(new Date(t.created_ms).toISOString(), now) || '') : '';
@@ -3678,7 +3678,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await dropIntent({ uid, index: idx, reason });
       if (data.alreadyGone) return 'That intent was already acted on or dropped — nothing to let go of.';
-      return data.ok ? quietOk('Deferred intent let go — I won\'t carry that one anymore.') : `Drop failed: ${data.error ?? 'unknown error'}`;
+      return data.ok ? okResult('Deferred intent let go — I won\'t carry that one anymore.') : `Drop failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to drop intent: ${err.message}`; }
   },
 
@@ -3695,7 +3695,7 @@ export const TOOL_EXECUTORS = {
       // defer when offered the moment — it increments. Fire-and-forget.
       if (data.ok) Promise.resolve(recordWait('tell-snooze')).catch(() => {});
       return data.ok
-        ? quietOk(`Intent snoozed until ${data.snooze_until} — it will resurface after that.`)
+        ? okResult(`Intent snoozed until ${data.snooze_until} — it will resurface after that.`)
         : `Snooze failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to snooze intent: ${err.message}`; }
   },
@@ -3712,7 +3712,7 @@ export const TOOL_EXECUTORS = {
       // Wait-streak (Pass 1): acknowledging after genuinely acting on a
       // told intent is a proactive payoff — it resets. Fire-and-forget.
       if (data.ok) Promise.resolve(recordProactive('tell-payoff')).catch(() => {});
-      return data.ok ? quietOk('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
+      return data.ok ? okResult('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
 
@@ -3732,7 +3732,7 @@ export const TOOL_EXECUTORS = {
     const result = await confirmConsentMemories(ids);
     pruneConsentPending(ids).catch(() => {});
     const n = result?.confirmed ?? ids.length;
-    return quietOk(`Consent confirmed for ${n} record(s). They are now stored permanently.`);
+    return okResult(`Consent confirmed for ${n} record(s). They are now stored permanently.`);
   },
 
   memory_drop_pending: async ({ ids }) => {
@@ -3740,14 +3740,14 @@ export const TOOL_EXECUTORS = {
     const result = await dropPendingMemories(ids);
     pruneConsentPending(ids).catch(() => {});
     const n = result?.dropped ?? ids.length;
-    return quietOk(`Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`);
+    return okResult(`Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`);
   },
 
   acknowledge_graduation: async ({ ids }) => {
     if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
     const result = await acknowledgeGraduations(ids);
     const n = result?.acknowledged ?? ids.length;
-    return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
+    return okResult(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
   },
 
   // ── Disclosure notices (ward-disclosure spec, Phase B) ─────────────
@@ -3767,8 +3767,8 @@ export const TOOL_EXECUTORS = {
       const ok = await clearDisclosureNotice(id).then(() => true).catch(() => false);
       ok ? cleared++ : failed++;
     }
-    if (failed) return quietOk(`Marked ${cleared} disclosure notice(s) as surfaced; ${failed} couldn't be cleared (I'll keep showing those).`);
-    return quietOk(`Marked ${cleared} disclosure notice(s) as surfaced.`);
+    if (failed) return okResult(`Marked ${cleared} disclosure notice(s) as surfaced; ${failed} couldn't be cleared (I'll keep showing those).`);
+    return okResult(`Marked ${cleared} disclosure notice(s) as surfaced.`);
   },
 
   keep_memory_private: async ({ id } = {}) => {
@@ -3777,7 +3777,7 @@ export const TOOL_EXECUTORS = {
     if (r?.ok === false) return `I couldn't set that back to private: ${r.error ?? 'update failed'}.`;
     const { clearDisclosureNotice } = await import('./src/memory/content-regate.js');
     await clearDisclosureNotice(id).catch(() => {});
-    return quietOk('Kept between us — I set that memory back to strictly private.');
+    return okResult('Kept between us — I set that memory back to strictly private.');
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────
@@ -3795,7 +3795,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy: 'familiar-toolcall' });
       if (!result.ok) return `Failed to update memory: ${result.error ?? 'phylactery unavailable'}`;
-      return quietOk(`Memory ${granularity}/${date} updated.`);
+      return okResult(`Memory ${granularity}/${date} updated.`);
     } catch (err) { return `Failed to update memory: ${err.message}`; }
   },
 
@@ -3806,7 +3806,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
       if (!result.ok) return `Failed to delete memory: ${result.error ?? 'phylactery unavailable'}`;
-      return quietOk(`Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`);
+      return okResult(`Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory: ${err.message}`; }
   },
 
@@ -3858,7 +3858,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await moveMemoryDate({ id: mid, date: String(date).trim() });
       if (!res.ok) return `Failed to move memory ${mid}: ${res.error}`;
-      return quietOk(`Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`);
+      return okResult(`Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`);
     } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
@@ -3901,7 +3901,7 @@ export const TOOL_EXECUTORS = {
         ...(careWeight ? { careWeight } : {}),
       });
       if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
-      return quietOk(`Memory ${mid} updated.`);
+      return okResult(`Memory ${mid} updated.`);
     } catch (err) { return `Failed to update memory by id: ${err.message}`; }
   },
 
@@ -3920,7 +3920,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await deleteMemoryById({ id: mid });
       if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
-      return quietOk(`Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`);
+      return okResult(`Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
   },
 
@@ -3939,7 +3939,7 @@ export const TOOL_EXECUTORS = {
     // (the same-turn recompose precedent). The "result" is the image, not prose.
     ctx._pendingImages = Array.isArray(ctx._pendingImages) ? ctx._pendingImages : [];
     ctx._pendingImages.push({ id: meta.id });
-    return quietOk(`Looking at ${meta.slugs?.[0] ?? meta.id} now.`);
+    return okResult(`Looking at ${meta.slugs?.[0] ?? meta.id} now.`);
   },
 
   link_image_to_node: async ({ image_id, node_id, label } = {}, ctx = {}) => {
@@ -3964,7 +3964,7 @@ export const TOOL_EXECUTORS = {
         .then(v => v.graduateImageDescriptionToNode(img, node))
         .catch(() => {});
     }
-    return quietOk(`Tied image ${meta.slugs?.[0] ?? meta.id} to ${label || node}.`);
+    return okResult(`Tied image ${meta.slugs?.[0] ?? meta.id} to ${label || node}.`);
   },
 
   unlink_image_from_node: async ({ image_id, node_id } = {}, ctx = {}) => {
@@ -3976,7 +3976,7 @@ export const TOOL_EXECUTORS = {
     if (!img || !node) return 'I need both the image id and the node id to unlink them.';
     const r = await removeAssetLink(img, node);
     if (r?.ok === false) return `I couldn't unlink that: ${r.error}.`;
-    return quietOk(`Removed the link between image ${img} and ${node}.`);
+    return okResult(`Removed the link between image ${img} and ${node}.`);
   },
 
   recall: async ({ query, limit } = {}, ctx = {}) => {
@@ -4086,7 +4086,7 @@ export const TOOL_EXECUTORS = {
         title:    `${who} asked me to pass something along`,
         body:     note,
       });
-      return quietOk(`Passed along to {{user}}: "${note.slice(0, 80)}${note.length > 80 ? '…' : ''}"`);
+      return okResult(`Passed along to {{user}}: "${note.slice(0, 80)}${note.length > 80 ? '…' : ''}"`);
     } catch (err) {
       return `I couldn't reach {{user}} to pass that along just now (${err.message}). I'll tell ${who} it didn't go through.`;
     }
@@ -4095,7 +4095,7 @@ export const TOOL_EXECUTORS = {
   join_voice_call: async (_args, ctx = {}) => {
     if (typeof ctx.voiceJoin !== 'function') return "I can only join a voice call from a Discord chat with {{user}} — I'm not on Discord right now.";
     let r; try { r = await ctx.voiceJoin(); } catch (err) { return `I couldn't join the voice channel just now (${err?.message ?? err}).`; }
-    // Loud on purpose (not quietOk): joining is a rare, meaningful action, and the
+    // Loud on purpose (not okResult): joining is a rare, meaningful action, and the
     // confirmation lets me tell {{user}} in the text channel that I'm on my way in.
     if (r?.ok) return "I've joined the voice channel — I can hear {{user}} now.";
     switch (r?.reason) {
@@ -4201,7 +4201,7 @@ export const TOOL_EXECUTORS = {
     if (!cid) return 'Nothing retired: I need the stamp id (list_identity_canaries shows it).';
     const res = await retireIdentityCanary({ id: cid });
     if (!res.ok) return `Nothing retired: ${res.error}.`;
-    return quietOk(`Retired canary stamp ${cid}; the app stops checking it. The file is untouched.`);
+    return okResult(`Retired canary stamp ${cid}; the app stops checking it. The file is untouched.`);
   },
 
   // Identity cleanup proposals (0.14.78): the automatic cleanup proposes, I
@@ -4229,7 +4229,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await dismissCleanupProposal({ id: pid });
       if (!result.ok) return `Nothing changed: ${result.error ?? 'phylactery unavailable'}.`;
-      return quietOk(`Dismissed ${pid}; the passage stays where it is.`);
+      return okResult(`Dismissed ${pid}; the passage stays where it is.`);
     } catch (err) { return `Nothing changed: ${err.message}`; }
   },
 
@@ -4298,7 +4298,7 @@ export const TOOL_EXECUTORS = {
       const result = await createGraphEdge({ fromId, toId, type, weight });
       if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.edge?.id;
-      return quietOk(`Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`, { id });
+      return okResult(`Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`, { id });
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
@@ -4320,7 +4320,7 @@ export const TOOL_EXECUTORS = {
       }
       const result = await updateGraphNode({ id, label, description, type, audience: resolvedAudience });
       if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
-      return quietOk(`Graph node ${id} updated.`);
+      return okResult(`Graph node ${id} updated.`);
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
   },
 
@@ -4328,7 +4328,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteGraphNode({ id });
       if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'phylactery unavailable'}`;
-      return quietOk(`Graph node ${id} deleted (snapshot saved).`);
+      return okResult(`Graph node ${id} deleted (snapshot saved).`);
     } catch (err) { return `Failed to delete graph node: ${err.message}`; }
   },
 
@@ -4339,7 +4339,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await updateGraphEdge({ id, type, weight });
       if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'phylactery unavailable'}`;
-      return quietOk(`Graph edge ${id} updated.`);
+      return okResult(`Graph edge ${id} updated.`);
     } catch (err) { return `Failed to update graph edge: ${err.message}`; }
   },
 
@@ -4347,7 +4347,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteGraphEdge({ id });
       if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'phylactery unavailable'}`;
-      return quietOk(`Graph edge ${id} deleted (snapshot saved).`);
+      return okResult(`Graph edge ${id} deleted (snapshot saved).`);
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
 
@@ -4382,7 +4382,7 @@ export const TOOL_EXECUTORS = {
         } catch { /* discovery is best-effort; never blocks the add */ }
       }
       if (templateHint) return `Event added (id: ${data.id}).${templateHint}`;
-      return quietOk(`Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`, { id: data.id });
+      return okResult(`Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`, { id: data.id });
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
@@ -4400,7 +4400,7 @@ export const TOOL_EXECUTORS = {
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`, { id: data.id });
+      return okResult(`Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`, { id: data.id });
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
@@ -4415,7 +4415,7 @@ export const TOOL_EXECUTORS = {
       };
       const data = await addScheduleNode({ type: 'task', label, when, end, payload });
       if (data?.ok === false) return `Failed to add need: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`, { id: data.id });
+      return okResult(`Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`, { id: data.id });
     } catch (err) { return `Failed to add need: ${err.message}`; }
   },
 
@@ -4426,7 +4426,7 @@ export const TOOL_EXECUTORS = {
       const payload = recurrence && typeof recurrence === 'object' ? { recurrence } : {};
       const data = await addScheduleNode({ type: 'hold', label, when, end, ...(Object.keys(payload).length ? { payload } : {}) });
       if (data?.ok === false) return `Failed to add hold: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Held "${label}" (id: ${data.id}). That time reads as busy when I coordinate with anyone, so it stays ${'{{user}}'}'s.`, { id: data.id });
+      return okResult(`Held "${label}" (id: ${data.id}). That time reads as busy when I coordinate with anyone, so it stays ${'{{user}}'}'s.`, { id: data.id });
     } catch (err) { return `Failed to add hold: ${err.message}`; }
   },
 
@@ -4439,7 +4439,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await setScheduleLead({ id: id.trim(), lead_minutes: mins });
       if (data?.ok === false) return `Failed to set lead: ${data.error ?? 'unknown error'}`;
-      return quietOk(clearing
+      return okResult(clearing
         ? `Cleared the custom lead — that event falls back to the global default alert time.`
         : `Set that event's lead to ${mins} minutes — its "coming up" alert lands ${mins} min before it starts.`);
     } catch (err) { return `Failed to set lead: ${err.message}`; }
@@ -4485,7 +4485,7 @@ export const TOOL_EXECUTORS = {
       // A phase round whose phase matches no routine phase can never fire —
       // Unruh returns a warning so I don't silently keep dead care.
       const warn = data?.warning ? ` ⚠ ${data.warning}` : '';
-      return quietOk(`Intention kept (id: ${data.id})${when ? ` — ${when}` : ''}. It comes back to me when it's due.${warn}`, { id: data.id });
+      return okResult(`Intention kept (id: ${data.id})${when ? ` — ${when}` : ''}. It comes back to me when it's due.${warn}`, { id: data.id });
     } catch (err) { return `Failed to set intention: ${err.message}`; }
   },
 
@@ -4510,7 +4510,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await dropIntention({ id: id.trim() });
       if (data?.ok === false) return `Failed to drop intention: ${data.error ?? 'unknown error'}`;
-      return data?.updated ? quietOk('Let that intention go.') : 'That intention was already dropped (or never existed).';
+      return data?.updated ? okResult('Let that intention go.') : 'That intention was already dropped (or never existed).';
     } catch (err) { return `Failed to drop intention: ${err.message}`; }
   },
 
@@ -4520,7 +4520,7 @@ export const TOOL_EXECUTORS = {
       const data = await completeIntention({ id: id.trim() });
       if (data?.ok === false) return `Failed to complete intention: ${data.error ?? 'unknown error'}`;
       if (data?.already_done) return 'That intention was already marked done.';
-      return quietOk('Intention marked done — the follow-through is recorded.');
+      return okResult('Intention marked done — the follow-through is recorded.');
     } catch (err) { return `Failed to complete intention: ${err.message}`; }
   },
 
@@ -4529,7 +4529,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await markIntentionFired({ id: id.trim() });
       if (data?.ok === false) return `Failed to mark intention fired: ${data.error ?? 'unknown error'}`;
-      return quietOk('Noted — this occurrence is seen to; it won\'t re-offer itself today.');
+      return okResult('Noted — this occurrence is seen to; it won\'t re-offer itself today.');
     } catch (err) { return `Failed to mark intention fired: ${err.message}`; }
   },
 
@@ -4538,7 +4538,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await setRoundsVisibility({ value });
       if (data?.ok === false) return `Failed to set rounds visibility: ${data.error ?? 'unknown error'}`;
-      return quietOk(value === 'private'
+      return okResult(value === 'private'
         ? 'My rounds are private now — my human still knows I keep some, but their contents are mine.'
         : 'My rounds are shared now — my human can see the routine I keep.');
     } catch (err) { return `Failed to set rounds visibility: ${err.message}`; }
@@ -4547,13 +4547,13 @@ export const TOOL_EXECUTORS = {
   // ── Trackers (my human's private ledgers — ward-only) ────────────────
   // Each degrades to a readable "I couldn't" rather than throwing into the
   // chat path. Reads return the shaped payload from Unruh; writes report the
-  // id back via quietOk so I can act on it next.
+  // id back via okResult so I can act on it next.
   tracker_list: async () => {
     try {
       const data = await listTrackers();
       if (data?.ok === false) return `I couldn't read my trackers: ${data.error ?? 'Unruh unavailable'}.`;
       const arr = Array.isArray(data?.trackers) ? data.trackers : [];
-      if (!arr.length) return quietOk('I\'m not keeping any trackers for my human yet.');
+      if (!arr.length) return okResult('I\'m not keeping any trackers for my human yet.');
       const lines = arr.map(t => `· ${t.label} (${t.id}) — ${t.archetype}${t.sensitive ? ', private' : ''}`);
       return [`Trackers I keep for ${'{{user}}'} (${arr.length}):`, ...lines].join('\n');
     } catch (err) { return `I couldn't read my trackers: ${err.message}`; }
@@ -4564,7 +4564,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await createTrackerFromTemplate({ template_id: template_id.trim() });
       if (data?.ok === false) return `Failed to start a tracker from "${template_id}": ${data.error ?? 'unknown error'}`;
-      return quietOk(`Started a "${template_id.trim()}" tracker (id: ${data.id}). I'll keep it current for my human.`, { id: data.id });
+      return okResult(`Started a "${template_id.trim()}" tracker (id: ${data.id}). I'll keep it current for my human.`, { id: data.id });
     } catch (err) { return `Failed to start a tracker from "${template_id}": ${err.message}`; }
   },
 
@@ -4579,7 +4579,7 @@ export const TOOL_EXECUTORS = {
         ...(typeof sensitive === 'boolean' ? { sensitive } : {}),
       });
       if (data?.ok === false) return `Failed to create the tracker: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Created the "${label.trim()}" tracker (id: ${data.id}, ${archetype.trim()}). I'll keep it current.`, { id: data.id });
+      return okResult(`Created the "${label.trim()}" tracker (id: ${data.id}, ${archetype.trim()}). I'll keep it current.`, { id: data.id });
     } catch (err) { return `Failed to create the tracker: ${err.message}`; }
   },
 
@@ -4598,7 +4598,7 @@ export const TOOL_EXECUTORS = {
         if (data?.code === 'entry_cap') return `I didn't log that — this tracker has hit its entries-per-day cap. Nothing was recorded.`;
         return `I couldn't log that entry: ${data.error ?? 'it didn\'t validate'}. Nothing was recorded.`;
       }
-      return quietOk(`Logged (entry: ${data.id ?? 'unknown'}).`, { id: data.id });
+      return okResult(`Logged (entry: ${data.id ?? 'unknown'}).`, { id: data.id });
     } catch (err) { return `I couldn't log that entry: ${err.message}. Nothing was recorded.`; }
   },
 
@@ -4639,7 +4639,7 @@ export const TOOL_EXECUTORS = {
         ...(typeof sensitive === 'boolean' ? { sensitive } : {}),
       });
       if (data?.ok === false) return `Failed to adjust the tracker: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Updated that tracker.`, { id: id.trim() });
+      return okResult(`Updated that tracker.`, { id: id.trim() });
     } catch (err) { return `Failed to adjust the tracker: ${err.message}`; }
   },
 
@@ -4661,7 +4661,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await updateScheduleNode({ id, when: when.trim() });
       if (data?.ok === false) return `Failed to assign a time: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`, { id });
+      return okResult(`Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`, { id });
     } catch (err) { return `Failed to assign a time: ${err.message}`; }
   },
 
@@ -4676,7 +4676,7 @@ export const TOOL_EXECUTORS = {
       const data = await updateScheduleNode({ id, ...patch });
       if (data?.ok === false) return `Failed to edit: ${data.error ?? 'unknown error'}`;
       const changed = Object.entries(patch).map(([k, v]) => `${k}: ${v === '' ? '(cleared)' : v}`).join(', ');
-      return quietOk(`Done — updated ${changed}. (id: ${id})`, { id });
+      return okResult(`Done — updated ${changed}. (id: ${id})`, { id });
     } catch (err) { return `Failed to edit: ${err.message}`; }
   },
 
@@ -4697,7 +4697,7 @@ export const TOOL_EXECUTORS = {
       payload.snooze_until = until;
       const data = await updateScheduleNode({ id, payload });
       if (data?.ok === false) return `Failed to snooze task: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`, { id });
+      return okResult(`Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`, { id });
     } catch (err) { return `Failed to snooze task: ${err.message}`; }
   },
 
@@ -4711,7 +4711,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'reminder', label, when, payload });
       if (data?.ok === false) return `Failed to add reminder: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`, { id: data.id });
+      return okResult(`Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`, { id: data.id });
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
@@ -4723,7 +4723,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'phase', label, when, end, payload });
       if (data?.ok === false) return `Failed to add phase: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`, { id: data.id });
+      return okResult(`Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`, { id: data.id });
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -4735,7 +4735,7 @@ export const TOOL_EXECUTORS = {
         const data = await resolveScheduleOccurrence({ id, occurrence_date, resolution });
         if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
         if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
-        return quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`);
+        return okResult(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`);
       }
       // No occurrence_date → whole-node resolve. For a recurring node this is
       // fail-closed: Unruh refuses (recurring_needs_scope) unless I pass
@@ -4748,7 +4748,7 @@ export const TOOL_EXECUTORS = {
       }
       if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
       if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
-      return quietOk(`Marked ${id} as ${resolution}.`);
+      return okResult(`Marked ${id} as ${resolution}.`);
     } catch (err) { return `Failed to resolve: ${err.message}`; }
   },
 
@@ -4766,7 +4766,7 @@ export const TOOL_EXECUTORS = {
       const data = await deleteScheduleNode({ id: sid });
       if (!data?.ok) return `I couldn't remove that schedule item: ${data?.error ?? 'Unruh unavailable'}.`;
       if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
-      return quietOk(`Removed schedule item ${sid}.`);
+      return okResult(`Removed schedule item ${sid}.`);
     } catch (err) { return `I couldn't remove that schedule item: ${err.message}`; }
   },
 
@@ -4801,7 +4801,7 @@ export const TOOL_EXECUTORS = {
       const data = await addScheduleEdge({ src: s, dst: d, kind: k, payload: Object.keys(payload).length ? payload : undefined });
       if (!data?.ok) return `I couldn't connect those items: ${data?.error ?? 'Unruh unavailable'} (one of the ids may be stale).`;
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
-      return quietOk(`Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`, { id: data.id });
+      return okResult(`Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`, { id: data.id });
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
   },
 
@@ -4820,7 +4820,7 @@ export const TOOL_EXECUTORS = {
       const parts = [];
       if (payload.observed) parts.push('observed — it really happened');
       if (payload.certainty) parts.push(`certainty → ${payload.certainty}`);
-      return quietOk(`Graded link ${eid}${parts.length ? ` (${parts.join(', ')})` : ''}.`);
+      return okResult(`Graded link ${eid}${parts.length ? ` (${parts.join(', ')})` : ''}.`);
     } catch (err) { return `I couldn't grade that link: ${err.message}`; }
   },
 
@@ -4899,7 +4899,7 @@ export const TOOL_EXECUTORS = {
       if (!data?.ok) return `I couldn't save that template: ${data?.error ?? 'Unruh unavailable'}.`;
       const tpl = data.template ?? {};
       const list = (tpl.prerequisites ?? prereqs);
-      return quietOk(`Template "${tpl.label ?? lbl}" (tag: ${tpl.tag ?? t}) saved — needs: ${list.length ? list.join(', ') : '(nothing yet)'}. I'll suggest these when I apply it to an event tagged "${tpl.tag ?? t}".`);
+      return okResult(`Template "${tpl.label ?? lbl}" (tag: ${tpl.tag ?? t}) saved — needs: ${list.length ? list.join(', ') : '(nothing yet)'}. I'll suggest these when I apply it to an event tagged "${tpl.tag ?? t}".`);
     } catch (err) { return `I couldn't save that template: ${err.message}`; }
   },
 
@@ -4955,7 +4955,7 @@ export const TOOL_EXECUTORS = {
       const data = await templateDelete({ tag: t });
       if (!data?.ok) return `I couldn't delete that template: ${data?.error ?? 'Unruh unavailable'}.`;
       return data.deleted
-        ? quietOk(`Template for "${t}" deleted.`)
+        ? okResult(`Template for "${t}" deleted.`)
         : `I had no template for "${t}" to delete.`;
     } catch (err) { return `I couldn't delete that template: ${err.message}`; }
   },
@@ -5120,7 +5120,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await bumpInterest({ topic, delta: d, source: 'familiar_tool' });
       if (data?.ok === false) return `Failed to bump interest: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`);
+      return okResult(`Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`);
     } catch (err) { return `Failed to bump interest: ${err.message}`; }
   },
 
@@ -5129,7 +5129,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await setStandingInterest({ topic, weight });
       if (data?.ok === false) return `Failed to set standing value: ${data.error ?? 'unknown error'}`;
-      return quietOk(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
+      return okResult(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
   },
 
@@ -5153,7 +5153,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await saveBookmark({ topic, resource, note });
       if (data?.ok === false) return `Failed to save bookmark: ${data.error ?? 'unknown error'}`;
-      return quietOk(`Bookmarked "${resource}" under "${topic}". I'll come back to it in a free cycle — it'll surface in my [Temporal Context] once it's due.`);
+      return okResult(`Bookmarked "${resource}" under "${topic}". I'll come back to it in a free cycle — it'll surface in my [Temporal Context] once it's due.`);
     } catch (err) { return `Failed to save bookmark: ${err.message}`; }
   },
 
@@ -5239,8 +5239,8 @@ export const TOOL_EXECUTORS = {
           body:     `${who} said something that made me worried about you${reason ? `: ${String(reason).slice(0, 200)}` : ''}. I've flagged it and I'm checking in on how you're doing.`,
         }).catch(err => console.error('[flag_distress] ward mirror failed:', err?.message ?? err));
       }
-      if (r?.disabled) return quietOk('My threat sense is switched off right now, so I can\'t raise the level — but I\'m still holding this concern.');
-      return quietOk('I\'ve flagged my concern for {{user}} — my check-in sense is looking right now.');
+      if (r?.disabled) return okResult('My threat sense is switched off right now, so I can\'t raise the level — but I\'m still holding this concern.');
+      return okResult('I\'ve flagged my concern for {{user}} — my check-in sense is looking right now.');
     } catch (err) { return `I tried to flag concern but hit an error: ${err.message}`; }
   },
 
@@ -5651,7 +5651,7 @@ export const TOOL_EXECUTORS = {
     const res = await setCurrentLocation({ ident: match.id });
     if (!res?.ok) return "I couldn't move the current place just now — I'll try again.";
     if (_toolDeps.refreshWeatherNow) _toolDeps.refreshWeatherNow();   // warm the new place's sky
-    return quietOk(`Current place is now ${match.label}.`, { id: match.id });
+    return okResult(`Current place is now ${match.label}.`, { id: match.id });
   },
 
   delete_location: async ({ place } = {}) => {
@@ -5668,7 +5668,7 @@ export const TOOL_EXECUTORS = {
     }
     const res = await deleteLocation({ ident: match.id });
     if (!res?.ok) return "I couldn't remove that place just now — I'll try again.";
-    return quietOk(`Removed ${match.label} from my saved places.`, { id: match.id });
+    return okResult(`Removed ${match.label} from my saved places.`, { id: match.id });
   },
 
   // ── Browser (spec §4; ward-only, §5.7) ─────────────────────────────────
@@ -6198,34 +6198,39 @@ export function composeDiscordTools({ isWard = false, isVillager = false, grants
 }
 
 /**
- * Quiet-success marker (0.8.x token economy). A WRITE executor's success
- * branch returns quietOk(fullText, {id}) instead of prose; the result
- * boundary collapses it to "ok" (+ the new id when downstream calls need
- * it) — because a success confirmation the model already implied by making
- * the call carries no new information, while its tokens recur every turn
- * the transcript survives. The contract that keeps this safe:
- *   - ONLY genuine success branches call quietOk. Failures, not-found
- *     results, and partial outcomes keep returning full prose, loudly —
- *     the boundary never classifies text, so a failure can never be
- *     mistaken for success (the acknowledge-≠-acting lesson, applied to
- *     results).
+ * Success marker for a WRITE executor's success branch: okResult(fullText,
+ * {id}). The result boundary renders it as "ok: <what happened>" (+ the id
+ * when the text doesn't already carry it).
+ *
+ * It used to render as a bare "ok" (0.8.x, "okResult"), to save tokens a
+ * success confirmation spent every turn the transcript survived. That reason
+ * went away in 0.12.4, when collapseToolTurns stopped carrying tool results
+ * into later turns (they see a short app record instead, whose label still
+ * reads "ok" because it matches ^ok). Meanwhile a bare "ok" hid what a write
+ * actually did, and I kept self-made rules like "an ok means something was
+ * added somewhere" (known-issues A2). So the full text is shown now, within the
+ * turn that made the call.
+ *
+ * The contract that keeps "ok" meaning success:
+ *   - ONLY genuine success branches call okResult. Failures, not-found
+ *     results, and partial outcomes keep returning their own prose — the
+ *     boundary never classifies text, so a failure can never be mistaken for
+ *     success (the acknowledge-≠-acting lesson, applied to results).
  *   - READ tools (recall, schedule_find, look_up, …) never use it — their
  *     result IS the payload.
  *   - Tools whose success text is itself load-bearing (safety mirrors like
- *     contact_trusted_person, high-stakes rarities like
- *     schedule_push_to_google, data-returning writes like schedule_export)
- *     stay loud by simply not opting in.
- * Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 renders the
- * full text everywhere.
+ *     contact_trusted_person, schedule_push_to_google, schedule_export) don't
+ *     opt in, so they read as they always have.
  */
-export function quietOk(fullText, { id } = {}) {
-  return { __quietOk: true, fullText: String(fullText ?? 'ok'), id: id ?? null };
+export function okResult(fullText, { id } = {}) {
+  return { __okResult: true, fullText: String(fullText ?? ''), id: id ?? null };
 }
 
-function renderToolResult(raw) {
-  if (raw && typeof raw === 'object' && raw.__quietOk === true) {
-    if (process.env.PROTO_FAMILIAR_QUIET_TOOLS_DISABLED === '1') return raw.fullText;
-    return raw.id ? `ok (id: ${raw.id})` : 'ok';
+export function renderToolResult(raw) {
+  if (raw && typeof raw === 'object' && raw.__okResult === true) {
+    const text = String(raw.fullText ?? '').trim();
+    const idTail = raw.id && !text.includes(String(raw.id)) ? ` (id: ${raw.id})` : '';
+    return text && text.toLowerCase() !== 'ok' ? `ok: ${text}${idTail}` : `ok${idTail}`;
   }
   return String(raw);
 }
