@@ -44,14 +44,14 @@ import { resolveReasoningEffort } from '../../providers.js';
 import { substituteMacros } from '../../macros.js';
 import { audienceTagFor } from '../village/audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
-import { createVoiceChatTurn } from './voice-chat-turn.js';
+import { createVoiceChatTurn, callTurnEnvelope, keepCallTurn } from './voice-chat-turn.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { voiceThreatEnabled } from './voice-call-server.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreThreatMessage } from '../safety/crisis-classifier.js';
 import { recordThreat, getThreat, THREAT_TIERS } from '../safety/threat-tracker.js';
 import { enqueueSessionByDay } from '../memory/memorization.js';
-import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
+import { writeSessionLog, stampMessages } from '../sessions/session-log.js';
 import { slugifyLabel, sessionSlugId } from '../../slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
@@ -128,13 +128,15 @@ export function attachDiscordVoice(deps) {
   // `speaker` attributes the user turn — a group call's room session mixes
   // several villagers, so a bare "user" would lose who said what. The ward
   // speaks unattributed (null), exactly like Discord text.
-  function accumulate(callId, audienceTag, userMsg, assistantMsg, speaker = null) {
+  function memSessionFor(callId, audienceTag) {
     let byTag = memSessions.get(callId);
     if (!byTag) { byTag = new Map(); memSessions.set(callId, byTag); }
     let sess = byTag.get(audienceTag);
     if (!sess) { sess = { sessionId: sessionSlugId(), messages: [], startedAt: Date.now() }; byTag.set(audienceTag, sess); }
-    sess.messages.push(...turnMessages(userMsg, assistantMsg, { speaker }));
+    return sess;
   }
+  // callId → the id of a turn that got no reply (turn-record.js `prevTurnId`).
+  const unanswered = new Map();
 
   // Resolve the audience a turn is gated to — the lowest clearance of everyone
   // who can HEAR (the live VC roster). Pure decision in voice-call-audience.js;
@@ -356,13 +358,26 @@ export function attachDiscordVoice(deps) {
 
     const turnHistory = systemNotes.length ? [...hist, ...systemNotes.map(content => ({ role: 'system', content }))] : hist;
 
-    const reply = await runVoiceChatTurn({ transcript: attributedHeard, history: turnHistory, sessionAudience });
+    // The turn is stored at the SAME tag the reply is gated to (its own session
+    // per tag), and the server records it there as it goes, tool rounds
+    // included (turn-record.js). A villager's turn is attributed to them, the
+    // ward's unattributed; the stored words are the RAW heard text, the speaker
+    // its own field, while the model's history keeps the attributed line.
+    const sess = memSessionFor(ctx.callId, audienceTag);
+    const turn = callTurnEnvelope({
+      sessionId: sess.sessionId, transcript: heard, speaker: speakerName,
+      location: { platform: 'voice', kind: 'discord', label: 'Discord voice call' },
+      prevTurnId: unanswered.get(ctx.callId),
+    });
+    let record = null;
+    const reply = await runVoiceChatTurn({ transcript: attributedHeard, history: turnHistory, sessionAudience, turn, onRecord: (r) => { record = r; } });
     if (reply) {
-      callHistory.set(ctx.callId, [...hist, { role: 'user', content: attributedHeard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
-      // Store the turn at the SAME tag the reply was gated to; attribute a
-      // villager's turn to them, the ward's unattributed. The memory write takes
-      // the RAW heard text — the speaker rides as its own field, not a prefix.
-      accumulate(ctx.callId, audienceTag, heard, reply, speakerName);
+      const { history: next, stored } = keepCallTurn({ hist, transcript: heard, historyText: attributedHeard, reply, record, speaker: speakerName });
+      callHistory.set(ctx.callId, next.slice(-HISTORY_MAX));
+      sess.messages.push(...stored);
+      unanswered.delete(ctx.callId);
+    } else {
+      unanswered.set(ctx.callId, turn.turnId);
     }
     return reply;
   }
@@ -416,7 +431,9 @@ export function attachDiscordVoice(deps) {
           audienceTag,
           provider:   conn.provider, model: conn.model,
           messages:   stampMessages(sess.messages, endedIso),
-        }, { logsDir: path.join(rootDir, 'logs') });
+          // Merged: the server wrote each turn here as it went, including any
+          // that broke off and so never reached sess.messages.
+        }, { logsDir: path.join(rootDir, 'logs'), merge: true });
         if (!r.ok) log(`session log (${audienceTag}) not written: ${r.reason}`);
       }
       try {
@@ -568,7 +585,7 @@ export function attachDiscordVoice(deps) {
     // so a slow extraction never holds up teardown.
     if (callId) {
       memorizeCall(callId).catch(() => {});
-      callHistory.delete(callId); callTag.delete(callId); callMeta.delete(callId);
+      callHistory.delete(callId); callTag.delete(callId); callMeta.delete(callId); unanswered.delete(callId);
       roomListeners.forget(callId);   // §8.4 per-call "already mentioned" set
       prevRosterIds.delete(callId); presence.delete(callId); greeted.delete(callId);
     }

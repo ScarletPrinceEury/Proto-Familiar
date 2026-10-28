@@ -22,10 +22,12 @@ export function localDateOf(ts) {
 }
 
 // The readable-message test the memorizer uses (skip tool turns, skip the
-// assistant turn that only carries tool_calls, require non-empty string body).
-// Shared so day-segment "is there enough here" counts match what extraction sees.
+// assistant turn that only carries tool_calls, skip app notes such as "that
+// turn was cut off" (turn-record.js), require non-empty string body). Shared
+// so day-segment "is there enough here" counts match what extraction sees.
 export function isReadableMessage(m) {
   if (!m || m.role === 'tool') return false;
+  if (m.kind === 'app-note') return false;
   if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
   return typeof m.content === 'string' && m.content.trim().length > 0;
 }

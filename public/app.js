@@ -1900,6 +1900,10 @@ async function pollSessionDelta() {
   // (the typing indicator is the in-flight signal). id-dedupe below is the belt.
   if (!state.sessionId) return;
   if (document.hidden) return;
+  // The server records a turn as it runs (turn-record.js), so mid-turn its log
+  // holds rounds this page commits itself when the turn lands. The typing
+  // indicator hides once the reply starts streaming, so it can't be the guard.
+  if (_turnInFlight) return;
   const typing = $('typing-indicator');
   if (typing && !typing.classList.contains('hidden')) return;
 
@@ -1979,13 +1983,16 @@ function formatDuration(ms) {
  */
 // Set by buildApiMessages while it's running so {{elapsedTime}} can
 // see the user message that's about to be sent — that message isn't
-// in state.messages yet (it only gets pushed after the response
-// lands), and without this the macro would compare the two prior
-// user messages and miss "user just returned after being away."
+// in state.messages yet (it's saved right after the request is built),
+// and without this the macro would compare the two prior user messages
+// and miss "user just returned after being away."
 let _pendingUserMsgTimestamp = null;
 // The live turn's image attachments (vision), carried into the new user turn
 // built by _buildApiMessagesInner. Cleared in buildApiMessages' finally.
 let _pendingAttachments = null;
+// A stored message left out of the history being built (buildApiMessages'
+// excludeId: the message a retry sends again). Cleared in its finally.
+let _excludeHistoryId = null;
 // Set when the server reports the tool-round budget ran out mid-reach
 // (_roundCapHit) — after the reply lands we offer a one-click "Go on".
 let _roundCapHitThisTurn = false;
@@ -2154,8 +2161,11 @@ function stampContent(content, ts) {
   return tag ? `${tag} ${cleaned}` : cleaned;
 }
 
-function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, attachments, speaker }) {
+function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, attachments, speaker, kind }) {
   if (role === 'tool')      return { role, tool_call_id, content };
+  // An app note goes to the model as the plain fact it is, unstamped
+  // ("[App note: that turn was cut off …]", turn-record.js).
+  if (kind === 'app-note')  return { role: 'system', content };
   // Each historical user/assistant message carries its own timestamp
   // in state.messages — prepended to the API-bound content here (NOT
   // to the stored state) so the Familiar perceives WHEN each turn
@@ -2183,6 +2193,9 @@ function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, atta
 function isToolPlumbing(msg) {
   if (!msg) return false;
   if (msg.role === 'tool') return true;
+  // An app note ("that turn was cut off", turn-record.js) isn't conversation
+  // either: it renders as a muted line, and summaries/exports/memorize skip it.
+  if (msg.kind === 'app-note') return true;
   return msg.role === 'assistant'
     && Array.isArray(msg.tool_calls)
     && msg.tool_calls.length > 0;
@@ -2212,14 +2225,18 @@ function collectSummarizableRange(messages, startIndex, endIndex) {
  *   [user: userInput]            ← new turn
  *   [user: postHistoryPrompt]    ← optional, injected last
  */
-function buildApiMessages(userInput, pendingUserMsgTimestamp = null, pendingAttachments = null) {
+// `excludeId`: a stored message to leave out of the history, because it's the
+// one being sent (a message tried again as its own turn, retryTurn).
+function buildApiMessages(userInput, pendingUserMsgTimestamp = null, pendingAttachments = null, { excludeId = null } = {}) {
   _pendingUserMsgTimestamp = pendingUserMsgTimestamp;
   _pendingAttachments = Array.isArray(pendingAttachments) && pendingAttachments.length ? pendingAttachments : null;
+  _excludeHistoryId = excludeId;
   try {
   return _buildApiMessagesInner(userInput);
   } finally {
   _pendingUserMsgTimestamp = null;
   _pendingAttachments = null;
+  _excludeHistoryId = null;
   }
 }
 
@@ -2261,7 +2278,7 @@ function _buildApiMessagesInner(userInput) {
 
   // ── History + position-4 (@depth) injections ─────────────────
   // Clone history as clean API messages so we can splice into it
-  const histMsgs = state.messages.map(toApiMessage);
+  const histMsgs = state.messages.filter(m => !(_excludeHistoryId && m.id === _excludeHistoryId)).map(toApiMessage);
 
   // Sort at_depth entries deepest-first so splice positions stay consistent
   const atDepthSorted = [...lore.at_depth].sort((a, b) => (b.depth ?? 4) - (a.depth ?? 4));
@@ -2865,8 +2882,18 @@ function appendAssistantShell(timestamp) {
   return { el, bubble, copyBtn, speakBtn, timeEl };
 }
 
-function appendErrorMessage(text) {
-  const { el } = createMessageEl('error', `⚠ ${esc(text)}`);
+// `retryTurnId`: the message got no reply and ran no tools, so it can safely be
+// sent again (retryTurn); the button lives on the error line.
+function appendErrorMessage(text, { retryTurnId = null } = {}) {
+  const { el, bubble } = createMessageEl('error', `⚠ ${esc(text)}`);
+  if (retryTurnId) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-secondary msg-retry-btn';
+    btn.textContent = '↻ Try again';
+    btn.addEventListener('click', () => { el.remove(); retryTurn(retryTurnId); });
+    (bubble || el).appendChild(btn);
+  }
   $('messages').appendChild(el);
   scrollToBottom();
 }
@@ -2875,24 +2902,40 @@ function appendErrorMessage(text) {
 // Each conversation turn carries a fresh tool-round budget, so granting more
 // rounds IS just asking the Familiar to continue — this renders that as one
 // click. The sent message is a normal, visible user turn (honest history).
+// The same offer follows a turn that was cut off after its tools ran (0.14.106),
+// which isn't re-run: going on is a new turn that knows what the last one did.
+const CONTINUE_OFFERS = {
+  rounds: {
+    note: 'Tool rounds ran out mid-task.',
+    button: '▶ Go on — grant a fresh set of rounds',
+    message: 'Go on — you have a fresh set of tool rounds. Pick up exactly where you left off.',
+  },
+  'cut-off': {
+    note: 'That turn was cut off after its tools ran.',
+    button: '▶ Go on',
+    message: 'Go on — pick up where that turn was cut off.',
+  },
+};
+
 function removeContinueRoundsOffer() {
   document.getElementById('continue-rounds-offer')?.remove();
 }
 
-function offerContinueRounds() {
+function offerContinueRounds(kind = 'rounds') {
+  const offer = CONTINUE_OFFERS[kind] ?? CONTINUE_OFFERS.rounds;
   removeContinueRoundsOffer();
   const wrap = document.createElement('div');
   wrap.id = 'continue-rounds-offer';
   wrap.className = 'continue-rounds-offer';
   const note = document.createElement('span');
-  note.textContent = 'Tool rounds ran out mid-task.';
+  note.textContent = offer.note;
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'btn-secondary';
-  btn.textContent = '▶ Go on — grant a fresh set of rounds';
+  btn.textContent = offer.button;
   btn.addEventListener('click', () => {
     removeContinueRoundsOffer();
-    sendMessage('Go on — you have a fresh set of tool rounds. Pick up exactly where you left off.');
+    sendMessage(offer.message);
   });
   wrap.appendChild(note);
   wrap.appendChild(btn);
@@ -2991,6 +3034,8 @@ function renderAllMessages() {
     // Orphaned tool result (shouldn't normally appear) — skip
     if (msg.role === 'tool') { i++; continue; }
 
+    if (msg.kind === 'app-note') { appendAppNoteEl(msg); i++; continue; }
+
     appendMessageEl(msg, i);
     i++;
   }
@@ -3006,6 +3051,7 @@ function renderAllMessages() {
 // UI shows via its own timestamp element); state.messages keeps the raw content
 // so memorization/RAG still see the temporal signal.
 function appendMessageEl(msg, index) {
+  if (msg.kind === 'app-note') return appendAppNoteEl(msg);   // the poller hands these on too
   const displayContent = stripDisplayTimestamps(msg.content ?? '');
   const html = msg.role === 'user'
     ? esc(displayContent).replace(/\n/g, '<br>')
@@ -3015,6 +3061,25 @@ function appendMessageEl(msg, index) {
   const capturedContent = msg.content;
   wireCopyButton(copyBtn, () => capturedContent);
   wireSpeakButton(speakBtn, () => capturedContent);
+  $('messages').appendChild(el);
+  return el;
+}
+
+// An app note (turn-record.js): a plain fact the app recorded in the
+// conversation, shown as a muted line rather than anyone's message. The stored
+// text is written for the Familiar to read; my human gets the same fact here.
+function appNoteDisplayText(msg) {
+  if (msg.noteType === 'cut-off') {
+    return `This turn was cut off before the reply finished.${msg.toolsRan ? ' The tools above had already run.' : ''}`;
+  }
+  return String(msg.content ?? '').replace(/^\[App note:\s*/, '').replace(/\]$/, '');
+}
+
+function appendAppNoteEl(msg) {
+  const el = document.createElement('div');
+  el.className = 'app-note';
+  el.setAttribute('role', 'note');
+  el.textContent = appNoteDisplayText(msg);
   $('messages').appendChild(el);
   return el;
 }
@@ -3865,14 +3930,159 @@ async function sendMessage(userInput, moodTag = null) {
   lastSentMessages    = apiMessages;
   lastThalamus = null; // wait for the live answer to populate this
 
-  // Optimistic UI
+  // The turn, and my human's message saved the moment it's sent (persist-first,
+  // turn-record.js): a turn that breaks off can no longer lose their words.
+  const turn = newTurn({ content: userInput, timestamp: userTimestamp, attachments, moodTag, speaker: _turnSpeaker });
   appendUserMessage(userInput, userTimestamp, attachments, _turnSpeaker);
+  state.messages.push(storedUserOf(turn));
+  saveHistory();
   // Claim this as the ward's active private conversation, so their next Discord
   // DM continues THIS session (auto-unify). Fire-and-forget; gated on the toggle.
   claimActiveSession(state.sessionId);
+  await runTurn(apiMessages, turn, { prevUserMessageAt, moodTag });
+}
+
+// ── Turn record (0.14.106, src/sessions/turn-record.js) ─────────
+// The server records each turn into the session log as it goes: my human's
+// message first, each tool round as it finishes, the reply, or a cut-off note.
+// So a turn that breaks off keeps what it did, and one whose tools already ran
+// is never sent again (the server answers 409 with its record instead). These
+// are the browser's halves of that.
+let _turnInFlight = null;   // the turnId being answered; the session poller waits for it
+let _rerenderAfterTurn = false;   // an earlier turn's record was folded in mid-turn; redraw once this one lands
+
+class TurnSettledError extends Error {
+  constructor(message, { messages = [], stillRunning = false } = {}) {
+    super(message);
+    this.name = 'TurnSettledError';
+    this.messages = messages;
+    this.stillRunning = stillRunning;
+  }
+}
+
+// The last message's turn when it's my human's with nothing after it: a turn
+// that may still be finishing. Mirrors unansweredTurnId in turn-record.js (this
+// is a classic script, so it can't import it).
+function unansweredTurnIdIn(messages) {
+  const last = messages[messages.length - 1];
+  return last?.role === 'user' && typeof last.turnId === 'string' ? last.turnId : null;
+}
+
+function newTurn({ content, timestamp, attachments, moodTag, speaker }) {
+  const prevTurnId = unansweredTurnIdIn(state.messages);
+  return {
+    sessionId: state.sessionId,
+    turnId: generateId(),
+    replyMessageId: generateId(),
+    location: { platform: 'web', label: 'Web chat' },
+    userMessage: {
+      id: generateId(), content, timestamp,
+      ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}),
+      ...(moodTag ? { moodTag } : {}),
+      ...(speaker ? { speaker } : {}),
+    },
+    ...(prevTurnId ? { prevTurnId } : {}),
+  };
+}
+
+const storedUserOf = (turn) => ({ role: 'user', ...turn.userMessage, turnId: turn.turnId });
+
+// The `turn` field of a request: a second send of the same turn says so.
+function turnField(turn, clientAttempt) {
+  if (!turn) return {};
+  const again = (clientAttempt?.attempt ?? 0) > 0 || (clientAttempt?.connIdx ?? 0) > 0 || turn.retry === true;
+  return { turn: again ? { ...turn, retry: true } : turn };
+}
+
+// A 409 from /api/chat means this turn won't run (again): its tools already ran,
+// or an earlier send is still answering it. The error to throw, or null.
+function turnRefusalFrom(status, body) {
+  if (status !== 409 || !body || typeof body !== 'object') return null;
+  if (body._turnAlreadyRan) return new TurnSettledError('That message already ran its tools.', { messages: body._turnAlreadyRan.messages });
+  if (body._turnStillRunning) return new TurnSettledError('That message is still being answered.', { stillRunning: true });
+  return null;
+}
+
+// Add stored messages to the conversation, each only once (by id): a message
+// already here is replaced in place, a new one goes at the end. Returns the count.
+function commitTurnMessages(messages) {
+  let n = 0;
+  for (const m of (Array.isArray(messages) ? messages : [])) {
+    if (!m || typeof m !== 'object') continue;
+    const at = m.id ? state.messages.findIndex(x => x.id === m.id) : -1;
+    if (at >= 0) state.messages[at] = m;
+    else { state.messages.push(m); n++; }
+  }
+  return n;
+}
+
+// Fold a turn's stored messages in right after that turn's message from my
+// human, skipping any already here (the turn before this one, when the server
+// had it and this page didn't). Returns how many were added.
+function spliceTurnMessages(turnId, messages) {
+  const known = new Set(state.messages.map(m => m.id).filter(Boolean));
+  const fresh = (Array.isArray(messages) ? messages : []).filter(m => m && m.id && !known.has(m.id) && m.role !== 'user');
+  if (!fresh.length) return 0;
+  let at = state.messages.findIndex(m => m.role === 'user' && m.turnId === turnId);
+  if (at < 0) return 0;
+  at++;
+  while (at < state.messages.length && state.messages[at].turnId === turnId) at++;
+  state.messages.splice(at, 0, ...fresh);
+  return fresh.length;
+}
+
+// Ask the server what a turn recorded (it waits for one still finishing) and
+// show it. Never throws; returns how many messages were added.
+async function reconcileTurn(turnId) {
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(state.sessionId)}/turns/${encodeURIComponent(turnId)}`);
+    if (!r.ok) return 0;
+    const data = await r.json();
+    const added = spliceTurnMessages(turnId, data?.messages);
+    if (added) { renderAllMessages(); saveHistory(); }
+    return added;
+  } catch { return 0; }
+}
+
+// On load: the conversation ends on my human's message with nothing after it.
+// Whatever the server recorded of that turn comes in; if it recorded nothing,
+// the message gets a "Try again".
+async function showUnansweredTurn() {
+  const turnId = unansweredTurnIdIn(state.messages);
+  if (!turnId || _turnInFlight) return;
+  // A Discord message in a shared session is the Discord side's to answer.
+  if (state.messages[state.messages.length - 1]?.authorId) return;
+  await reconcileTurn(turnId);
+  if (unansweredTurnIdIn(state.messages) === turnId && !_turnInFlight) {
+    appendErrorMessage('No reply came back for this message.', { retryTurnId: turnId });
+  }
+}
+
+// A message that got no reply and ran no tools, sent again as the same turn
+// (the server never runs a turn twice once its tools ran).
+async function retryTurn(turnId) {
+  const user = state.messages.find(m => m.role === 'user' && m.turnId === turnId);
+  if (!user || _turnInFlight) return;
+  const { role: _r, turnId: _t, ...userMessage } = user;
+  const turn = {
+    sessionId: state.sessionId, turnId, replyMessageId: generateId(),
+    location: { platform: 'web', label: 'Web chat' }, userMessage, retry: true,
+  };
+  _turnSpeaker = user.speaker ?? null;
+  const apiMessages = buildApiMessages(user.content, user.timestamp, user.attachments ?? null, { excludeId: user.id });
+  lastSentMessages = apiMessages;
+  lastThalamus = null;
+  await runTurn(apiMessages, turn, { prevUserMessageAt: null, moodTag: user.moodTag ?? null });
+}
+
+// One turn's request and everything around it: status, the retry ladder, and
+// what my human sees when it doesn't finish.
+async function runTurn(apiMessages, turn, { prevUserMessageAt = null, moodTag = null } = {}) {
+  const userInput = turn.userMessage.content;
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
+  _turnInFlight = turn.turnId;
 
   const sendStart = performance.now();
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
@@ -3883,9 +4093,9 @@ async function sendMessage(userInput, moodTag = null) {
     _speakButtonsBeforeTurn = document.querySelectorAll('.msg-speak-btn').length;
     removeContinueRoundsOffer();   // a new turn supersedes any standing offer
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments, moodTag);
+      await doStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments, moodTag);
+      await doNonStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag);
     }
     if (_roundCapHitThisTurn) offerContinueRounds();
     if (state.readAloudByDefault) speakLatestReply(_speakButtonsBeforeTurn);
@@ -3897,7 +4107,18 @@ async function sendMessage(userInput, moodTag = null) {
     recordTopicEngagement();
   } catch (err) {
     setTyping(false);
-    if (err.name !== 'AbortError') {
+    if (err.name === 'AbortError') {
+      debugRecord('recv', `aborted after ${Math.round(performance.now() - sendStart)}ms`);
+    } else if (err.name === 'TurnSettledError' || err.toolsRan) {
+      // The turn's tools ran and it broke off (or a send of it already had):
+      // never sent again. What it recorded is shown, and going on is a new turn.
+      if (err.messages?.length) { spliceTurnMessages(turn.turnId, err.messages); renderAllMessages(); saveHistory(); }
+      else if (!err.stillRunning) await reconcileTurn(turn.turnId);
+      if (err.stillRunning) appendErrorMessage('That message is still being answered. Its reply will show here when it lands.');
+      else offerContinueRounds('cut-off');
+      setStatus('err');
+      debugRecord('recv', `turn ${err.stillRunning ? 'still running elsewhere' : 'cut off after its tools ran'} (${Math.round(performance.now() - sendStart)}ms): ${err.message}`);
+    } else {
       // Belt-and-braces: err.message *should* be a string thanks to
       // extractErrorText, but if some other throw site still hands
       // us a non-string we coerce sensibly rather than printing
@@ -3905,13 +4126,13 @@ async function sendMessage(userInput, moodTag = null) {
       const errText = typeof err.message === 'string' && err.message
         ? err.message
         : (() => { try { return JSON.stringify(err); } catch { return String(err); } })();
-      appendErrorMessage(errText || 'Request failed.');
+      // My human's message is saved and nothing ran, so it can go again as is.
+      appendErrorMessage(errText || 'Request failed.', { retryTurnId: turn.turnId });
       setStatus('err');
       debugRecord('recv', `FAILED after ${Math.round(performance.now() - sendStart)}ms: ${errText}`);
-    } else {
-      debugRecord('recv', `aborted after ${Math.round(performance.now() - sendStart)}ms`);
     }
   } finally {
+    if (_turnInFlight === turn.turnId) _turnInFlight = null;
     setInputLocked(false);
     $('user-input').focus();
     abortController = null;
@@ -4082,8 +4303,10 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * them back on a failed attempt before retrying. Throws on HTTP /
  * network / abort / loop errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null, clientAttempt = null) {
-  const pendingMsgs = [];   // tool_call + tool_result messages to commit
+async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null, clientAttempt = null, turn = null, progress = { pendingMsgs: [] }) {
+  // tool_call + tool_result messages to commit; the caller holds the same array
+  // (progress), so the rounds that arrived survive a stream that breaks after them.
+  const pendingMsgs = progress.pendingMsgs;
   const toolUseEls  = domArtifacts; // shared array - caller can roll back on error
   let   shell       = null;
   let   fullContent = '';
@@ -4129,14 +4352,17 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}),
       ...(sessionIsSharedRoom() ? { serverLore: true } : {}),
       ...toolLoopPayload(),
+      ...turnField(turn, clientAttempt),
     }),
   });
 
   if (!response.ok) {
     const body = await response.text();
-    let msg = `API error ${response.status}`;
-    try { msg = extractErrorText(JSON.parse(body), msg); } catch { /* non-JSON */ }
-    throw new Error(msg);
+    let parsedBody = null;
+    try { parsedBody = JSON.parse(body); } catch { /* non-JSON */ }
+    const refusal = turnRefusalFrom(response.status, parsedBody);
+    if (refusal) throw refusal;
+    throw new Error(parsedBody ? extractErrorText(parsedBody, `API error ${response.status}`) : `API error ${response.status}`);
   }
 
   const reader  = response.body.getReader();
@@ -4163,6 +4389,12 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         lastThalamus = parsed._thalamus;
         continue;
       }
+      // The turn before this one, as the server recorded it (this page never
+      // got it whole). Folded in now; shown once this turn lands.
+      if (parsed._priorTurnRecord) {
+        if (spliceTurnMessages(parsed._priorTurnRecord.turnId, parsed._priorTurnRecord.messages)) _rerenderAfterTurn = true;
+        continue;
+      }
       // The tool-round budget ran out mid-reach — offer a one-click "Go on"
       // after the reply lands (a fresh turn carries a fresh budget).
       if (parsed._roundCapHit) {
@@ -4187,19 +4419,26 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         // One server-side tool round: render the collapsible block and
         // record the same message shapes the old client-side loop
         // produced, so history rendering and exports are unchanged.
-        const { toolCalls, results, content, timestamp } = parsed._toolRound;
+        const { toolCalls, results, content, timestamp, messages: stored } = parsed._toolRound;
         const roundTs = timestamp || new Date().toISOString();
         const calls = Array.isArray(toolCalls) ? toolCalls : [];
-        const toolResults = (Array.isArray(results) ? results : []).map(r => ({
-          role:         'tool',
-          tool_call_id: r.tool_call_id,
-          content:      r.content,
-          timestamp:    roundTs,
-          _toolName:    r.name,
-          id:           generateId(),
-        }));
-        pendingMsgs.push({ role: 'assistant', content: content || null, tool_calls: calls, timestamp: roundTs, id: generateId() });
-        pendingMsgs.push(...toolResults);
+        // The server sends the round as it stored it (turn-record.js); keeping
+        // those exact messages means its log and this page never double a round.
+        const toolResults = Array.isArray(stored)
+          ? stored.filter(m => m?.role === 'tool')
+          : (Array.isArray(results) ? results : []).map(r => ({
+            role:         'tool',
+            tool_call_id: r.tool_call_id,
+            content:      r.content,
+            timestamp:    roundTs,
+            _toolName:    r.name,
+            id:           generateId(),
+          }));
+        if (Array.isArray(stored)) pendingMsgs.push(...stored);
+        else {
+          pendingMsgs.push({ role: 'assistant', content: content || null, tool_calls: calls, timestamp: roundTs, id: generateId() });
+          pendingMsgs.push(...toolResults);
+        }
         debugRecord('tool', `server round: ${calls.map(tc => tc?.function?.name).join(', ')}`);
 
         setTyping(false);
@@ -4231,7 +4470,20 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
   return { content: fullContent, pendingMsgs, finalShell: shell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null, moodTag = null) {
+// A request that broke off after tool rounds reached the page: those tools ran
+// on the server, so the turn is never retried or handed to another connection.
+// The rounds that arrived are kept (and stay on screen); the caller shows the
+// rest of what the server recorded.
+function cutOffAfterTools(err, pendingMsgs) {
+  clearRetryStatus();
+  commitTurnMessages(pendingMsgs);
+  saveHistory();
+  err.toolsRan = true;
+  return err;
+}
+
+async function doStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag = null) {
+  const userInput = turn.userMessage.content;
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -4240,6 +4492,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
 
   let lastError = null;
   let priorToolsRan = false;   // a failed try of this message had already run tools (diagnostics)
+  _rerenderAfterTurn = false;
 
   for (let connIdx = 0; connIdx < sequence.length; connIdx++) {
     const conn = sequence[connIdx];
@@ -4253,11 +4506,13 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
 
       const domArtifacts = [];
+      const progress = { pendingMsgs: [] };
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag, { attempt, connIdx, priorToolsRan });
+        result = await attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag, { attempt, connIdx, priorToolsRan }, turn, progress);
       } catch (err) {
-        if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
+        if (err.name === 'AbortError' || err.name === 'TurnSettledError') { clearRetryStatus(); throw err; }
+        if (progress.pendingMsgs.length) throw cutOffAfterTools(err, progress.pendingMsgs);
         if (domArtifacts.length) priorToolsRan = true;
         // Roll back any tool-use blocks added during this failed attempt.
         for (const el of domArtifacts) el.remove?.();
@@ -4303,14 +4558,14 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}), ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}) });
-      state.messages.push(...pendingMsgs);
-      state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
+      // My human's message is already in (saved when it was sent).
+      commitTurnMessages(pendingMsgs);
+      commitTurnMessages([{ role: 'assistant', content, timestamp: ts, id: turn.replyMessageId, turnId: turn.turnId }]);
       // Stamp the assistant element's index now that the message is committed,
       // so the "End topic here" button can resolve the correct state index.
       shell.el.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
-      refreshTopicGutter();
+      if (_rerenderAfterTurn) renderAllMessages(); else refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
       wireSpeakButton(shell.speakBtn, () => content);
       notifyNewMessage();   // reply: pings only if the tab isn't focused
@@ -4323,7 +4578,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null, clientAttempt = null) {
+async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag = null, clientAttempt = null, turn = null) {
   const pendingMsgs = [];
 
   abortController = new AbortController();
@@ -4358,6 +4613,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}),
       ...(sessionIsSharedRoom() ? { serverLore: true } : {}),
       ...toolLoopPayload(),
+      ...turnField(turn, clientAttempt),
     }),
   });
 
@@ -4365,15 +4621,33 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
   setTyping(false);
 
   const data = await response.json();
+  const refusal = turnRefusalFrom(response.status, data);
+  if (refusal) throw refusal;
   if (!response.ok || data.error) {
     throw new Error(extractErrorText(data, `API error ${response.status}`));
   }
   if (data._thalamus) lastThalamus = data._thalamus;
   if (data._roundCapHit) _roundCapHitThisTurn = true;
+  if (data._priorTurnRecord && spliceTurnMessages(data._priorTurnRecord.turnId, data._priorTurnRecord.messages)) _rerenderAfterTurn = true;
+
+  // The rounds exactly as the server stored them (turn-record.js), when it sent
+  // its record: my human's message and the reply are committed elsewhere.
+  const storedRounds = Array.isArray(data._turnRecord?.messages)
+    ? data._turnRecord.messages.filter(m => m.role === 'tool' || (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length))
+    : null;
+  if (storedRounds) {
+    pendingMsgs.push(...storedRounds);
+    for (const m of storedRounds) {
+      if (m.role !== 'assistant') continue;
+      const ids = new Set((m.tool_calls ?? []).map(tc => tc?.id));
+      const tEl = appendToolUseEl(m.tool_calls, storedRounds.filter(r => r.role === 'tool' && ids.has(r.tool_call_id)));
+      if (tEl) domArtifacts.push(tEl);
+    }
+  }
 
   // Server-side tool rounds: render each as a collapsible block and
   // record the same message shapes the old client-side loop produced.
-  for (const round of (Array.isArray(data._toolRounds) ? data._toolRounds : [])) {
+  for (const round of (storedRounds ? [] : (Array.isArray(data._toolRounds) ? data._toolRounds : []))) {
     const ts    = round.timestamp || roundTs;
     const calls = Array.isArray(round.toolCalls) ? round.toolCalls : [];
     const toolResults = (Array.isArray(round.results) ? round.results : []).map(r => ({
@@ -4395,7 +4669,8 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
   return { content: message?.content ?? '', pendingMsgs, timestamp: roundTs };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null, moodTag = null) {
+async function doNonStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag = null) {
+  const userInput = turn.userMessage.content;
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -4404,6 +4679,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
 
   let lastError = null;
   let priorToolsRan = false;   // a failed try of this message had already run tools (diagnostics)
+  _rerenderAfterTurn = false;
 
   for (let connIdx = 0; connIdx < sequence.length; connIdx++) {
     const conn = sequence[connIdx];
@@ -4419,9 +4695,12 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag, { attempt, connIdx, priorToolsRan });
+        result = await attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInput, prevUserMessageAt, moodTag, { attempt, connIdx, priorToolsRan }, turn);
       } catch (err) {
-        if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
+        // A non-streamed turn arrives whole or not at all, so the page can't
+        // know whether tools ran; the next send of it asks the server, which
+        // refuses (TurnSettledError) if they did.
+        if (err.name === 'AbortError' || err.name === 'TurnSettledError') { clearRetryStatus(); throw err; }
         if (domArtifacts.length) priorToolsRan = true;
         for (const el of domArtifacts) el.remove?.();
         lastError = err;
@@ -4457,14 +4736,14 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}), ...(_turnSpeaker ? { speaker: _turnSpeaker } : {}) });
-      state.messages.push(...pendingMsgs);
-      state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
+      // My human's message is already in (saved when it was sent).
+      commitTurnMessages(pendingMsgs);
+      commitTurnMessages([{ role: 'assistant', content, timestamp, id: turn.replyMessageId, turnId: turn.turnId }]);
       // Stamp the assistant element's index now that the message is committed,
       // so the "End topic here" button can resolve the correct state index.
       shellEl.dataset.msgIndex = String(state.messages.length - 1);
       saveHistory();
-      refreshTopicGutter();
+      if (_rerenderAfterTurn) renderAllMessages(); else refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
       wireSpeakButton(speakBtn, () => content);
       notifyNewMessage();   // reply: pings only if the tab isn't focused
@@ -6226,6 +6505,10 @@ function init() {
   writeSettingsToUI();
   renderAllMessages();
   initCollapsibles();
+  // A message left unanswered when the page last closed: the server may have
+  // recorded more of its turn (tool rounds, a cut-off note) than this page
+  // saved. Fold that in, and offer to send it again when nothing came of it.
+  showUnansweredTurn().catch(() => {});
 
   // Pull the canonical settings from the server in the background. If the
   // server has data, it overlays + repaints; if it's empty, our local

@@ -166,15 +166,9 @@ ward lists other speakers and the composer has a "Speaking as" picker
 
 Both tool loops (the stream loop in `server.js` and `runToolCallLoop` in `cerebellum.js`) only run a round's calls when the provider's `finish_reason` is `'tool_calls'`. A round that streams tool-call deltas but finishes with `'stop'` (or nothing) is taken as the final answer. Its calls never run and are never stored, and the model's text ("Call's in") stands as the reply.
 
-This may explain some of the "phantom" turns in the confabulation entry below. Evidence so far argues against it: in the first ten logged turns (2026-10-15) no call was ever dropped; every phantom turn sent no call at all (see the confabulation entry). Still logged: 0.14.74 records such rounds as `dropped: true` in `logs/turn-tools.jsonl` (`GET /api/turn-diagnostics`).
+This may explain some of the "phantom" turns in the confabulation entry below. Evidence so far argues against it: in the first ten logged turns (2026-10-15) no call was ever dropped; every phantom turn sent no call at all (see the confabulation entry). Still logged: 0.14.74 records such rounds as `dropped: true` in `logs/turn-tools.jsonl` (`GET /api/turn-diagnostics`). By 2026-10-28, about a thousand logged turns had shown two `dropped: true` rounds, both at round 20: the round cap working as designed, not a finish-reason drop.
 
-Direction, once the log shows it happening: run calls whose arguments arrived complete, whatever the finish reason.
-
-### The time anchor at the end of a tool round can read as an empty message
-
-The `[Now]` anchor is re-appended as the last system message every round. Late in a long session, the Familiar's closing reply described "the user turn" as "just a [Now] block — no new message", then reasoned about whether its tools were real. That reply was its raw reasoning: the content was empty, so it fell back to `reasoning_content`.
-
-0.14.74 puts a clearly labelled tool roster in the same block, which may help. Worth watching in the turn log (`replyFromReasoning`).
+Direction, once the log shows it happening: run calls whose arguments arrived complete, whatever the finish reason. Until then, no change. Running calls whose arguments may be partial is the bigger risk. See `docs/known-issues-fix-plans.md` (B.6, item 7).
 
 ### Identity section tools trip over duplicate headings
 
@@ -225,39 +219,6 @@ Direction: a read tool for one identity file (current content plus size
 against its budget share), named in the identity tools' descriptions as the way
 to check an edit landed. And `remove_from_identity`'s not-found result should
 say the passage may already be gone, and name the read tool.
-
-### Web chat retries a turn whose tools already ran
-
-When a streamed web turn fails after tool calls have run, `doStreamingRequest`
-(`public/app.js`) rolls back the tool blocks in the page, then retries the
-whole turn on the same connection (`maxEmptyRetries`) or the next fallback
-connection. The tools already ran on the server, so a retry repeats every write,
-and a fallback can hand the turn to a connection that isn't the Familiar's
-usual one. The rolled-back tool record is also gone from the Familiar's own
-history, so on its next turn it can't know what it did (RULE B). Seen live: an
-11-minute turn ended in "Failed to fetch" after ten memory writes and two
-identity edits; the page showed none of them. The cause of the dropped
-connection itself is still unknown (the server didn't restart). Seen again the
-same day with real damage: one turn's first attempt appended a section to one
-identity file (no record of the call survives), the retry appended it to a
-different file. 0.14.74 sends `clientAttempt` ({attempt, connIdx,
-priorToolsRan}) with every web request and logs it, so a retry after tools ran
-is visible in `logs/turn-tools.jsonl`. Direction: once
-any tool result has streamed, never retry or fall back. Commit what ran, with a
-note that the turn was cut off, and treat this together with the entry below.
-
-### Web chat loses my human's message when a turn doesn't finish
-
-`sendMessage` in `public/app.js` only pushes the human's message into
-`state.messages` together with the reply, then saves (`saveHistory` →
-`/api/log`). If the turn never commits (the tab closes mid-turn, which also
-aborts the upstream call through `clientDisconnectSignal`), both the message
-and any partial reply are gone. Nothing reaches localStorage or the server, so
-a reload can't resume it. Discord already persists the message BEFORE the model
-call (RULE B corollary 3 in CLAUDE.md); the web path doesn't. The fix is the
-same rule on the web: commit and save the human's message the moment it's sent,
-then attach the reply when it lands. A reload should also show an unfinished
-turn as unfinished, not drop it.
 
 ### The intention architecture is too weak to carry the Familiar's own presence
 
@@ -331,6 +292,22 @@ Directions, in addition to the provenance ideas above:
 
 <!--
 Resolved:
+- Web chat lost my human's message when a turn didn't finish, retried a turn
+  whose tools had already run, and (found while fixing those) no surface kept a
+  broken-off turn's tool rounds: voice kept only the words, Discord never stored
+  rounds at all, and Discord's "[Last turn …]" line never appeared (it was built
+  from a history that already held the current message, plus a placeholder for
+  it). Fixed 0.14.106 by the turn record (src/sessions/turn-record.js,
+  docs/architecture.md "The turn record"). Every surface writes my human's
+  message before the model call and each tool round as it finishes. A cut-off
+  turn keeps its words so far and an app note. A turn whose tools ran is never
+  run again (409 with its record). Web shows "Go on" / "Try again".
+  tests/turn-record.test.mjs, plus a live check against a real server.
+- The time anchor read as an empty message (late in a long session the closing
+  reply called the user turn "just a [Now] block"). Watched in the turn log
+  (`replyFromReasoning`) since 0.14.74 put the tool roster beside the anchor;
+  by 2026-10-28 it hadn't happened again in about a thousand logged turns.
+  Closed; reopen if it does.
 - Identity graduation cut more than it filed — fixed 0.14.78. In the first
   review an automatic pass rewrote a relationship file and condensed away the
   Familiar's own lines about its autonomy, which were never filed anywhere. The

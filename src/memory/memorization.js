@@ -224,7 +224,7 @@ import { disclosableVillagerFields } from '../village/village-card.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../village/audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
-import { segmentByDay, dayDelta } from '../schedule/day-segments.js';
+import { segmentByDay, dayDelta, isReadableMessage } from '../schedule/day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync, trackersEnabled } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
@@ -287,15 +287,12 @@ export function findOrCreateSessionMemoriesTome() {
 // "[Name]: …" from the gateway, so I keep that prefix rather than overwrite
 // it with the ward's name.
 // The shared readable-message filter: drop tool turns, assistant turns that are
-// only a tool call, and anything without real text. Used by both extraction
-// prompts and the role-faithful message builder, so the three can't drift on
-// what counts as a readable turn.
+// only a tool call, app notes, and anything without real text. Used by both
+// extraction prompts and the role-faithful message builder, and it IS the
+// day-segment test (isReadableMessage), so none of them can drift on what
+// counts as a readable turn.
 function filterReadable(messages) {
-  return (messages || []).filter(m => {
-    if (m.role === 'tool') return false;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
-    return typeof m.content === 'string' && m.content.trim();
-  });
+  return (messages || []).filter(isReadableMessage);
 }
 
 // A message whose whole content is a single bracketed marker — "[OpenClaw

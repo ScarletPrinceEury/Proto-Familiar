@@ -60,7 +60,7 @@ import { checkCanaries, readCanaryEvents } from './src/memory/identity-canaries.
 // the threat tier, bounded so mood alone never reaches a crisis tier.
 import { applyMoodThreat } from './src/tracker/mood-threat.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
-import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
+import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages, extractTurnReply } from './llm-call.js';
 import { hydrateNameFieldCache, nameFieldEnabledFor, recordNameFieldResult, stampNamesOnTurns } from './name-field.js';
 import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
@@ -175,7 +175,8 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './src/memory/memorization.js';
 import { computeCoverage, collectDateSlices } from './src/memory/memory-coverage.js';
-import { writeSessionLog as persistSessionLog, sessionLocationLabel } from './src/sessions/session-log.js';
+import { writeSessionLog as persistSessionLog, sessionLocationLabel, readSessionMessages } from './src/sessions/session-log.js';
+import { parseTurnEnvelope, openTurn, awaitTurnSettled, turnMessagesOf, isValidTurnId } from './src/sessions/turn-record.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
 import { parseImport, dateFromFilename, applyFallbackDate } from './src/sessions/log-import.js';
 import { segmentByDay } from './src/schedule/day-segments.js';
@@ -419,7 +420,23 @@ function malformedMessageIndex(messages) {
  * Body: { provider, apiKey, model, messages, stream, temperature?, max_tokens? }
  * Proxies to the chosen provider and streams or returns the response.
  */
+// A live turn sends a `turn` envelope, and its record lands in the session log
+// as the turn goes (src/sessions/turn-record.js, 0.14.106): my human's message
+// before the model call, each tool round as it finishes, the reply, or a cut-off
+// note if the turn ends early. A turn that already ran tools is never run again:
+// a retry or a fallback connection after a dropped connection gets back what it
+// recorded instead. Requests without an envelope (handoff summaries, guide chat,
+// direct callers) run exactly as before and aren't journaled.
 app.post('/api/chat', chatRateLimit, async (req, res) => {
+  const envelope = parseTurnEnvelope(req.body?.turn, { isValidSessionId });
+  if (!envelope) return chatTurn(req, res, null, null);
+  const opened = await openTurn(envelope, { logsDir: LOGS_DIR });
+  if (opened.refusal) return res.status(409).json(opened.refusal);
+  try { return await chatTurn(req, res, opened.rec, opened.priorTurn); }
+  finally { await opened.rec.settle(); }
+});
+
+async function chatTurn(req, res, rec, priorTurn) {
   const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag, clientAttempt, speaker: turnSpeaker, serverLore } = req.body;
   // Fires when the client goes away (tab closed, voice turn gave up, an external
   // client hung up) so every upstream request below stops with it. Attached
@@ -571,6 +588,13 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
   }
+  // My human's words are saved before anything can go wrong with the turn
+  // (RULE B corollary 3, the web/voice/bridge twin of Discord's persist-first),
+  // once the room is known: a voice call's log carries its room's tag.
+  if (rec) {
+    rec.meta.audienceTag = audienceTag;
+    await rec.begin();
+  }
   // A promise I make in my human's own room ("I'll do that tonight") gets a
   // timed intention behind it (src/schedule/promise-catch.js). Called at each
   // place a live reply finishes; cheap code decides whether there's anything to
@@ -687,8 +711,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // records: each past turn that really ran tools keeps an app-written system
   // record after it, so history doesn't teach me that a sentence is an action.
   // A listed other speaker's turns read "[Name]: …" (web-speakers.js, 0.14.87).
+  // With others present a record names the calls only (0.14.106).
   const historyMessages = labelSpeakers(
-    collapseToolTurns(Array.isArray(messages) ? messages : [], { records: true }),
+    collapseToolTurns(Array.isArray(messages) ? messages : [], { records: true, recordResults: audienceTag === 'ward-private' }),
     readSettingsSync() || {},
   );
   let baseMessages = injectCorePrompts
@@ -771,7 +796,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // clock at the end of the context, so I start this turn knowing it. And who
     // is typing, when it isn't my human (the same speaker the threat gate above
     // already worked out; the label on their message alone wasn't enough).
-    timeAnchor = [timeAnchor, speakerAnchorLine(otherSpeaker), lastTurnRecord(Array.isArray(messages) ? messages : [])].filter(Boolean).join('\n\n');
+    // A previous turn that was cut off is read from its stored record, which
+    // the browser's history doesn't have yet (0.14.106).
+    const lastTurn = priorTurn
+      ? lastTurnRecord([{ role: 'user' }, ...priorTurn.messages, { role: 'user' }], { results: audienceTag === 'ward-private' })
+      : lastTurnRecord(Array.isArray(messages) ? messages : [], { results: audienceTag === 'ward-private' });
+    timeAnchor = [timeAnchor, speakerAnchorLine(otherSpeaker), lastTurn].filter(Boolean).join('\n\n');
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
@@ -1119,6 +1149,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           getTools: recomposeTools,
           rosterTools: () => payload.tools,
           onRound: (r) => { turnDiag?.rounds.push(r); },
+          // Each finished round lands in the session log right away (turn-record.js).
+          onToolRound: rec ? (r) => rec.round(r) : null,
           callUpstream: async (msgs, roundTools, opts) => {
             // forceText (round-cap closing round): strip tools entirely so the
             // model must answer in text — a silent tool-hungry turn is worse
@@ -1244,6 +1276,13 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
               .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
           }
         }
+        // The stored turn, for a caller that keeps the conversation itself (voice,
+        // the bridge): it stores these rather than building its own copy.
+        if (rec) {
+          await rec.finish(stripLlmTimestamps(extractTurnReply(data.choices?.[0] ?? {})));
+          data._turnRecord = { turnId: rec.turnId, messages: rec.messages() };
+        }
+        if (priorTurn) data._priorTurnRecord = priorTurn;
         return res.json(data);
       } catch (err) {
         if (err.status === 499) return; // client already gone — nothing to send
@@ -1359,6 +1398,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         if (thalamusEnvelope) {
           res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
         }
+        if (priorTurn) res.write(`data: ${JSON.stringify({ _priorTurnRecord: priorTurn })}\n\n`);
         headersSent = true;
       }
 
@@ -1388,7 +1428,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
               const choice = evt.choices?.[0];
               if (choice?.finish_reason) finishReason = choice.finish_reason;
               const delta = choice?.delta;
-              if (typeof delta?.content === 'string') fullContent += delta.content;
+              if (typeof delta?.content === 'string') { fullContent += delta.content; rec?.setPartial(fullContent); }
               // Accumulate reasoning separately — NOT forwarded to the display
               // (live-rendering it is the CoT-dump bug); folded in only if the
               // turn ends with empty content and wasn't budget-truncated.
@@ -1446,8 +1486,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           name:         tc.function.name,
           content:      await executeToolCall(tc.function.name, tc.function.arguments, toolCtx),
         })));
+        // Recorded BEFORE the client check: these tools ran whether or not
+        // anyone is still there to see it (turn-record.js).
+        const roundMessages = rec ? await rec.round({ round, toolCalls, results, content: fullContent || null, timestamp }) : null;
         if (clientGone()) return;
-        res.write(`data: ${JSON.stringify({ _toolRound: { toolCalls, results, content: fullContent || null, timestamp } })}\n\n`);
+        res.write(`data: ${JSON.stringify({ _toolRound: { toolCalls, results, content: fullContent || null, timestamp, ...(roundMessages ? { messages: roundMessages } : {}) } })}\n\n`);
         if (surfacing) {
           for (const tc of toolCalls) {
             const m = TOOL_MODULES[tc.function?.name];
@@ -1516,6 +1559,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       if (forceTextRound) res.write(`data: ${JSON.stringify({ _roundCapHit: true })}\n\n`);
       res.write('data: [DONE]\n\n');
       res.end();
+      await rec?.finish(stripLlmTimestamps(finalText ?? ''));
     }
     catchPromises(finalText, streamToolNames);
     // M8 idle-mode outcome reporting (streaming path). Fire-and-forget.
@@ -1605,6 +1649,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const choice = parsed?.choices?.[0];
       if (choice?.message && choice.finish_reason !== 'length') foldReasoningIntoContent(choice.message);
     }
+    if (rec && parsed && upstream.ok) {
+      await rec.finish(stripLlmTimestamps(extractTurnReply(parsed.choices?.[0] ?? {})));
+      parsed._turnRecord = { turnId: rec.turnId, messages: rec.messages() };
+    }
+    if (priorTurn && parsed) parsed._priorTurnRecord = priorTurn;
     if (thalamusEnvelope && parsed) {
       parsed._thalamus = thalamusEnvelope;
       // M8 idle-mode outcome reporting: fire-and-forget after response sent.
@@ -1649,6 +1698,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   if (thalamusEnvelope) {
     res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
   }
+  if (priorTurn) res.write(`data: ${JSON.stringify({ _priorTurnRecord: priorTurn })}\n\n`);
 
   // M8 idle-mode outcome reporting (streaming path): accumulate the full
   // response text in memory as SSE chunks arrive, then report outcomes
@@ -1656,7 +1706,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // candidates were offered this turn.
   const streamBookmarks = enriched.surfacedBookmarks ?? [];
   const streamTasks     = enriched.surfacedTasks ?? [];
-  const wantsReplyText  = enrichMode === 'full' && audienceTag === 'ward-private';
+  // The turn record needs the reply too (and what had arrived, if it's cut off).
+  const wantsReplyText  = (enrichMode === 'full' && audienceTag === 'ward-private') || !!rec;
   let accumulatedText = '';
   let pendingSse = '';
 
@@ -1666,6 +1717,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const { done, value } = await reader.read();
       if (done) {
         res.end();
+        await rec?.finish(stripLlmTimestamps(accumulatedText));
         catchPromises(accumulatedText);
         // Report outcomes with whatever text was accumulated. Fire-and-forget.
         if (streamBookmarks.length > 0 && accumulatedText) {
@@ -1695,7 +1747,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           try {
             const evt = JSON.parse(jsonStr);
             const delta = evt?.choices?.[0]?.delta?.content;
-            if (typeof delta === 'string') accumulatedText += delta;
+            if (typeof delta === 'string') { accumulatedText += delta; rec?.setPartial(accumulatedText); }
           } catch { /* malformed line — skip */ }
         }
       }
@@ -1703,7 +1755,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   } catch (err) {
     if (!res.writableEnded) res.end();
   }
-});
+}
 
 /**
  * GET /api/last-prompt
@@ -3009,6 +3061,18 @@ app.get('/api/logs/:id', async (req, res) => {
   } catch {
     res.status(404).json({ error: 'Session not found.' });
   }
+});
+
+// GET /api/sessions/:id/turns/:turnId — what one turn recorded (turn-record.js):
+// my human's message, its tool rounds, the reply or a cut-off note. A turn still
+// finishing is waited for first (bounded), so the browser that lost its
+// connection mid-turn gets the whole record in one ask.
+app.get('/api/sessions/:id/turns/:turnId', async (req, res) => {
+  const { id, turnId } = req.params;
+  if (!isValidSessionId(id) || !isValidTurnId(turnId)) return res.status(400).json({ error: 'Invalid session or turn id.' });
+  const settled = await awaitTurnSettled(turnId);
+  const messages = turnMessagesOf(await readSessionMessages(id, { logsDir: LOGS_DIR }), turnId);
+  res.json({ turnId, settled, messages });
 });
 
 // GET /api/session/active — the ward's CURRENT private conversation (the pointer

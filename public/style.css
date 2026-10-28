@@ -1796,6 +1796,22 @@ button { cursor: pointer; font-family: var(--font); }
 /* Drag-over affordance on the chat pane */
 .chat-pane.drag-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
 
+/* An app note in the conversation ("This turn was cut off …", turn-record.js):
+   a plain fact, not anyone's message, so a muted line aligned with the bodies.
+   --text-muted is a real text colour (≥4.5:1 in both themes). */
+.app-note {
+  margin: 4px 0 10px 44px;
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* "Try again" on an error line: the message got no reply and ran no tools. */
+.msg-retry-btn {
+  margin-left: 10px;
+  font-style: normal;
+}
+
 /* "Go on" offer when the tool-round budget ran out mid-task */
 .continue-rounds-offer {
   display: flex;

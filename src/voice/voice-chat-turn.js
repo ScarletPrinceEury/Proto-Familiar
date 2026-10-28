@@ -10,9 +10,48 @@
  * decides audience itself.
  */
 
+import { randomUUID } from 'node:crypto';
 import { extractTurnReply } from '../../llm-call.js';
 import { connectionReady } from '../../providers.js';
 import { stripLlmTimestamps } from '../../message-sanitize.mjs';
+import { toApiHistory } from '../sessions/turn-record.js';
+import { turnMessages } from '../sessions/session-log.js';
+
+/**
+ * The turn envelope for one spoken turn (turn-record.js), shared by both call
+ * transports. `transcript` is what the log keeps as my human's (or a guest's)
+ * words; a speaker rides as its own field.
+ */
+export function callTurnEnvelope({ sessionId, transcript, speaker = null, location, prevTurnId = null, now = new Date().toISOString() }) {
+  return {
+    sessionId, turnId: randomUUID(), replyMessageId: randomUUID(), location,
+    userMessage: { id: randomUUID(), content: String(transcript ?? ''), timestamp: now, ...(speaker ? { speaker } : {}) },
+    ...(prevTurnId ? { prevTurnId } : {}),
+  };
+}
+
+/**
+ * What a spoken turn adds to the call: `history` (the next turn's context) and
+ * `stored` (the transcript the log keeps at hang-up). With the server's record
+ * that's exactly what it stored, tool rounds included, after an earlier turn
+ * it recorded that this call never got back. My human's line in `history`
+ * stays `historyText` (a Discord call attributes it there). Without a record
+ * it's the plain words, as before. Pure.
+ */
+export function keepCallTurn({ hist = [], transcript, historyText = transcript, reply, record = null, speaker = null }) {
+  const prior = Array.isArray(record?.prior?.messages) ? record.prior.messages : [];
+  const mine = !record?.alreadyRan && Array.isArray(record?.messages) && record.messages.length ? record.messages : null;
+  if (!mine) {
+    return {
+      history: [...hist, { role: 'user', content: historyText }, { role: 'assistant', content: reply }],
+      stored: turnMessages(transcript, reply, { speaker }),
+    };
+  }
+  return {
+    history: [...hist, ...toApiHistory(prior), { role: 'user', content: historyText }, ...toApiHistory(mine.filter(m => m.role !== 'user'))],
+    stored: [...prior, ...mine],
+  };
+}
 
 // A hung turn must not hang the call forever. The enriched chat path can be slow
 // (an MCP cold start on the first turn, a thinking model), but it has to end so
@@ -81,10 +120,16 @@ export function voiceHttpRetryPlan(status, retryAfterHeader) {
  * @param {function} deps.connectionForFeature  (settings, feature) => {provider, apiKey, model}
  * @param {function} [deps.log]
  * @param {function} [deps.fetchFn]             injectable for tests
- * @returns {function} runVoiceTurn({ transcript, history?, sessionAudience? }) => Promise<string|null>
+ * @returns {function} runVoiceTurn({ transcript, history?, sessionAudience?, speaker?, turn?, onRecord? }) => Promise<string|null>
+ *
+ * `turn` is the turn envelope (src/sessions/turn-record.js): the server records
+ * the turn into the call's session log as it goes. `onRecord({ messages, prior,
+ * alreadyRan })` hands back what it stored, so the caller keeps exactly those
+ * messages rather than a copy of its own. A retry sends the same turn marked
+ * `retry`, and the server never runs a turn twice once its tools have run.
  */
 export function createVoiceChatTurn({ port, readSettings, connectionForFeature, log = () => {}, fetchFn = fetch, sleep = (ms) => new Promise(r => setTimeout(r, ms)) } = {}) {
-  return async function runVoiceTurn({ transcript, history = [], sessionAudience = 'ward-private', speaker = null } = {}) {
+  return async function runVoiceTurn({ transcript, history = [], sessionAudience = 'ward-private', speaker = null, turn = null, onRecord = null } = {}) {
     const text = String(transcript ?? '').trim();
     if (!text) return null;
     const s = readSettings();
@@ -120,7 +165,10 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
     // we never speak the CoT aloud. Returns the spoken reply (preambles + answer,
     // stripped) or '' when there was no answer, plus finish_reason + httpOk so the
     // caller can decide whether a retry is worth it.
+    let sends = 0;
+    const handBack = (r) => { try { onRecord?.(r); } catch (err) { log(`keeping the turn record failed: ${err?.message ?? err}`); } };
     const attempt = async (maxTokens) => {
+      const isRetry = sends++ > 0;
       const res = await fetchFn(`http://127.0.0.1:${port}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -136,12 +184,23 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
           voiceMode: true,          // reply comes out speech-shaped, not screen-shaped
           injectCorePrompts: true,  // no browser here — the server folds in the ward's four core prompts
           sessionAudience,          // the caller's gate decides this — passed through, never invented here
+          ...(turn ? { turn: isRetry ? { ...turn, retry: true } : turn } : {}),
         }),
       });
       const data = await res.json().catch(() => null);
+      // This turn already ran tools on an earlier send: it isn't run again, and
+      // what it did comes back instead (a 409, so it never retries below).
+      if (res.status === 409 && data?._turnAlreadyRan) {
+        handBack({ messages: data._turnAlreadyRan.messages ?? [], prior: null, alreadyRan: true });
+        log('voice turn had already run its tools on an earlier send — not running it again');
+        return { reply: '', finishReason: null, httpOk: false, status: 409, retryAfter: null };
+      }
       if (!res.ok) {
         log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`);
         return { reply: '', finishReason: null, httpOk: false, status: res.status, retryAfter: res.headers?.get?.('retry-after') ?? null };
+      }
+      if (Array.isArray(data?._turnRecord?.messages)) {
+        handBack({ messages: data._turnRecord.messages, prior: data._priorTurnRecord ?? null, alreadyRan: false });
       }
       const finalReply = extractTurnReply(data?.choices?.[0] ?? {});
       // When she used tools, speak her own preamble on each round first ("let me
