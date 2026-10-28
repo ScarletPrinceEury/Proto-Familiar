@@ -81,6 +81,24 @@ went to everyone in the channel.
    never leave a private room, so the tripwire and the outgoing check can match
    them exactly.
 
+**Resolved (0.14.110),** with two changes to the direction above, both ward
+decisions: the Familiar has no way to okay a held relay itself (only the ward
+releases one, so injected text can't talk it into sending), and a live room
+reply gets a list match swapped for "[private]" instead of being held.
+- `relay_message`'s wording now says what a message carries and what stays out
+  (casual, ward-approved), and its example name is a neutral "Sam".
+- The keep-between-us list (Knowledge → Prompts) is checked on every path out
+  to others: relays (held, never sendable as-is), Discord room replies, both
+  non-stream `/api/chat` paths, and warm reach-outs to villagers (swapped).
+- The shape check runs on relays only and holds for the ward's okay: the chat
+  notice's Send it button, or `!send <id>` in their Discord DM.
+- Found on the way: the raw non-stream `/api/chat` path (a shared-room voice
+  turn with tools off) had no outgoing filter, and warm reach-outs to villagers
+  had no outgoing check at all. Both run the gates now.
+- Still open: the shared-room presence block doesn't carry the "what stays
+  out" wording yet (only `relay_message` does), and a web chat with others
+  present streams its reply, so it gets neither gate.
+
 
 ### Web memorization always says "my human's own room"
 

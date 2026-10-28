@@ -203,8 +203,11 @@ import { identityBudgetTokens } from './src/memory/identity-budget.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
-import { filterOutgoingReply } from './src/safety/outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners, setQuarantineRunners } from './src/discord/discord-gateway.js';
+import { gateRoomReply } from './src/safety/outgoing-filter.js';
+import { searchMemoryRestricted } from './thalamus.js';
+import { redactProtected, normalizePrivateList, variantExamples } from './src/village/outgoing-tripwire.js';
+import { listHeldRelays, releaseHeldRelay, dropHeldRelay, releaseRefusalText } from './src/village/held-relays.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners, setQuarantineRunners, setHeldRelayRunners } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
@@ -1052,6 +1055,31 @@ async function chatTurn(req, res, rec, priorTurn) {
     if (tool_choice !== undefined) payload.tool_choice = tool_choice;
   }
 
+  // Pillar D rewrite nudges for the room gate (gateRoomReply): a bare text
+  // round-trip, no tools, through callProviderChat (RULE A — the raw fetch
+  // that was here had no token cap and read `.content` raw, so a thinking
+  // model handed the filter an empty rewrite). It throws on an empty answer,
+  // which the filter turns into its safe refusal, so a stalled rewrite never
+  // lets the draft through.
+  const filterCallUpstream = (msgs) => callProviderChat({
+    provider, apiKey, baseUrl, model: payload.model, messages: msgs,
+    reasoningEffort: payload.reasoning_effort ?? null, signal: clientSignal,
+  });
+  // A non-stream completion's reply through the room gate, in place.
+  const gateNonStreamReply = async (completion) => {
+    if (audienceTag === 'ward-private') return;
+    const msg = completion?.choices?.[0]?.message;
+    if (!msg || typeof msg.content !== 'string' || !msg.content) return;
+    const gated = await gateRoomReply({
+      draftText: msg.content, audienceTag,
+      callUpstream: filterCallUpstream, baseMessages: enrichedMessages,
+      privateList: readSettingsSync()?.privateIdentifiers,
+    });
+    msg.content = gated.text;
+    if (gated.blocked)        console.log(`[server] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+    else if (gated.rewritten) console.log(`[server] outgoing filter rewrote reply (audience=${audienceTag})`);
+  };
+
   // ── Tool-call loop (loop mode only) ──────────────────────────────
   // Internal provider re-calls do NOT pass through the /api/chat rate
   // limiter — one user message costs one request against the limit no
@@ -1114,25 +1142,6 @@ async function chatTurn(req, res, rec, priorTurn) {
     // wall-clock deadline (upstreamSignal).
 
     const thalamusEnvelope = buildThalamusEnvelope(enrichedResult, depth, injectedAt, timeAnchor);
-
-    // Pillar D: upstream caller for filter retries — bare text round-trip,
-    // no tool calls (tools are not needed for rewrite nudges). Bounded like any
-    // non-streaming call; filterOutgoingReply fails CLOSED (safe refusal) when
-    // this throws, so a stalled rewrite never lets the draft through.
-    const filterCallUpstream = async (msgs) => {
-      const r = await fetch(upstreamUrl, {
-        method:  'POST',
-        headers: authHeaders,
-        body:    JSON.stringify({ model: payload.model, messages: msgs, stream: false }),
-        signal:  upstreamSignal(clientSignal),
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(`upstream ${r.status}: ${t.slice(0, 200)}`);
-      }
-      const d = await r.json();
-      return d?.choices?.[0]?.message?.content ?? '';
-    };
 
     // ── Non-streaming loop ─────────────────────────────────────────
     if (!stream) {
@@ -1238,27 +1247,10 @@ async function chatTurn(req, res, rec, priorTurn) {
         if (roundCapHit) data._roundCapHit = true;
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
-        // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
-        // ward-private fast-paths immediately. Mutates data.choices[0].message
-        // in-place when the filter rewrites or replaces the reply.
-        if (audienceTag !== 'ward-private') {
-          const draftText = data.choices?.[0]?.message?.content ?? '';
-          if (draftText) {
-            const filtered = await filterOutgoingReply({
-              draftText, audienceTag,
-              callUpstream: filterCallUpstream,
-              baseMessages: enrichedMessages,
-            }).catch(err => {
-              console.error('[server] outgoing filter failed (passing through):', err?.message ?? err);
-              return { text: draftText, blocked: false };
-            });
-            if (filtered.text !== draftText && data.choices?.[0]?.message) {
-              data.choices[0].message.content = filtered.text;
-              if (filtered.blocked) console.log(`[server] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
-              else                  console.log(`[server] outgoing filter rewrote reply (audience=${audienceTag})`);
-            }
-          }
-        }
+        // The room gate: the Pillar D semantic filter, then the keep-between-us
+        // swap. Non-ward-private rooms only; ward-private fast-paths
+        // immediately. Mutates data.choices[0].message in place.
+        await gateNonStreamReply(data);
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
@@ -1648,6 +1640,10 @@ async function chatTurn(req, res, rec, priorTurn) {
       try { parsed = JSON.parse(text); } catch { parsed = null; }
       const choice = parsed?.choices?.[0];
       if (choice?.message && choice.finish_reason !== 'length') foldReasoningIntoContent(choice.message);
+      // The same room gate as the tool loop. A shared-room turn with tools off
+      // (a voice call in a group, say) lands here, and until 0.14.110 this
+      // path had no outgoing filter at all.
+      if (parsed) await gateNonStreamReply(parsed);
     }
     if (rec && parsed && upstream.ok) {
       await rec.finish(stripLlmTimestamps(extractTurnReply(parsed.choices?.[0] ?? {})));
@@ -4821,6 +4817,51 @@ app.post('/api/trackers/:id/items/use', async (req, res) => {
   catch { res.json({ ok: true, ...used }); }
 });
 
+// ── Keep between us + held relays (outgoing-tripwire.js / held-relays.js) ──
+// My human's list of things that never leave our private conversations. It
+// lives in settings.json under `privateIdentifiers`, is read only by code, and
+// is never put in a prompt; the page reads it here, not through the synced
+// settings. Each entry comes back with a few spellings it will catch.
+const privateListView = (list) => normalizePrivateList(list).map(entry => ({ entry, variants: variantExamples(entry) }));
+
+app.get('/api/private-identifiers', (_req, res) => {
+  res.json({ ok: true, items: privateListView(readSettingsSync()?.privateIdentifiers) });
+});
+
+app.put('/api/private-identifiers', async (req, res) => {
+  const raw = req.body?.items;
+  if (!Array.isArray(raw)) return badRequest(res, 'items (array of strings) is required');
+  const w = await writeSettings({ privateIdentifiers: normalizePrivateList(raw) });
+  if (!w.ok) return res.status(500).json({ ok: false, error: w.error ?? w.code });
+  res.json({ ok: true, items: privateListView(w.settings.privateIdentifiers) });
+});
+
+// Relays the tripwire held. Only my human releases one (this, or `!send` in
+// their Discord DM); I have no tool for it.
+const heldRelayRunners = {
+  list: () => listHeldRelays(),
+  send: (id) => releaseHeldRelay(id, { send: relayToDiscord, mirror: enqueueAndDispatch, privateList: readSettingsSync()?.privateIdentifiers }),
+  drop: (id) => dropHeldRelay(id, { mirror: enqueueAndDispatch }),
+};
+
+app.get('/api/held-relays', async (_req, res) => {
+  try { res.json({ ok: true, items: await heldRelayRunners.list() }); }
+  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+app.post('/api/held-relays/:id/send', async (req, res) => {
+  const r = await heldRelayRunners.send(req.params.id).catch(err => ({ ok: false, code: 'error', error: err.message }));
+  if (!r.ok) return res.status(r.code === 'not-found' ? 404 : 409).json({ ok: false, code: r.code, text: releaseRefusalText(r) });
+  console.log(`[relay] my human sent a held message to ${r.record.targetName} (${r.record.id})`);
+  res.json({ ok: true, text: `Sent it to ${r.record.targetName}.` });
+});
+
+app.post('/api/held-relays/:id/drop', async (req, res) => {
+  const r = await heldRelayRunners.drop(req.params.id).catch(err => ({ ok: false, code: 'error', error: err.message }));
+  if (!r.ok) return res.status(r.code === 'not-found' ? 404 : 409).json({ ok: false, code: r.code, text: releaseRefusalText(r) });
+  res.json({ ok: true, text: 'Dropped it.' });
+});
+
 // ── Graph ─────────────────────────────────────────────────────────────────
 app.get('/api/entity/graph/nodes', async (req, res) => {
   const { type, limit, offset } = req.query;
@@ -6474,6 +6515,9 @@ const httpServer = app.listen(PORT, HOST, async () => {
     release: (id) => runQuarantineReleaseNow(id),
     discard: async (id) => ({ ok: true, discarded: !!(await discardQuarantine(String(id))) }),
   });
+  // `!held` / `!send <id>` in my human's DM — the Discord twin of the chat's
+  // Send it / Drop it buttons, through the same runners.
+  setHeldRelayRunners(heldRelayRunners);
   // Bot-DM push channel: when the gateway can DM my human (token + ward's
   // Discord user id configured), every outbox item — reminders, event
   // alerts, warm reach-outs, triage check-ins — reaches them as a real
@@ -7527,7 +7571,19 @@ function startReachout() {
     },
     // Villager reach → DM via the bot token, always mirrored to my human
     // (no covert contact — the same guarantee relay_message carries).
-    deliverVillagerReach: async ({ villager, message }) => {
+    deliverVillagerReach: async ({ villager, message: draft }) => {
+      // A warm reach-out leaves my human's room like a relay does, so it gets
+      // the same two checks: nothing stored as private for them (the Pillar D
+      // search; a hit means it isn't sent, logged as a failed delivery), and
+      // my human's keep-between-us list swapped for "[private]".
+      let roomTag = 'ward-private';
+      try {
+        const reg = await getVillageRegistry();
+        roomTag = audienceTagFor({ participants: [{ id: villager.id, name: villager.name }] }, reg);
+        const restricted = await searchMemoryRestricted({ query: String(draft).slice(0, 2000), roomAudience: roomTag });
+        if (restricted?.hit) return { ok: false, error: `held: something in it isn't cleared for ${villager.name}` };
+      } catch (err) { console.warn('[reachout] outgoing check failed (sending with the list swap only):', err?.message ?? err); }
+      const message = redactProtected(draft, readSettingsSync()?.privateIdentifiers).text;
       const res = await relayToDiscord({ recipientUserId: villager.discordId, message });
       if (!res?.ok) return res ?? { ok: false, error: 'relay failed' };
       await enqueueAndDispatch({

@@ -3208,6 +3208,7 @@ function appendMessageEl(msg, index) {
     : renderMarkdown(displayContent);
   const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
   if (Number.isInteger(index)) el.dataset.msgIndex = String(index);
+  if (msg.heldRelayId) appendHeldRelayActions(el, msg.heldRelayId, msg.heldRelaySendable);
   const capturedContent = msg.content;
   wireCopyButton(copyBtn, () => capturedContent);
   wireSpeakButton(speakBtn, () => capturedContent);
@@ -6685,6 +6686,8 @@ function init() {
   startOutboxPolling();
 
   // Trusted contacts (M12c) — manage list in the sidebar section.
+  $('private-identifiers-save')?.addEventListener('click', savePrivateIdentifiers);
+
   if ($('contact-add')) {
     $('contact-add').addEventListener('click', addTrustedContact);
     renderTrustedContacts();
@@ -10564,6 +10567,84 @@ function keSwitchTab(tab) {
   if (tab === 'remember')   keOpenRememberMap();
   if (tab === 'snapshots')  keLoadSnapshots();
   if (tab === 'sessions')   refreshLogsList();
+  if (tab === 'prompts')    loadPrivateIdentifiers();
+}
+
+// ── Keep between us (outgoing-tripwire.js) ──────────────────────────
+// My human's own list, read and saved through its own endpoint, never through
+// the synced settings: the page keeps no copy of it in state or localStorage.
+function renderPrivateIdentifierVariants(items) {
+  const ul = $('private-identifiers-variants');
+  if (!ul) return;
+  ul.innerHTML = (items || []).map(it =>
+    `<li><strong>${esc(it.entry)}</strong> also catches ${esc(it.variants.slice(1).join(', '))}</li>`).join('');
+}
+
+async function loadPrivateIdentifiers() {
+  const ta = $('private-identifiers');
+  if (!ta || document.activeElement === ta) return;
+  try {
+    const data = await (await fetch('/api/private-identifiers')).json();
+    ta.value = (data.items || []).map(i => i.entry).join('\n');
+    renderPrivateIdentifierVariants(data.items);
+  } catch { /* the field stays as it was */ }
+}
+
+async function savePrivateIdentifiers() {
+  const ta = $('private-identifiers'), status = $('private-identifiers-status');
+  if (!ta) return;
+  if (status) status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/private-identifiers', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: ta.value.split('\n') }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) throw new Error(data.error || r.status);
+    ta.value = data.items.map(i => i.entry).join('\n');
+    renderPrivateIdentifierVariants(data.items);
+    if (status) status.textContent = 'Saved.';
+  } catch (err) {
+    if (status) status.textContent = `Not saved: ${err?.message ?? err}`;
+  }
+  setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+}
+
+// A held relay (held-relays.js): Send it / Drop it under the notice in the
+// chat. Shown again after a reload; a hold that's already settled just says so
+// when clicked.
+function appendHeldRelayActions(el, id, sendable) {
+  if (!el || !id) return;
+  const row = document.createElement('div');
+  row.className = 'held-relay-actions';
+  const msg = document.createElement('span');
+  msg.className = 'field-hint';
+  msg.setAttribute('aria-live', 'polite');
+  const act = async (verb, btns) => {
+    btns.forEach(b => { b.disabled = true; });
+    try {
+      const r = await fetch(`/api/held-relays/${encodeURIComponent(id)}/${verb}`, { method: 'POST' });
+      const data = await r.json().catch(() => ({}));
+      msg.textContent = data.text || (r.ok ? 'Done.' : `Couldn't (${r.status}).`);
+      if (!r.ok && data.code === 'send-failed') btns.forEach(b => { b.disabled = false; });
+    } catch (err) {
+      msg.textContent = `Couldn't: ${err?.message ?? err}`;
+      btns.forEach(b => { b.disabled = false; });
+    }
+  };
+  const buttons = [];
+  if (sendable !== false) {
+    const send = document.createElement('button');
+    send.type = 'button'; send.className = 'btn-secondary'; send.textContent = 'Send it as written';
+    buttons.push(send);
+  }
+  const drop = document.createElement('button');
+  drop.type = 'button'; drop.className = 'btn-ghost'; drop.textContent = 'Drop it';
+  buttons.push(drop);
+  if (sendable !== false) buttons[0].addEventListener('click', () => act('send', buttons));
+  drop.addEventListener('click', () => act('drop', buttons));
+  row.append(...buttons, msg);
+  (el.querySelector('.msg-bubble') || el).appendChild(row);
 }
 
 function keSetDetail(paneId, html) { $(paneId).innerHTML = html; }
@@ -14769,6 +14850,10 @@ function formatOutboxAsMessageContent(item) {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
   }
+  if (item.kind === 'relay_held') {
+    const head = title ? `**${title}**` : '';
+    return head && body ? `${head}\n\n${body}` : head || body;
+  }
   if (item.kind === 'event_alert' || item.kind === 'weather_alert') {
     // Title carries the event/heads-up name, body the code-built detail — both.
     const head = title ? `**${title}**` : '';
@@ -14805,6 +14890,10 @@ async function injectOutboxAsChatMessage(item) {
   const timestamp = item.ts || new Date().toISOString();
   const { el, bubble, copyBtn, speakBtn } = appendAssistantShell(timestamp);
   bubble.innerHTML = renderMarkdown(content);
+  const held = item.kind === 'relay_held' && item.heldRelayId
+    ? { heldRelayId: item.heldRelayId, heldRelaySendable: item.sendable !== false }
+    : {};
+  if (held.heldRelayId) appendHeldRelayActions(el, held.heldRelayId, held.heldRelaySendable);
   if (spokenOnCall) {
     // A quiet marker so a message that appeared without a ping reads as "you
     // already heard this on the call", not a glitch.
@@ -14827,6 +14916,7 @@ async function injectOutboxAsChatMessage(item) {
     proactive:  true,
     outboxKind: item.kind,
     id:         msgId,
+    ...held,
   });
   el.dataset.msgIndex = String(state.messages.length - 1);
   saveHistory();

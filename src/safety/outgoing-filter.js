@@ -13,6 +13,7 @@
 //   safe-refusal="I can't share that here…"
 
 import { searchMemoryRestricted } from '../../thalamus.js';
+import { redactProtected } from '../village/outgoing-tripwire.js';
 
 export const FILTER_THRESHOLD    = 0.70;
 export const FILTER_RETRY_BUDGET = 3;
@@ -68,4 +69,31 @@ export async function filterOutgoingReply({ draftText, audienceTag, callUpstream
     }
   }
   return { text: FILTER_SAFE_REFUSAL, blocked: true };
+}
+
+/**
+ * Everything a reply goes through before it reaches a room that isn't my
+ * human's own: the semantic filter above (stored private content), then my
+ * human's keep-between-us list, with each match swapped for "[private]"
+ * (outgoing-tripwire.js). The list catches what was never stored as private —
+ * a name in an identity file, a code pasted in chat. One function so every
+ * room path (Discord replies, the web/voice non-stream paths) runs both.
+ *
+ * A filter error passes the draft through (as before); the list swap always
+ * runs, on whatever text goes out, including the safe refusal.
+ *
+ * @returns {Promise<{text: string, blocked: boolean, rewritten: boolean, swapped: number}>}
+ */
+export async function gateRoomReply({ draftText, audienceTag, callUpstream, baseMessages, privateList = [], checkRestricted, log = console }) {
+  if (audienceTag === 'ward-private' || !draftText) return { text: draftText, blocked: false, rewritten: false, swapped: 0 };
+  let filtered;
+  try {
+    filtered = await filterOutgoingReply({ draftText, audienceTag, callUpstream, baseMessages, ...(checkRestricted ? { checkRestricted } : {}) });
+  } catch (err) {
+    log.error?.(`[outgoing] filter failed (passing through): ${err?.message ?? err}`);
+    filtered = { text: draftText, blocked: false };
+  }
+  const { text, hits } = redactProtected(filtered.text, privateList);
+  if (hits.length) log.log?.(`[outgoing] swapped ${hits.length} keep-between-us match${hits.length === 1 ? '' : 'es'} for "[private]" (audience=${audienceTag})`);
+  return { text, blocked: filtered.blocked, rewritten: filtered.text !== draftText, swapped: hits.length };
 }

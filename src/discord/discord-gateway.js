@@ -76,7 +76,8 @@ import { recordThreat } from '../safety/threat-tracker.js';
 import { recordUserActivity } from '../sessions/last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from '../safety/wait-streak.js';
 import { recordKnock, recordLocationKnock, recordServer } from '../village/knocks.js';
-import { filterOutgoingReply } from '../safety/outgoing-filter.js';
+import { gateRoomReply } from '../safety/outgoing-filter.js';
+import { releaseRefusalText } from '../village/held-relays.js';
 import { enqueueOutbox, acknowledgePendingByKind } from '../safety/outbox.js';
 import { writeSessionLog as writeSessionLogShared } from '../sessions/session-log.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY, SESSION_IDLE_ROTATE_MS } from '../sessions/session-bindings.js';
@@ -1509,6 +1510,48 @@ async function handleConsolidateCommand(gw, { msg, which }) {
   }
 }
 
+// Ward-only `!held` / `!held send <id>` / `!held drop <id>`, plus `!send <id>`
+// as the short form the hold notice offers — the DM twin of the web chat's
+// Send it / Drop it buttons on a held relay (held-relays.js). Mechanical, no
+// LLM turn; gated by isWard at the call site, so a villager typing `!send` is
+// just chat. This is the only way besides the web button that a hold gets
+// released: there is no tool for me to do it.
+export function parseHeldCommand(content) {
+  const text = String(content ?? '').trim();
+  const short = /^!send\s+(\S+)\s*$/i.exec(text);
+  if (short) return { action: 'send', id: short[1] };
+  const m = /^!held(?:\s+(\S+))?(?:\s+(\S+))?\s*$/i.exec(text);
+  if (!m) return null;
+  const sub = (m[1] || '').toLowerCase();
+  if (!sub || sub === 'list') return { action: 'list' };
+  if (/^(send|ok|okay)$/.test(sub)) return { action: 'send', id: m[2] || null };
+  if (/^(drop|discard|no)$/.test(sub)) return { action: 'drop', id: m[2] || null };
+  return { action: 'help' };
+}
+
+async function handleHeldCommand(gw, { msg, which }) {
+  const say = (text) => sendChannelMessage(gw.config.token, msg.channel_id, text).catch(() => {});
+  if (which.action === 'help') {
+    return say('Messages I held instead of sending:\n• `!held` — list them.\n• `!send <id>` — send one as written.\n• `!held drop <id>` — drop one.');
+  }
+  if (!gw.heldRelayRunners) return say('I can\'t reach my held messages right now, that wiring isn\'t available.');
+  try {
+    if (which.action === 'list') {
+      const rows = await gw.heldRelayRunners.list();
+      if (!rows.length) return say('Nothing held right now.');
+      const lines = rows.slice(0, 15).map(r =>
+        `• \`${r.id}\` — to ${r.targetName}${r.sendable ? '' : ' _(has something from your keep-between-us list, can\'t go as is)_'}`);
+      return say(`Held messages — \`!send <id>\` to send one as written, \`!held drop <id>\` to drop it:\n${lines.join('\n')}`);
+    }
+    if (!which.id) return say(`Which one? \`!${which.action === 'send' ? 'send' : 'held drop'} <id>\` (\`!held\` lists them).`);
+    const r = which.action === 'send' ? await gw.heldRelayRunners.send(which.id) : await gw.heldRelayRunners.drop(which.id);
+    if (!r?.ok) return say(releaseRefusalText(r));
+    return say(which.action === 'send' ? `Sent it to ${r.record.targetName}.` : 'Dropped it.');
+  } catch (err) {
+    return say(`Couldn't do that: ${err?.message ?? 'something went wrong'}.`);
+  }
+}
+
 // Ward-only `!quarantine [release <id>|discard <id>]` — the DM twin of the UI's
 // "Review held memories". Bare `!quarantine` lists what the memory-integrity gate
 // set aside as possible tampering; `release <id>` writes a false positive to memory
@@ -2109,24 +2152,24 @@ async function handleConnectionInteraction(gw, d) {
 }
 
 async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [], signal, turnId = null }) {
-  // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
-  // fast-paths; every other room is filtered before I say anything.
+  // The room gate (outgoing-filter.js gateRoomReply): the Pillar D semantic
+  // filter, then my human's keep-between-us list swapped for "[private]".
+  // Ward-private (the ward's own DM) fast-paths; every other room goes
+  // through it before I say anything.
   let reply = rawReply;
   if (audienceTag !== 'ward-private' && rawReply) {
-    const filtered = await filterOutgoingReply({
+    const gated = await gateRoomReply({
       draftText:    rawReply,
       audienceTag,
       // Bounded like every turn call; a timed-out rewrite fails CLOSED to the
       // filter's safe refusal, never through to the unfiltered draft.
       callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings, signal }),
       baseMessages: apiMessages,
-    }).catch(err => {
-      console.error('[discord] outgoing filter failed (passing through):', err?.message ?? err);
-      return { text: rawReply, blocked: false };
+      privateList:  settings?.privateIdentifiers,
     });
-    reply = filtered.text;
-    if (filtered.blocked)        console.log(`[discord] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
-    else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
+    reply = gated.text;
+    if (gated.blocked)        console.log(`[discord] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+    else if (gated.rewritten) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
   }
 
   reply = stripLlmTimestamps(reply);
@@ -3373,6 +3416,7 @@ const gw = {
   userInfo: new Map(),          // userId → { id, username, global_name } — so a voice speaker reads as a NAME, not a raw snowflake the LLM can't tell apart
   consolidationRunners: null,   // { ponderings, memory } from server.js — backs the ward's !consolidate commands
   quarantineRunners: null,      // { list, release, discard } from server.js — backs the ward's !quarantine command
+  heldRelayRunners: null,       // { list, send, drop } from server.js — backs the ward's !held / !send commands
 };
 
 /** Cache what Discord tells us about a user (from GUILD_CREATE members, seeded
@@ -3446,6 +3490,12 @@ export function setConsolidationRunners(runners) {
 /** server.js hands the memory-quarantine runners here so the ward's `!quarantine`
  *  DM command can list / release / discard held memories — the same actions as the
  *  UI's "Review held memories". Each runner is async → a result object. */
+/** server.js hands the held-relay runners here so the ward's `!held` / `!send`
+ *  DM commands use the same send/drop as the web chat's buttons. */
+export function setHeldRelayRunners(runners) {
+  gw.heldRelayRunners = (runners && ['list', 'send', 'drop'].every(k => typeof runners[k] === 'function')) ? runners : null;
+}
+
 export function setQuarantineRunners(runners) {
   gw.quarantineRunners = (runners && typeof runners.list === 'function' && typeof runners.release === 'function' && typeof runners.discard === 'function')
     ? runners : null;
@@ -3739,6 +3789,8 @@ function onDispatch(t, d) {
           if (consolidate) { await handleConsolidateCommand(gw, { msg: d, which: consolidate }); return; }
           const quarantine = parseQuarantineCommand(d.content);
           if (quarantine) { await handleQuarantineCommand(gw, { msg: d, which: quarantine }); return; }
+          const held = parseHeldCommand(d.content);
+          if (held) { await handleHeldCommand(gw, { msg: d, which: held }); return; }
         }
 
         // Text-in-voice interleave (Pass 4): if a voice call is live in THIS
