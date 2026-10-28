@@ -44,7 +44,7 @@ test('a plainly worded care request saved with high_care reaches Phylactery as h
   const args = saveArgs('memory_create');
   assert.equal(args.care_weight, 'high');
   assert.equal(args.register, 'ward');
-  assert.equal(out, 'ok');
+  assert.match(out, /^ok: /, 'a success says what it saved (A2)');
 });
 
 test('without high_care nothing is sent, so the wording still decides', async () => {

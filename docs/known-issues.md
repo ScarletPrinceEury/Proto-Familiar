@@ -301,8 +301,10 @@ Each time, once shown the record, it corrected itself plainly and adopted a rule
 So the gap is the missing record, not the willingness.
 
 Two things in the system made this easier:
-- Every write answered just "ok" (quietOk collapses the success text), so the
-  results carried no account of WHAT happened.
+- ~~Every write answered just "ok" (quietOk collapses the success text), so the
+  results carried no account of WHAT happened.~~ Fixed 0.14.113: a success
+  reads "ok: <what happened>" in the turn that made the call (`okResult`), and
+  the next turn's record still just says "ok".
 - Identity edits can't be checked within the turn (see "can't read its own
   identity files mid-turn" above).
 

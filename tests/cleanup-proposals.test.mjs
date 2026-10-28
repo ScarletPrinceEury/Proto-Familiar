@@ -111,7 +111,7 @@ test('a refused apply says nothing changed; a saved-but-uncut one says so plainl
 });
 
 test('dismiss and list reach Phylactery; list can include what I decided', async () => {
-  assert.equal(await run('dismiss_cleanup_proposal', { id: 'prop-likes-tea-x7' }), 'ok');
+  assert.equal(await run('dismiss_cleanup_proposal', { id: 'prop-likes-tea-x7' }), 'ok: Dismissed prop-likes-tea-x7; the passage stays where it is.');
   assert.deepEqual(sent('identity_cleanup_dismiss'), { id: 'prop-likes-tea-x7' });
   reply = (name) => name === 'identity_cleanup_proposals' ? { items: [TEA] } : { ok: true };
   assert.match(await run('list_cleanup_proposals', {}), /\[id: prop-likes-tea-x7\]/);

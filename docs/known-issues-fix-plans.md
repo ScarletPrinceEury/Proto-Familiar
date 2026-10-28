@@ -612,6 +612,8 @@ version of "rules outlive their cause".
   full text is now always there.
 - Tests.
 
+**Built (0.14.113).** `quietOk` was renamed `okResult`, since it isn't quiet any more and the old name would mislead the next reader. Rendering: `ok: <text>`, the id added only when the text doesn't already carry it, a bare `ok` for an empty success.
+
 ### A3. Recall results cut mid-word
 
 #### A3.1 The problem, and pass 1

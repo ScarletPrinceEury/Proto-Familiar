@@ -48,7 +48,7 @@ test('a quantity reads as "4 pcs", never "[object Object]"', () => {
 
 test('what I hear after taking something off', () => {
   const quiet = trackerUseResultText({ ok: true, removed: true, name: 'eggs' }, 'eggs');
-  assert.equal(quiet.__quietOk, true);
+  assert.equal(quiet.__okResult, true);
   assert.match(quiet.fullText, /Took eggs off the list/);
   assert.equal(trackerUseResultText({ ok: true, removed: false, name: 'eggs', left: { value: 4, unit: 'pcs' } }, 'eggs'), 'eggs: 4 pcs left.');
   const miss = trackerUseResultText({ ok: false, code: 'no_item', items: ['eggs', 'oat milk'] }, 'egg');

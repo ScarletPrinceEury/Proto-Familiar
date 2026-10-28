@@ -116,7 +116,7 @@ test('registering and retiring a stamp reach Phylactery', async () => {
   const out = await run('add_identity_canary', { category: 'custom', filename: 'notes.md', stamp: TAIL, label: 'tail', marks_end: true });
   assert.deepEqual(calls.find(c => c.name === 'identity_canary_add').args, { category: 'custom', filename: 'notes.md', text: TAIL, at_end: true, label: 'tail' });
   assert.match(out, /^Registered canary stamp "tail" \[id: canary-tail-b2\] in custom\/notes\.md, as the end of my identity\./);
-  assert.equal(await run('retire_identity_canary', { id: 'canary-tail-b2' }), 'ok');
+  assert.equal(await run('retire_identity_canary', { id: 'canary-tail-b2' }), 'ok: Retired canary stamp canary-tail-b2; the app stops checking it. The file is untouched.');
   assert.deepEqual(calls.find(c => c.name === 'identity_canary_remove').args, { id: 'canary-tail-b2' });
   assert.match(await run('list_identity_canaries', {}), /My canary stamps \(2\):\n- "persona" \[id: canary-persona-a1\] in self\/my_persona\.md: fine/);
 });

@@ -25,7 +25,7 @@ test('save_to_tome with a tome name routes to addTomeEntryByName, not the defaul
   assert.equal(calls.named.length, 1);
   assert.equal(calls.named[0].name, 'Poems');
   assert.equal(calls.def.length, 0, 'default path not used when a tome is named');
-  assert.match(out, /named-1/, 'terse quietOk carries the entry id');
+  assert.match(out, /named-1/, 'terse okResult carries the entry id');
 });
 
 test('save_to_tome creating a new named tome routes with created:true', async () => {
