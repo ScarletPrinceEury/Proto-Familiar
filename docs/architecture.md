@@ -637,7 +637,24 @@ Currently owns:
   without spawning MCP children or touching the real outbox. Both target
   kinds are made enumerable to the Familiar by `village_lookup`, which
   (V8) reports a **Places** roster + per-villager Discord-reachability so
-  the Familiar can always name a valid relay target.
+  the Familiar can always name a valid relay target. **The tripwire
+  (0.14.110, `src/village/outgoing-tripwire.js` + `held-relays.js`)** runs
+  first, after a referral code that was my human's legal name in handle form
+  went to a group channel. `checkRelay` tests the message against my human's
+  keep-between-us list (`privateIdentifiers` in settings.json, edited in
+  Knowledge → Prompts, read only by code, never in a prompt; matched with
+  separator/order/trailing-digit variants) and then a shape check (a name
+  welded into a handle, a code or id, contact info, an invite/referral link,
+  known names welded with digits). A hit → `holdRelay` keeps it in
+  `tomes/.held-relays.json` (7-day life), mirrors a `relay_held` outbox item
+  (chat notice with **Send it as written** / **Drop it**, Discord push with
+  `!send <id>`), and tells me plainly. Only my human releases a hold
+  (`POST /api/held-relays/:id/send|drop`, `!send <id>` / `!held` in their DM
+  — I have no tool for it, so text I was handed can't talk me into it). A
+  list match is never sendable as-is, is never shown back (the notice
+  swaps it for "[private]"), and the list is checked again at release. A
+  failed check holds (fails closed). The restricted-memory search stays as
+  the second gate.
 - **Web tools (opt-in, 0.7.0-alpha; `look_up`/`web_search` split 0.7.19-alpha)** —
   `look_up` / `web_search` / `read_webpage`, thin executors that delegate
   to `websearch.js` (SSRF guard, timeout,
@@ -862,6 +879,23 @@ Currently owns:
   the `settings-store.js` leaf module (so thalamus, which cerebellum imports,
   can share it without a cycle); cerebellum re-exports `readSettingsSync` so
   server.js's and the loops' imports are unchanged.
+- **`writeSettings` (`settings-write.js`, 0.14.109)** — the one writer for
+  settings.json: one lock, atomic write, refuses to overwrite a file that won't
+  parse, and bumps a per-key revision (`_revisions: {key: n}` in the file) on
+  every changed key. A patch may be a function of the current settings (a
+  read-modify-write under the lock). Every writer goes through it: the
+  `PUT /api/settings` route (via `putSettings`), `writeSettingsPatch` (my own
+  settings tools), the Discord `!connection` console (`patchWardSettings`) and
+  the voice picker. **Why:** pages used to PUT their whole copy of the synced
+  settings, so a page holding an old copy wiped connections saved elsewhere
+  (2026-10-28). Now a page (`flushSettings` in public/app.js) sends only the
+  keys that differ from `_settingsBase` (the server's copy as it last saw it),
+  never before its first read, with the revision each was based on. A key that
+  moved since comes back 409 `conflict`; the page folds the server's copy in
+  (`rebaseSettingValue`: connections merge by id via `mergeConnectionsByIntent`,
+  other keys keep the page's fresh edit) and sends again. A body without `base`
+  is a page running the old code and gets 409 `stale-page`. Open tabs re-read
+  settings when they become visible and every 5 minutes.
 
 These are the highest-stakes code paths in the system. Behavioral
 changes here (not relocations) require explicitly asking the human
@@ -1494,10 +1528,10 @@ a room) and intercepted before any turn, beside `!update`/`!call`.
     active connection (`primaryConnectionId`) and route each background
     feature (`featureConnections`, the six `connectionForFeature` keys,
     mirroring `FEATURE_CONNECTIONS` in `public/app.js` — a test guards the
-    two against drift). Writes go through `patchWardSettings`: the same
-    locked, atomic, wholesale-top-level `mergeSettings` write the HTTP
-    `PUT /api/settings` uses, so a Discord change and a web change can't
-    tear the file. `pfconn:*` custom_ids; a `__default__` sentinel clears a
+    two against drift). Writes go through `patchWardSettings` → `writeSettings`
+    (settings-write.js), the same locked, atomic, revision-bumping writer the
+    HTTP `PUT /api/settings` uses, so a Discord change and a web change can't
+    tear the file or overwrite each other. `pfconn:*` custom_ids; a `__default__` sentinel clears a
     feature override back to the primary. A **Reasoning effort** submenu
     (0.11.20) sets each connection's `reasoningEffort` (Default/Low/High/Max/Off
     — the Discord twin of the connection-editor dropdown) by rewriting the whole
@@ -2147,9 +2181,18 @@ Phylactery is the sole canonical store.
 
 ### `outgoing-filter.js` — Pillar D outgoing gate
 
-Post-response, pre-send semantic gate for non-ward-private rooms. Runs in the
-non-streaming tool-call loop path in `server.js` and in the Discord reply path.
-Streaming replies bypass the filter (content is already in-flight as deltas).
+Post-response, pre-send semantic gate for non-ward-private rooms. Every room
+path goes through **`gateRoomReply`** (0.14.110): the filter below, then my
+human's keep-between-us list swapped for "[private]" (`redactProtected`,
+outgoing-tripwire.js), which catches what was never stored as private. It runs
+in the Discord reply path (`deliverReply`) and in BOTH non-stream `/api/chat`
+paths: the tool loop and the raw path (a shared-room voice turn with tools off,
+which had no filter at all before 0.14.110). The rewrite caller goes through
+`callProviderChat` (RULE A; the raw fetch it replaced had no cap and read
+`.content` raw). Warm reach-outs to villagers get the restricted search (a hit
+isn't sent) and the list swap in `deliverVillagerReach`. Streaming replies
+bypass the gate (content is already in-flight as deltas) — a web chat with
+others present streams, so it gets neither; that's the known remaining gap.
 
 **Flow:**
 1. If `audienceTag === 'ward-private'`, return immediately — no check needed.

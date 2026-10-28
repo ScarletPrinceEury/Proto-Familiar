@@ -4336,3 +4336,9 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   color: var(--text);
   font-weight: 600;
 }
+
+/* A held relay's Send it / Drop it row (held-relays.js). */
+.held-relay-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.held-relay-actions .field-hint { margin: 0; }
+/* Spellings the keep-between-us list also catches. */
+.private-variants { margin: 6px 0 0; padding-left: 18px; }

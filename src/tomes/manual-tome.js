@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 23;
+export const MANUAL_TOME_VERSION = 24;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -67,7 +67,7 @@ export function buildManualTome() {
 
   add(
     ['how do you work', 'what can you do', 'help', 'guide me', 'your functions', 'manual', 'how do I use you'],
-    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, my identity files & standing facts, care facts, reminders & scheduling, trackers (logging things over time), my calendar sync, browsing the web, which model I run on, tomes/lorebook, my self-directed habits (pondering, warm reach-outs, noticing), and how to check what I actually did. Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
+    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, keeping things between us, my identity files & standing facts, care facts, reminders & scheduling, trackers (logging things over time), my calendar sync, browsing the web, which model I run on, tomes/lorebook, my self-directed habits (pondering, warm reach-outs, noticing), and how to check what I actually did. Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
     { comment: 'Overview / help' },
   );
 
@@ -117,6 +117,12 @@ export function buildManualTome() {
     ['remind', 'reminder', 'schedule', 'routine', 'appointment', 'event', 'wake me', 'tell me later', 'set a timer'],
     `[Manual: Reminders & scheduling] {{user}} can just ask me to remind them of something at a time or as part of a daily phase, and I'll set it. Reminders and events are managed in the temporal/schedule editor in the app; I can add, list, and cancel them by asking. Events can carry a lead-time "coming up" alert. For a recurring thing, cancelling one occurrence is different from ending the whole series — I'll ask which if it's ambiguous.`,
     { comment: 'Reminders & scheduling' },
+  );
+
+  add(
+    ['keep between us', 'private', 'held', 'held message', '!send', '!held', 'legal name', 'relay', 'pass on', 'referral', '[private]'],
+    `[Manual: Keeping things between us] {{user}} can list things that never leave our private chats, like a full legal name, an address or a code, under Knowledge → Prompts → "Keep between us". I never see that list. The app checks everything I say to other people for it, other spellings too (Robin_Smith01, robin.smith), and in a room it swaps a match for "[private]". When I pass a message on for {{user}}, the app also holds it if something looks like a name turned into a handle, a code or id, contact info, or an invite or referral link, and tells {{user}}. They can hit "Send it as written" under that notice in the chat, or reply \`!send <id>\` in their Discord DM (\`!held\` lists what's waiting, \`!held drop <id>\` drops one). I can't release a hold myself; I can send a new version without that bit. Something from the list never goes out as written from here; {{user}} can send that themselves.`,
+    { comment: 'Keeping things between us' },
   );
 
   add(

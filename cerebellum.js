@@ -37,6 +37,7 @@ import { slugCore, slugifyLabel } from './slug-ids.js';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { SETTINGS_FILE, readSettingsSync } from './settings-store.js';
+import { writeSettings } from './settings-write.js';
 
 import { resolveProviderUrl, connectionReady } from './providers.js';
 import { callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -118,6 +119,8 @@ import { CONTENT_TOPICS } from './src/memory/content-tags.js';
 import { normalizeTomeTag, checkTomeTag, peopleNames, newEntryTagFields } from './src/tomes/tome-tags.js';
 import { readTomeText } from './src/tomes/tome-reader.js';
 import { GATED_BY_ID_WRITES, gatedWriteRefusal } from './src/village/gated-writes.js';
+import { checkRelay, describeShapeHits, redactProtected } from './src/village/outgoing-tripwire.js';
+import { holdRelay } from './src/village/held-relays.js';
 import { resolveTomeMacros } from './src/tomes/tome-macros.js';
 import { bridgeEnabled, NOTE_MAX_CHARS } from './src/bridge/claude-code-mailbox.js';
 
@@ -132,25 +135,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export { readSettingsSync };
 
 /**
- * Merge a partial patch into settings.json — read-modify-write under the
- * SAME per-file lock the PUT /api/settings endpoint uses, so a Familiar-side
- * write (e.g. set_day_start_anchor) and a client sync can't clobber each
- * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
- * keys in `patch` change; everything else is preserved.
+ * Merge a partial patch into settings.json through the one settings writer
+ * (settings-write.js): the same lock the PUT uses, an atomic write, and a
+ * revision bump on each changed key so an open page that still holds the old
+ * value can't overwrite mine. `patch` may be a function of the current
+ * settings when it's a read-modify-write. Only the keys in it change.
  */
 async function writeSettingsPatch(patch = {}) {
-  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+  if (typeof patch !== 'function' && (!patch || typeof patch !== 'object' || Array.isArray(patch))) {
     return { ok: false, error: 'patch must be an object' };
   }
-  return withLock(SETTINGS_FILE, async () => {
-    let cur = {};
-    try { cur = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); } catch { /* first write */ }
-    const next = { ...cur, ...patch };
-    const tmp = SETTINGS_FILE + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
-    await fsp.rename(tmp, SETTINGS_FILE);
-    return { ok: true, settings: next };
-  });
+  return writeSettings(patch);
 }
 
 /**
@@ -561,16 +556,23 @@ async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
 // How an outbox item reads when pushed to my human's own Discord.
 // Exported so registered channel adapters (the gateway bot-DM) format
 // identically to the built-in webhook.
-export function formatItemForPush({ kind, title, body }) {
+export function formatItemForPush({ kind, title, body, meta, heldRelayId, sendable }) {
   const lead = kind === 'reminder'        ? '⏰'
              : kind === 'event_alert'     ? '🕑'
              : kind === 'triage'          ? '💭'
              : kind === 'outbound_alert'  ? '📤'
              : kind === 'crisis_resources' ? '🆘'
              : kind === 'page_watch'      ? '👁'
+             : kind === 'relay_held'      ? '✋'
              : '📨';
   const head = title ? `${lead} **${title}**` : lead;
-  return body ? `${head}\n\n${body}` : head;
+  // A held relay my human can okay from their DM (held-relays.js).
+  const held = heldRelayId ?? meta?.heldRelayId;
+  const canSend = sendable ?? meta?.sendable;
+  const tail = kind === 'relay_held' && held && canSend
+    ? `\n\nReply \`!send ${held}\` to send it as written, or \`!held drop ${held}\` to drop it.`
+    : '';
+  return (body ? `${head}\n\n${body}` : head) + tail;
 }
 
 // Registered adapter factories — modules that own a channel (e.g. the
@@ -1374,6 +1376,10 @@ const _toolDeps = {
   readTomes: null,
   // Notes I leave for Claude Code (claude-code-mailbox.js; backs message_claude_code).
   leaveNoteForClaudeCode: null,
+  // Where a relay the tripwire stopped waits for my human (held-relays.js).
+  holdRelay,
+  // My human's keep-between-us list. Read by code only, never put in a prompt.
+  readPrivateList: () => readSettingsSync()?.privateIdentifiers ?? [],
 };
 // save_to_tome's share tag: normalised + checked against the people it names
 // (my human, the village), so a note about someone can't go out as `self` or
@@ -1393,8 +1399,45 @@ async function tomeShareForSave(rawTag, text) {
   };
 }
 
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, readTomes, leaveNoteForClaudeCode } = {}) {
+// relay_message's hold: keep the message for my human, tell them (a chat
+// message with Send it / Drop it, and a Discord push with `!send <id>`), and
+// tell me plainly what happened. A list match is never shown back, to them or
+// to me: the copy they see has it swapped for "[private]".
+async function holdRelayForWard({ trip, targetName, delivery, message, privateList }) {
+  const reason = trip.hold;
+  let rec;
+  try {
+    rec = await _toolDeps.holdRelay({ targetName, delivery, message, reason, hits: trip.hits });
+  } catch (err) {
+    console.warn('[relay] could not keep the held message:', err?.message ?? err);
+    return `Didn't send it. I meant to hold it for {{user}} to okay, but couldn't save it (${err?.message ?? 'unknown error'}).`;
+  }
+  const why = reason === 'protected'
+    ? 'It had something from your keep-between-us list in it, so I didn\'t send it.'
+    : trip.failed
+      ? 'The check on it didn\'t run, so I held it. Want it sent as is? Hit Send it, or Drop it.'
+      : `${describeShapeHits(trip.hits).replace(/^./, c => c.toUpperCase())}. Want it sent as is? Hit Send it, or tell me to drop that bit.`;
+  const shown = redactProtected(message, privateList).text;
+  await _toolDeps.mirrorToWard({
+    kind:     'relay_held',
+    originId: `held:${rec.id}`,
+    title:    `Held off on messaging ${targetName}`,
+    body:     `${why}\n\nWhat I wrote: "${shown}"`,
+    meta:     { heldRelayId: rec.id, sendable: rec.sendable },
+  }).catch(err => console.warn('[relay] hold mirror failed:', err?.message ?? err));
+  if (reason === 'protected') {
+    return `Didn't send it. Part of it is on {{user}}'s keep-between-us list, so it can't go to ${targetName}. I can send it without that bit.`;
+  }
+  if (trip.failed) {
+    return `Didn't send it yet. The check on it didn't run, so it's waiting for {{user}} to okay it. I've asked them.`;
+  }
+  return `Didn't send it yet. ${describeShapeHits(trip.hits)}. I can send it without that bit, or {{user}} can okay it as it is — I've asked them.`;
+}
+
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, readTomes, leaveNoteForClaudeCode, holdRelay: holdRelayDep, readPrivateList } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
+  if (typeof holdRelayDep === 'function')        _toolDeps.holdRelay           = holdRelayDep;
+  if (typeof readPrivateList === 'function')     _toolDeps.readPrivateList     = readPrivateList;
   if (typeof leaveNoteForClaudeCode === 'function') _toolDeps.leaveNoteForClaudeCode = leaveNoteForClaudeCode;
   if (typeof addTomeEntryByName === 'function')  _toolDeps.addTomeEntryByName  = addTomeEntryByName;
   if (typeof createNamedTome === 'function')     _toolDeps.createNamedTome     = createNamedTome;
@@ -3044,12 +3087,12 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'relay_message',
-      description: "I pass a message from {{user}} to someone in their Village on Discord — \"tell Chen I'm running late\", \"let the group know I'll be offline tonight.\" I reach for this when {{user}} asks me to carry word to someone, or when reaching out on their behalf is the caring thing to do. I name the person by their name (I look them up in the Village) or name the place by its label. I write the message in my own voice as myself — I'm not impersonating {{user}}. {{user}} always sees exactly what I sent: every relay is mirrored back to them, never covert. I only relay what's right for that room — if something I'd say isn't cleared for the person I'm reaching, I hold it rather than spill it, and tell {{user}} so they can decide.",
+      description: "I pass a message from {{user}} to someone in their Village on Discord — \"tell Sam I'm running late\", \"let the group know I'll be offline tonight.\" I reach for this when {{user}} asks me to carry word to someone, or when reaching out on their behalf is the caring thing to do. I name the person by their name (I look them up in the Village) or name the place by its label. I write the message in my own voice as myself — I'm not impersonating {{user}}. {{user}} always sees exactly what I sent: every relay is mirrored back to them, never covert. If something in it shouldn't go to that person, the app holds it and tells {{user}}, and I hear back what happened.",
       parameters: {
         type: 'object',
         properties: {
-          to:      { type: 'string', description: "Who to reach: a villager's name (e.g. \"Chen\") or a location's label/key (e.g. \"Cozy Server #general\"). I resolve it against the Village." },
-          message: { type: 'string', description: 'The message to carry, in my own voice. Concrete and complete — the person on the other end has none of our conversation as context.' },
+          to:      { type: 'string', description: "Who to reach: a villager's name (e.g. \"Sam\") or a location's label/key (e.g. \"Cozy Server #general\"). I resolve it against the Village." },
+          message: { type: 'string', description: "In my own voice. I just pass on what they need to answer. No codes, ids, links, contact info or anyone's full real name. If {{user}} really wants one of those sent, it waits for their okay. They haven't seen our chat, so it has to make sense on its own." },
         },
         required: ['to', 'message'],
       },
@@ -4849,10 +4892,11 @@ export const TOOL_EXECUTORS = {
     const norm = normalizeAttributionEntry({ kind, ref, label });
     if (!norm.ok) return `I couldn't attribute that calendar: ${norm.error}.`;
     try {
-      const s = readSettingsSync();
-      const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? { ...s.gcalCalendarAttribution } : {};
-      map[id] = norm.entry;
-      const res = await writeSettingsPatch({ gcalCalendarAttribution: map });
+      const res = await writeSettingsPatch(s => {
+        const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? { ...s.gcalCalendarAttribution } : {};
+        map[id] = norm.entry;
+        return { gcalCalendarAttribution: map };
+      });
       if (res?.ok === false) return `I couldn't attribute that calendar: ${res.error ?? 'unknown error'}`;
       const e = norm.entry;
       const who = e.kind === 'ward' ? 'my human' : e.kind === 'ignore' ? 'ignored (won\'t sync)' : `${e.kind}${e.ref ? ` ${e.ref}` : ''}${e.label ? ` — "${e.label}"` : ''}`;
@@ -5466,9 +5510,27 @@ export const TOOL_EXECUTORS = {
       return `I don't know anyone or any place called "${to}". I can only relay to people or locations in the Village.`;
     }
 
+    // The tripwire (outgoing-tripwire.js): my human's keep-between-us list, and
+    // things shaped like a name in a handle, a code, contact info or an invite
+    // link. A hit holds the message for my human; only they can release it
+    // (held-relays.js). If the check itself fails, the message is held too.
+    let trip, privateList = [];
+    try {
+      privateList = _toolDeps.readPrivateList();
+      trip = checkRelay(message.trim(), {
+        privateList,
+        knownNames: [readSettingsSync()?.userName, ...(reg?.villagers ?? []).map(v => v.name)].filter(Boolean),
+      });
+    } catch (err) {
+      console.warn('[relay] tripwire check failed, holding the message:', err?.message ?? err);
+      trip = { hold: 'shape', hits: [], failed: true };
+    }
+    if (trip.hold) return holdRelayForWard({ trip, targetName, delivery, message: message.trim(), privateList });
+
     // Restricted-memory gate: never carry ward-private detail into a room
-    // that isn't cleared for it. Mirrors the Pillar D outgoing filter; fails
-    // OPEN (a search blip never blocks a benign relay).
+    // that isn't cleared for it. The same search, at the same threshold, as
+    // the Pillar D outgoing filter; fails OPEN (a search blip never blocks a
+    // benign relay — the tripwire above already ran).
     try {
       const check = await _toolDeps.searchRestricted({ query: message.slice(0, 2000), roomAudience: audienceTag });
       if (check?.hit) {

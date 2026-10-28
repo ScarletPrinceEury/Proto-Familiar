@@ -1301,6 +1301,16 @@
             <input type="text" id="web-speakers" placeholder="e.g. Claude Code" maxlength="200" spellcheck="false">
           </div>
           <p class="field-hint">Names of anyone else who sometimes types here, separated by commas. When someone is listed, a "Speaking as" choice appears next to the message box. Their messages are labelled with their name for your Familiar and filed under their name in memory, and they don't count as you: they aren't read for signs of distress and don't count as you being around. The choice goes back to you after every message.</p>
+          <div class="field" style="margin-top:12px">
+            <label for="private-identifiers">Keep between us</label>
+            <textarea id="private-identifiers" rows="3" autocomplete="off" spellcheck="false" placeholder="One per line, e.g. a full legal name, an address, a code"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary" id="private-identifiers-save" type="button">Save list</button>
+              <span id="private-identifiers-status" class="field-hint" aria-live="polite"></span>
+            </div>
+            <ul id="private-identifiers-variants" class="field-hint private-variants"></ul>
+          </div>
+          <p class="field-hint">Things that never leave our private conversations. Your Familiar never sees this list. The app checks every message going to someone else for anything on it, including spellings like Robin_Smith01 or robin.smith. In a room it swaps the match for "[private]"; a message your Familiar passes on for you is held instead, and stays unsent. Use full names or codes: a first name on its own would match everyone who shares it.</p>
           <p class="field-hint">Use <code>{{user}}</code> and <code>{{char}}</code> in prompts to insert these names. <code>{{elapsedTime}}</code> is the gap between the two most recent user messages in the chat history; <code>{{timeSinceLastSession}}</code> is the gap since the previous session ended.</p>
 
           <div class="field" style="margin-top:12px">
