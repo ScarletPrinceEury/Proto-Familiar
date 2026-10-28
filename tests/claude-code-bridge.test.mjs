@@ -13,9 +13,23 @@ import { tmpdir } from 'os';
 import path from 'path';
 
 const { createClaudeCodeBridge, BRIDGE_SPEAKER, BRIDGE_LOCATION } = await import('../src/bridge/claude-code-bridge.js');
+const { parseTurnEnvelope, toolRoundMessages, replyMessage } = await import('../src/sessions/turn-record.js');
 
 const CONN = { provider: 'openai', apiKey: 'test-key', model: 'model-a', baseUrl: null, reasoningEffort: 'high' };
 let sent, replyFor, dir, settings;
+
+// The real /api/chat records the turn as it goes (turn-record.js) and sends back
+// what it stored; this stub does the same from the envelope the bridge sent.
+const recordOf = (body, data) => {
+  const t = parseTurnEnvelope(body.turn, { isValidSessionId: (id) => typeof id === 'string' && id.length > 0 });
+  if (!t) return data;
+  const at = t.userMessage.timestamp;
+  const messages = [t.userMessage];
+  (data._toolRounds ?? []).forEach((r, round) => messages.push(...toolRoundMessages({ turnId: t.turnId, round, ...r, timestamp: at })));
+  const reply = data.choices?.[0]?.message?.content;
+  if (reply) messages.push(replyMessage({ id: t.replyMessageId, turnId: t.turnId, content: reply, timestamp: at }));
+  return { ...data, _turnRecord: { turnId: t.turnId, messages } };
+};
 
 const make = () => createClaudeCodeBridge({
   port: 1, readSettings: () => settings, connectionForFeature: () => CONN,
@@ -23,7 +37,7 @@ const make = () => createClaudeCodeBridge({
   fetchFn: async (_url, opts) => {
     const body = JSON.parse(opts.body);
     sent.push(body);
-    return { ok: true, status: 200, json: async () => replyFor(body) };
+    return { ok: true, status: 200, json: async () => recordOf(body, replyFor(body)) };
   },
 });
 
@@ -60,6 +74,23 @@ test('every turn is Claude Code\'s: speaker on the turn and the message, ward-pr
   assert.equal(b.reasoningEffort, 'high', "the connection's own effort");
   assert.equal(b.sessionInfo.sessionId, out.sessionId);
   assert.ok(b.max_tokens >= 4000, 'RULE A');
+  // The turn envelope (turn-record.js): the server records the turn from it.
+  const t = parseTurnEnvelope(b.turn, { isValidSessionId: () => true });
+  assert.ok(t, 'a valid envelope');
+  assert.equal(t.sessionId, out.sessionId);
+  assert.equal(t.userMessage.speaker, BRIDGE_SPEAKER);
+  assert.equal(t.userMessage.content, 'hello there');
+});
+
+test('a turn that broke off is asked about by the next one (prevTurnId)', async () => {
+  const bridge = make();
+  replyFor = () => ({ choices: [{ finish_reason: 'stop', message: { content: '' } }] });
+  await bridge.send({ message: 'first' });   // no reply: my message alone is stored
+  replyFor = () => ({ choices: [{ finish_reason: 'stop', message: { content: 'Here now.' } }] });
+  await bridge.send({ message: 'second' });
+  assert.equal(sent[1].turn.prevTurnId, sent[0].turn.turnId);
+  await bridge.send({ message: 'third' });
+  assert.equal(sent[2].turn.prevTurnId, undefined, 'an answered turn needs no asking');
 });
 
 test('the conversation is an ordinary session log, tool rounds and all, and it carries on', async () => {

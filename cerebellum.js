@@ -6185,6 +6185,10 @@ export async function runToolCallLoop({
   rosterTools = null,
   // Diagnostics (turn-log.js): called with describeRound()'s record each round.
   onRound     = null,
+  // Awaited after each round's tools have run, before the next round: the
+  // caller records the round right away (turn-record.js), so a turn cut off
+  // later still keeps what it did. A failing hook never breaks the turn.
+  onToolRound = null,
   signal,
 }) {
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
@@ -6227,6 +6231,10 @@ export async function runToolCallLoop({
       content:      await executeTool(tc.function?.name ?? '', tc.function?.arguments ?? '', toolCtx),
     })));
     toolRounds.push({ toolCalls, results, content: message.content || null, timestamp });
+    if (onToolRound) {
+      try { await onToolRound({ round, toolCalls, results, content: message.content || null, timestamp }); }
+      catch (err) { console.warn('[tools] recording a tool round failed (the turn goes on):', err?.message ?? err); }
+    }
 
     currentMsgs = [
       ...currentMsgs,

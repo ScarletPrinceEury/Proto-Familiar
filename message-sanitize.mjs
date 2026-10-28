@@ -57,6 +57,18 @@ export function isToolRecord(m) {
   return !!m && m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(TOOL_RECORD_PREFIX);
 }
 
+// A stored app note (src/sessions/turn-record.js, 0.14.106): a plain fact the
+// app writes into a conversation, such as "that turn was cut off". It's a
+// system message, so the model reads it in history; the web chat renders it as
+// a muted line, and memorization skips it. Defined here so the history readers
+// can tell it apart without importing the writer.
+export const APP_NOTE_KIND = 'app-note';
+export const CUT_OFF_NOTE_PREFIX = '[App note: that turn was cut off';
+
+export function isAppNote(m) {
+  return !!m && m.role === 'system' && m.kind === APP_NOTE_KIND && typeof m.content === 'string';
+}
+
 function resultLabel(result) {
   if (result == null) return 'no result came back';
   const s = String(typeof result === 'string' ? result : JSON.stringify(result)).replace(/\s+/g, ' ').trim();
@@ -67,11 +79,15 @@ function resultLabel(result) {
   return `returned: ${(sp > 30 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '')}…`;   // whole words, so the clip reads as a clip
 }
 
-function describeCalls(calls, results) {
+// `withResults: false` names the calls only. In a shared room a record never
+// carries returned text (0.14.106): a result can hold more than I said aloud
+// there, and the room's audience may have changed since.
+function describeCalls(calls, results, { withResults = true } = {}) {
+  if (!withResults) return calls.map(c => c.name || '?').join(', ');
   return calls.map(c => `${c.name || '?'} (${resultLabel(results[c.id])})`).join(', ');
 }
 
-export function collapseToolTurns(messages = [], { records = false } = {}) {
+export function collapseToolTurns(messages = [], { records = false, recordResults = true } = {}) {
   if (!Array.isArray(messages)) return messages;
   const textOf = (m) => {
     const c = m?.content;
@@ -112,7 +128,7 @@ export function collapseToolTurns(messages = [], { records = false } = {}) {
   for (const m of out) {
     withRecords.push(m);
     if (records && m && m.role === 'assistant' && m._calls?.length) {
-      withRecords.push({ role: 'system', content: `${TOOL_RECORD_PREFIX} I called ${describeCalls(m._calls, m._results)}.]` });
+      withRecords.push({ role: 'system', content: `${TOOL_RECORD_PREFIX} I called ${describeCalls(m._calls, m._results, { withResults: recordResults })}.]` });
     }
   }
   return withRecords
@@ -157,9 +173,10 @@ export function findTextToolCalls(text) {
  * actually ran, read from the stored history (raw, before collapse). `messages`
  * ends with the current user message. '' when there's no previous turn yet.
  * The truth arrives at the start of the next turn from the record, not from my
- * memory of what I meant to do (0.14.76).
+ * memory of what I meant to do (0.14.76). A turn that was cut off says so
+ * (0.14.106), and `results: false` (a shared room) names the calls only.
  */
-export function lastTurnRecord(messages = []) {
+export function lastTurnRecord(messages = [], { results: withResults = true } = {}) {
   if (!Array.isArray(messages)) return '';
   const userIdx = [];
   messages.forEach((m, i) => { if (m?.role === 'user') userIdx.push(i); });
@@ -171,6 +188,7 @@ export function lastTurnRecord(messages = []) {
   const calls = [];
   const results = {};
   const written = [];
+  const cutOff = turn.some(m => m?.role === 'system' && typeof m.content === 'string' && m.content.startsWith(CUT_OFF_NOTE_PREFIX));
   for (const m of turn) {
     if (m?.role === 'assistant' && Array.isArray(m.tool_calls)) {
       for (const tc of m.tool_calls) calls.push({ id: tc?.id, name: tc?.function?.name });
@@ -184,12 +202,12 @@ export function lastTurnRecord(messages = []) {
   // said plainly so I can make it for real (0.14.86).
   const ran = new Set(calls.map(c => c.name));
   const textOnly = written.filter(n => !ran.has(n));
-  const note = textOnly.length
+  const note = (textOnly.length
     ? ` My reply had ${textOnly.join(', ')} written out as text, which doesn't run it.`
-    : '';
+    : '') + (cutOff ? ' It was cut off before I finished answering.' : '');
   // Plain facts, not an audit voice (0.14.83): it rides nearly every turn.
   return calls.length
-    ? `[Last turn, tools used: ${describeCalls(calls, results)}.${note}]`
+    ? `[Last turn, tools used: ${describeCalls(calls, results, { withResults })}.${note}]`
     : `[Last turn: no tools used.${note}]`;
 }
 

@@ -29,6 +29,8 @@ import { extractTurnReply } from '../../llm-call.js';
 import { connectionReady } from '../../providers.js';
 import { stripLlmTimestamps } from '../../message-sanitize.mjs';
 import { writeSessionLog } from '../sessions/session-log.js';
+import { unansweredTurnId, toApiHistory } from '../sessions/turn-record.js';
+import { randomUUID } from 'node:crypto';
 import {
   BRIDGE_SPEAKER, BRIDGE_LOCATION, BRIDGE_OFF_MESSAGE, bridgeEnabled, createClaudeCodeMailbox, DEFAULT_STATE_FILE,
 } from './claude-code-mailbox.js';
@@ -47,38 +49,6 @@ export const BRIDGE_MIN_TOKENS = 8000;
 export function bridgeMaxTokens(settings = {}) {
   const n = Math.floor(Number(settings?.maxTokens));
   return Number.isFinite(n) && n > BRIDGE_MIN_TOKENS ? n : BRIDGE_MIN_TOKENS;
-}
-
-/**
- * What one bridge turn stores: Claude Code's message, each tool round in the
- * shape the web client stores (so "[Last turn, tools used: …]" works here too),
- * and my reply. Pure.
- */
-export function bridgeTurnMessages({ text, data, reply, at = new Date().toISOString() }) {
-  let n = 0;
-  const id = () => `${at}-${n++}`;
-  const out = [{ id: id(), role: 'user', content: text, timestamp: at, speaker: BRIDGE_SPEAKER }];
-  for (const round of (Array.isArray(data?._toolRounds) ? data._toolRounds : [])) {
-    const ts = round.timestamp || at;
-    const calls = Array.isArray(round.toolCalls) ? round.toolCalls : [];
-    out.push({ id: id(), role: 'assistant', content: round.content || null, tool_calls: calls, timestamp: ts });
-    for (const r of (Array.isArray(round.results) ? round.results : [])) {
-      out.push({ id: id(), role: 'tool', tool_call_id: r.tool_call_id, content: r.content, timestamp: ts, _toolName: r.name });
-    }
-  }
-  out.push({ id: id(), role: 'assistant', content: reply, timestamp: new Date().toISOString() });
-  return out;
-}
-
-/** History as /api/chat takes it: role/content/tool fields, plus the speaker. */
-function toApiHistory(messages) {
-  return (Array.isArray(messages) ? messages : []).map(m => {
-    if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content };
-    const base = { role: m.role, content: m.content ?? null };
-    if (Array.isArray(m.tool_calls) && m.tool_calls.length) base.tool_calls = m.tool_calls;
-    if (m.role === 'user' && m.speaker) base.speaker = m.speaker;
-    return base;
-  });
 }
 
 export function createClaudeCodeBridge({
@@ -102,6 +72,13 @@ export function createClaudeCodeBridge({
     const { sessionId } = await mailbox.sessionId({ fresh: newConversation === true });
     const { messages: history, startedAt } = await mailbox.readHistory(sessionId);
     const at = new Date().toISOString();
+    // The server records the turn as it goes (turn-record.js) and hands the
+    // stored messages back; this stores those, never a copy of its own.
+    const turn = {
+      sessionId, turnId: randomUUID(), replyMessageId: randomUUID(), location: BRIDGE_LOCATION,
+      userMessage: { id: randomUUID(), content: text, timestamp: at, speaker: BRIDGE_SPEAKER },
+      ...(unansweredTurnId(history) ? { prevTurnId: unansweredTurnId(history) } : {}),
+    };
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), BRIDGE_TURN_TIMEOUT_MS);
     try {
@@ -120,18 +97,22 @@ export function createClaudeCodeBridge({
           injectCorePrompts: true,           // no browser: the server folds in the four core prompts
           sessionAudience: 'ward-private',   // my human's own instance, on their behalf
           sessionInfo: { sessionId },
+          turn,
         }),
       });
       const data = await res.json().catch(() => null);
+      // A failed turn is already in the log as far as it got (my message, any
+      // tools that ran, a cut-off note); the next turn reads it from there.
       if (!res.ok) return { ok: false, error: `the chat turn failed (HTTP ${res.status}): ${JSON.stringify(data)?.slice(0, 200)}` };
       const reply = stripLlmTimestamps(extractTurnReply(data?.choices?.[0] ?? {})).trim();
       const toolsUsed = (Array.isArray(data?._toolRounds) ? data._toolRounds : [])
         .flatMap(r => (Array.isArray(r.toolCalls) ? r.toolCalls : []).map(tc => tc?.function?.name).filter(Boolean));
-      const turn = bridgeTurnMessages({ text, data, reply: reply || null, at });
+      const recorded = Array.isArray(data?._turnRecord?.messages) ? data._turnRecord.messages : [];
+      if (!recorded.length) log('the server sent back no record of this turn; only the log it wrote has it');
       const saved = await writeSessionLog({
         sessionId, startedAt: startedAt || at, endedAt: new Date().toISOString(),
         provider: conn.provider, model: conn.model, location: BRIDGE_LOCATION,
-        messages: [...history, ...turn],
+        messages: [...history, ...recorded],
       }, { logsDir, merge: true });
       if (!saved.ok) log('could not save the bridge turn:', saved.reason);
       const notes = await mailbox.takeNotes({ via: 'bridge' }).catch(() => []);

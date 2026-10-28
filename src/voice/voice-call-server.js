@@ -37,10 +37,10 @@ import { recordThreat } from '../safety/threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs, resolveOfflineAsr } from './voice-transcribe.js';
 import { enqueueSessionByDay } from '../memory/memorization.js';
-import { writeSessionLog, stampMessages, turnMessages } from '../sessions/session-log.js';
+import { writeSessionLog, stampMessages } from '../sessions/session-log.js';
 import { sessionSlugId } from '../../slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from '../../cerebellum.js';
-import { createVoiceChatTurn } from './voice-chat-turn.js';
+import { createVoiceChatTurn, callTurnEnvelope, keepCallTurn } from './voice-chat-turn.js';
 import { createCallGuard } from './voice-call-guard.js';
 import { createDiarizer } from './voice-diarize.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
@@ -84,6 +84,8 @@ export function attachVoiceCall(deps) {
   // live entry; a new call gets a new id and a fresh history).
   const histories = new Map();
   const HISTORY_MAX = 20;
+  // callId → the id of a turn that got no reply (turn-record.js `prevTurnId`).
+  const unanswered = new Map();
 
   // The FULL call transcript, kept separate from `histories` (which is capped for
   // the LLM context). On hang-up it lands as a reviewable session log AND is
@@ -100,6 +102,7 @@ export function attachVoiceCall(deps) {
     guards.delete(callId);   // the per-call guest guard is done when the call is
     diarizers.delete(callId);   // and its call-scoped speaker clusters (§8.3)
     roomListeners.forget(callId);   // and its room-sound "already mentioned" set (§8.4)
+    unanswered.delete(callId);
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
@@ -119,7 +122,9 @@ export function attachVoiceCall(deps) {
         provider:   conn?.provider ?? null,
         model:      conn?.model ?? null,
         messages:   stampMessages(sess.messages, endedIso),
-      }, { logsDir });
+        // Merged: the server already wrote each turn into this log as it went,
+        // including any that broke off and so never reached sess.messages.
+      }, { logsDir, merge: true });
       if (!r.ok) log(`session log not written: ${r.reason}`);
     }
 
@@ -293,14 +298,24 @@ export function attachVoiceCall(deps) {
     // labelled, so both the name-field stamp on the live turn AND the stored
     // transcript read "<villager> said …" instead of implying my human said it.
     const speakerLabel = isWard ? null : (ctx.speakerName || (String(speaker).startsWith('guest') ? 'someone' : String(speaker)));
-    const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience, speaker: speakerLabel });
+    // The server records this turn into the call's log as it goes, tool rounds
+    // included (turn-record.js); this keeps exactly what it stored.
+    const sess = callSessions.get(ctx.callId);
+    const turn = sess ? callTurnEnvelope({
+      sessionId: sess.sessionId, transcript, speaker: speakerLabel,
+      location: { platform: 'voice', label: 'Voice call' }, prevTurnId: unanswered.get(ctx.callId),
+    }) : null;
+    let record = null;
+    const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience, speaker: speakerLabel, turn, onRecord: (r) => { record = r; } });
+    const { history: next, stored } = keepCallTurn({ hist, transcript, reply, record, speaker: speakerLabel });
     if (reply) {
-      const messages = [...hist, { role: 'user', content: transcript }];
-      const next = [...messages, { role: 'assistant', content: reply }];
       histories.set(ctx.callId, next.slice(-HISTORY_MAX));
       // Accumulate the FULL exchange for the end-of-call memorization (uncapped).
-      const sess = callSessions.get(ctx.callId);
-      if (sess) sess.messages.push(...turnMessages(transcript, reply, { speaker: speakerLabel }));
+      if (sess) sess.messages.push(...stored);
+      unanswered.delete(ctx.callId);
+    } else if (turn) {
+      // No reply: what the turn did is in the log; the next turn asks for it.
+      unanswered.set(ctx.callId, turn.turnId);
     }
     return reply;
   }

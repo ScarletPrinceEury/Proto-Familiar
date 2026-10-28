@@ -92,7 +92,8 @@ function sessionUnifyEnabled() {
 import { substituteMacros } from '../../macros.js';
 import { coreSystemSegment, postHistoryMessage } from '../../core-prompts.js';
 import { recordOutgoingPrompt } from '../sessions/prompt-capture.js';
-import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord, isToolRecord } from '../../message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord, isToolRecord, isAppNote } from '../../message-sanitize.mjs';
+import { createTurnRecorder } from '../sessions/turn-record.js';
 import { buildTimeAnchorBlock } from '../../relative-time.js';
 import { modelSignal } from '../diagnostics/model-signal.js';
 import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mirror.js';
@@ -192,11 +193,21 @@ function formatMsgTime(isoString) {
 export function buildHistoryForPrompt(session, registry = null) {
   // Lines from an account my human blocked stay out (blocklist.js) — the ones
   // stored before the block, since nothing new from them is stored at all.
-  return collapseToolTurns(withoutBlockedLines(session.messages ?? [], registry), { records: true })   // app records of real tool runs ride along (web parity)
-    .filter(m => m.role === 'user' || m.role === 'assistant' || isToolRecord(m))
-    .slice(-HISTORY_LIMIT)
+  // App records of real tool runs ride along (web parity); in a shared room they
+  // name the calls only (0.14.106). App notes ("that turn was cut off") too.
+  const wardRoom = (session.audienceTag ?? 'ward-private') === 'ward-private';
+  const kept = collapseToolTurns(withoutBlockedLines(session.messages ?? [], registry), { records: true, recordResults: wardRoom })
+    .filter(m => m.role === 'user' || m.role === 'assistant' || isToolRecord(m) || isAppNote(m));
+  // The limit counts conversation lines; records and notes ride with the lines
+  // they follow, so turns that used tools don't shrink the window.
+  let start = 0;
+  for (let i = kept.length - 1, seen = 0; i >= 0; i--) {
+    if (kept[i].role === 'system') continue;
+    if (++seen === HISTORY_LIMIT) { start = i; break; }
+  }
+  return kept.slice(start)
     .map(m => {
-      if (isToolRecord(m)) return { role: 'system', content: m.content };
+      if (isToolRecord(m) || isAppNote(m)) return { role: 'system', content: m.content };
       const clean = stripLlmTimestamps(m.content);
       return {
         role: m.role,
@@ -210,6 +221,15 @@ export function buildHistoryForPrompt(session, registry = null) {
         ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
       };
     });
+}
+
+// The "[Last turn …]" line for a Discord turn's anchor. session.messages already
+// ends with this turn's message (saved before the model call), so it reads as
+// is. It used to get a placeholder added for that message as well, which left
+// no previous turn to find: the line never appeared on Discord. In a shared
+// room it names the calls only (0.14.106).
+export function discordLastTurnLine(session, audienceTag) {
+  return lastTurnRecord(session?.messages ?? [], { results: audienceTag === 'ward-private' });
 }
 
 // ── Deferred presence — [later:…] revisit token (V9) ─────────────
@@ -2089,7 +2109,7 @@ async function handleConnectionInteraction(gw, d) {
   }
 }
 
-async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [], signal }) {
+async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [], signal, turnId = null }) {
   // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
   // fast-paths; every other room is filtered before I say anything.
   let reply = rawReply;
@@ -2141,7 +2161,7 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
   session.messages = [
     ...(session.messages ?? []),
     ...priorMessages,
-    { id: randomUUID(), role: 'assistant', content: reply, timestamp: now },
+    { id: randomUUID(), role: 'assistant', content: reply, timestamp: now, ...(turnId ? { turnId } : {}) },
   ];
   session.provider    = conn.provider;
   session.model       = conn.model;
@@ -2565,7 +2585,15 @@ async function observeMessage(gw, msg, decision) {
 
 // `turn` is enqueueTurn's deadline handle ({ signal, abandoned }); null when a
 // caller runs a turn outside the queue (tests), which leaves only the per-call bound.
+// The turn's recorder settles however the turn ends: a turn abandoned after its
+// tools ran keeps a cut-off note beside them (turn-record.js).
 async function handleTurn(gw, msg, decision, turn = null) {
+  const recHolder = { rec: null };
+  try { return await answerTurn(gw, msg, decision, turn, recHolder); }
+  finally { await recHolder.rec?.settle(); }
+}
+
+async function answerTurn(gw, msg, decision, turn, recHolder) {
   const turnSignal = turn?.signal;
   const settings = readSettingsSync();
   const registry = await getRegistry();
@@ -2843,11 +2871,29 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // the next turn had no idea what was asked (the reported vanishing-message
   // loop). Written once here; the reply is appended when it lands. Every later
   // branch reuses this object and never re-adds it.
-  const userTurn = { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, authorId: msg.author?.id ?? null, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField };
-  session.messages    = [...(session.messages ?? []), userTurn];
+  // The turn's record goes through turn-record.js like every surface's (0.14.106):
+  // this message now, each tool round as it finishes, a cut-off note if the
+  // turn is abandoned. It used to keep only my reply, so a Discord turn's tool
+  // rounds were never stored and history couldn't show what I'd actually run.
+  const turnId = randomUUID();
+  const userTurn = { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, authorId: msg.author?.id ?? null, targets: msgTargets, namedMe: msgNamedMe, turnId, ...turnAttField };
   session.audienceTag = audienceTag;
-  session.updatedAt   = nowIso;
-  await writeSessionLog(session);
+  const rec = createTurnRecorder({
+    envelope: { turnId, userMessage: userTurn, replyMessageId: randomUUID() },
+    write: (msgs, { remove = [] } = {}) => {
+      const drop = new Set(remove);
+      const list = (session.messages ?? []).filter(x => !(x?.id && drop.has(x.id)));
+      for (const m of msgs) {
+        const i = list.findIndex(x => x?.id === m.id);
+        if (i >= 0) list[i] = m; else list.push(m);
+      }
+      session.messages  = list;
+      session.updatedAt = new Date().toISOString();
+      return writeSessionLog(session);
+    },
+  });
+  recHolder.rec = rec;
+  await rec.begin();
   await touchLocation(decision.locationKey, session.sessionId, { bindKey });
 
   // Custom emotes → readable alt-text for the model. The stored userTurn keeps
@@ -2912,9 +2958,8 @@ async function handleTurn(gw, msg, decision, turn = null) {
         ? readWeatherNowLine({ unit: settings?.weatherUnit })
         : readWeatherVagueLine(),
     }) || '',
-    // What my previous turn here actually ran (web parity). session.messages is
-    // prior history only, so a placeholder marks where this turn begins.
-    lastTurnRecord([...(session.messages ?? []), { role: 'user' }]),
+    // What my previous turn here actually ran (web parity).
+    discordLastTurnLine(session, audienceTag),
   ].filter(Boolean).join('\n\n');
   // The tool loop re-appends the anchor per round on its own; the direct
   // (non-loop) fallback calls below use this to keep [Now] last there too.
@@ -3119,6 +3164,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
         getTools:     recomposeDiscordTools,
         rosterTools:  discordTools,         // the end-of-context tool roster (web parity)
         onRound:      (r) => { turnDiag?.rounds.push(r); },
+        onToolRound:  (r) => rec.round(r),  // stored as it finishes (turn-record.js)
         executeTool,
         toolCtx,
         // My human's own turns get the ward-configurable round budget ("check
@@ -3207,6 +3253,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
       if (decision.isWard && !decision.ambient) {
         rawReply = providerFailureNote(closingErr);
       } else {
+        await rec.finish(null);   // a quiet ending is still an ending, not a cut-off
         session.updatedAt = new Date().toISOString();
         await writeSessionLog(session);
         console.log(`[discord] tool turn produced no closing text in ${decision.locationKey} — stayed quiet`);
@@ -3244,6 +3291,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
   // Both strategies can now return [pass] — code paces eligibility,
   // model still decides if this specific moment is worth speaking into.
   if (decision.ambient && isAmbientAbstain(rawReply)) {
+    await rec.finish(null);   // choosing quiet finishes the turn
     // The message was already persisted before the model call — just note it.
     session.updatedAt = new Date().toISOString();
     await writeSessionLog(session);
@@ -3265,6 +3313,7 @@ async function handleTurn(gw, msg, decision, turn = null) {
     // Wait-streak (Pass 1): an offered defer, taken. ([pass] deliberately
     // does NOT count — room pacing, not outreach deferral.)
     Promise.resolve(recordWait('discord-defer')).catch(() => {});
+    await rec.finish(null);   // a deferral finishes the turn
     // The message was already persisted before the model call — just note it.
     session.updatedAt = new Date().toISOString();
     await writeSessionLog(session);
@@ -3280,8 +3329,9 @@ async function handleTurn(gw, msg, decision, turn = null) {
   await deliverReply(gw, {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
-    signal: turnSignal,
+    signal: turnSignal, turnId,
   });
+  await rec.finish(null);   // deliverReply stored the reply itself
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
   // A promise I make in my human's DM gets a timed intention behind it
   // (src/schedule/promise-catch.js) — the same catch the web chat runs.

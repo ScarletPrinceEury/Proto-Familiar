@@ -111,6 +111,81 @@ export async function writeSessionLog(data, { logsDir, merge = false } = {}) {
   });
 }
 
+// Index to insert `msg` at: just after the last message stamped at or before it
+// (an unstamped message counts as earliest, like legacy id-less turns).
+function timestampSlot(list, msg) {
+  const ts = msg?.timestamp ? new Date(msg.timestamp).getTime() : -Infinity;
+  let at = list.length;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const mt = list[i]?.timestamp ? new Date(list[i].timestamp).getTime() : -Infinity;
+    if (mt <= ts) break;
+    at = i;
+  }
+  return at;
+}
+
+/**
+ * Add or replace messages in a session log by id, under the same per-session
+ * lock as writeSessionLog (turn-record.js writes a turn this way as it goes).
+ * A message whose id is already in the log replaces it where it stands; a new
+ * one goes in after the last message stamped at or before it. Everything else
+ * in the log is left as it is: a partial list through writeSessionLog's merge
+ * would drop legacy id-less messages. `remove` lists ids to take out (a turn
+ * that finished on a retry drops the cut-off note its first try left). Creates
+ * the log from `defaults` when there isn't one yet, and refuses to touch a log
+ * it can't parse rather than overwrite it. Returns { ok } and never throws.
+ */
+export async function appendSessionMessages(sessionId, messages, { logsDir, defaults = {}, remove = [] } = {}) {
+  if (!sessionId || !logsDir) return { ok: false, reason: 'missing sessionId or logsDir' };
+  const incoming = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m === 'object' && m.id);
+  const drop = new Set((Array.isArray(remove) ? remove : []).filter(Boolean));
+  if (!incoming.length && !drop.size) return { ok: true, file: null };
+  return withSessionLock(sessionId, async () => {
+    try {
+      await fsp.mkdir(logsDir, { recursive: true });
+      const file = path.join(logsDir, `${sessionId}.json`);
+      let log;
+      try {
+        log = JSON.parse(await fsp.readFile(file, 'utf8'));
+      } catch (err) {
+        if (err?.code !== 'ENOENT') return { ok: false, reason: `the log couldn't be read (${err?.message ?? err}), so it was left alone` };
+        if (!incoming.length) return { ok: true, file: null };   // nothing to remove from a log that isn't there
+        log = {
+          sessionId,
+          startedAt: defaults.startedAt ?? incoming[0].timestamp ?? new Date().toISOString(),
+          endedAt: null,
+          location: defaults.location ?? null,
+          ...(defaults.audienceTag ? { audienceTag: defaults.audienceTag } : {}),
+          messages: [],
+        };
+      }
+      if (!log || typeof log !== 'object') return { ok: false, reason: 'the log is not an object, so it was left alone' };
+      const list = (Array.isArray(log.messages) ? log.messages : []).filter((x) => !(x?.id && drop.has(x.id)));
+      for (const m of incoming) {
+        const idx = list.findIndex((x) => x?.id === m.id);
+        if (idx >= 0) list[idx] = m;
+        else list.splice(timestampSlot(list, m), 0, m);
+      }
+      const final = { ...log, messages: list, updatedAt: new Date().toISOString() };
+      const tmp = `${file}.tmp`;
+      await fsp.writeFile(tmp, JSON.stringify(final, null, 2), 'utf8');
+      await fsp.rename(tmp, file);
+      return { ok: true, file };
+    } catch (err) {
+      return { ok: false, reason: err?.message ?? String(err) };
+    }
+  });
+}
+
+/** A session log's messages, or [] when there's no readable log. Never throws. */
+export async function readSessionMessages(sessionId, { logsDir } = {}) {
+  if (!sessionId || !logsDir) return [];
+  try {
+    const log = JSON.parse(await fsp.readFile(path.join(logsDir, `${sessionId}.json`), 'utf8'));
+    return Array.isArray(log?.messages) ? log.messages : [];
+  } catch { return []; }
+}
+
 /**
  * A human-readable label for where a session happened (web chat, a Discord DM /
  * channel, a voice call), from a log's `location` (and legacy `origin`). One

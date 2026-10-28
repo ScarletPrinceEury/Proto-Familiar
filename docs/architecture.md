@@ -2618,6 +2618,47 @@ Tool calls?  (server-side loop since 0.4.0-alpha)
    └── NO  → render assistant message → save to localStorage + server
 ```
 
+**The turn record (0.14.106, `src/sessions/turn-record.js`).** A live turn
+sends a `turn` envelope (`sessionId`, `turnId`, my human's message with its
+id, the reply's id, optional `prevTurnId`/`retry`). `/api/chat` opens the
+turn with `openTurn` and a recorder writes it into the session log as it goes,
+add-or-replace by id (`session-log.js appendSessionMessages`, same per-session
+lock as `writeSessionLog`):
+- my human's message before the model call, once the room is known (a voice
+  call's log takes the room's audience tag; a web chat log takes none);
+- each tool round as soon as its results are back, before the client check, so
+  a round that ran is recorded even if the browser has gone (the round's stored
+  messages ride out in `_toolRound.messages` / `_turnRecord`);
+- the reply when it lands (removing a cut-off note an earlier try left);
+- if the request ends after the turn began and before it finished (`settle`,
+  in the route's `finally`): the words so far (`cutOff: true`) and an app note
+  (`kind: 'app-note'`, "[App note: that turn was cut off …]") when anything ran
+  or was said.
+
+A send of a turn that already ran tools gets **409 `_turnAlreadyRan`** with its
+record and is never run again. A second send of a turn still running gets
+`_turnStillRunning`. A `prevTurnId` the client never got whole is waited for
+and handed back as `_priorTurnRecord`, and the anchor's "[Last turn …]" line is
+built from it. `GET /api/sessions/:id/turns/:turnId` returns one turn's record,
+waiting for one still finishing.
+
+Who writes:
+- The web client saves my human's message the moment it's sent, stores the
+  server's round messages verbatim, never retries or falls back once a round
+  has reached it, and folds in the server's record on a cut-off, on load or on
+  a 409. A cut-off turn gets "Go on"; an unanswered message gets "Try again".
+- Voice (`voice-chat-turn.js`) and the Claude Code bridge send the envelope and
+  keep exactly the `_turnRecord` they get back. The voice servers' hang-up
+  writes merge, so a turn that broke off mid-call isn't overwritten.
+- Discord is its own single writer: `handleTurn` records through the same
+  recorder, rounds via `runToolCallLoop`'s `onToolRound` hook.
+
+In history, app notes reach the model as plain system lines. Memorization skips
+them (`isReadableMessage`). In a shared room, records and the last-turn line
+name the calls only (`collapseToolTurns(…, { recordResults })`,
+`lastTurnRecord(…, { results })`): a result can hold more than was said aloud
+there.
+
 The browser opts in by sending `runToolLoop: true` plus its custom
 tools and session metadata; the built-in registry is composed
 server-side (`cerebellum.composeActiveTools`). Direct `/api/chat`
