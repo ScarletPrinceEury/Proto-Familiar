@@ -37,6 +37,7 @@ import { slugCore, slugifyLabel } from './slug-ids.js';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
 import { SETTINGS_FILE, readSettingsSync } from './settings-store.js';
+import { writeSettings } from './settings-write.js';
 
 import { resolveProviderUrl, connectionReady } from './providers.js';
 import { callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -132,25 +133,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export { readSettingsSync };
 
 /**
- * Merge a partial patch into settings.json — read-modify-write under the
- * SAME per-file lock the PUT /api/settings endpoint uses, so a Familiar-side
- * write (e.g. set_day_start_anchor) and a client sync can't clobber each
- * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
- * keys in `patch` change; everything else is preserved.
+ * Merge a partial patch into settings.json through the one settings writer
+ * (settings-write.js): the same lock the PUT uses, an atomic write, and a
+ * revision bump on each changed key so an open page that still holds the old
+ * value can't overwrite mine. `patch` may be a function of the current
+ * settings when it's a read-modify-write. Only the keys in it change.
  */
 async function writeSettingsPatch(patch = {}) {
-  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+  if (typeof patch !== 'function' && (!patch || typeof patch !== 'object' || Array.isArray(patch))) {
     return { ok: false, error: 'patch must be an object' };
   }
-  return withLock(SETTINGS_FILE, async () => {
-    let cur = {};
-    try { cur = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); } catch { /* first write */ }
-    const next = { ...cur, ...patch };
-    const tmp = SETTINGS_FILE + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
-    await fsp.rename(tmp, SETTINGS_FILE);
-    return { ok: true, settings: next };
-  });
+  return writeSettings(patch);
 }
 
 /**
@@ -4849,10 +4842,11 @@ export const TOOL_EXECUTORS = {
     const norm = normalizeAttributionEntry({ kind, ref, label });
     if (!norm.ok) return `I couldn't attribute that calendar: ${norm.error}.`;
     try {
-      const s = readSettingsSync();
-      const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? { ...s.gcalCalendarAttribution } : {};
-      map[id] = norm.entry;
-      const res = await writeSettingsPatch({ gcalCalendarAttribution: map });
+      const res = await writeSettingsPatch(s => {
+        const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? { ...s.gcalCalendarAttribution } : {};
+        map[id] = norm.entry;
+        return { gcalCalendarAttribution: map };
+      });
       if (res?.ok === false) return `I couldn't attribute that calendar: ${res.error ?? 'unknown error'}`;
       const e = norm.entry;
       const who = e.kind === 'ward' ? 'my human' : e.kind === 'ignore' ? 'ignored (won\'t sync)' : `${e.kind}${e.ref ? ` ${e.ref}` : ''}${e.label ? ` — "${e.label}"` : ''}`;

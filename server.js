@@ -348,7 +348,7 @@ import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPri
 import { assetBytesPath } from './src/vision/media.js';
 import { DEFAULT_VOICE } from './src/voice/voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './src/voice/voices.js';
-import { mergeSettings } from './settings-merge.js';
+import { writeSettings, putSettings } from './settings-write.js';
 import { prepareForSpeech, splitForUtterances, splitForSpeech } from './src/voice/voice-speech.js';
 import {
   speakUnitsSelfHealing,
@@ -2703,14 +2703,9 @@ app.post('/api/voice/choose', async (req, res) => {
 
   let saved;
   try {
-    const prior = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
-    const next = { ...prior, voiceTts: { ...(prior.voiceTts ?? {}), voice: key } };
-    await withLock(SETTINGS_FILE, async () => {
-      const tmp = SETTINGS_FILE + '.tmp';
-      await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
-      await fsp.rename(tmp, SETTINGS_FILE);
-    });
-    saved = next.voiceTts.voice;
+    const w = await writeSettings(cur => ({ voiceTts: { ...(cur.voiceTts ?? {}), voice: key } }));
+    if (!w.ok) throw new Error(w.error ?? w.code);
+    saved = w.settings.voiceTts.voice;
   } catch (err) {
     return res.json({ ok: false, reason: 'save-failed', detail: String(err?.message ?? err) });
   }
@@ -2758,9 +2753,8 @@ app.post('/api/voice/ward-voice', express.raw({ type: 'audio/*', limit: '25mb' }
   const chose = req.query?.choose !== '0';
   if (chose) {
     try {
-      const prior = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8').catch(() => '{}'));
-      const merged = mergeSettings(prior, { voiceTts: { ...(prior.voiceTts ?? {}), voice: saved.key } });
-      await fsp.writeFile(SETTINGS_FILE, JSON.stringify(merged, null, 2), 'utf8');
+      const w = await writeSettings(cur => ({ voiceTts: { ...(cur.voiceTts ?? {}), voice: saved.key } }));
+      if (!w.ok) throw new Error(w.error ?? w.code);
     } catch (err) {
       return res.json({ ...saved, chosen: false, error: `saved, but could not select it: ${err.message}` });
     }
@@ -5327,48 +5321,21 @@ function phylacteryCredsEqual(a, b) {
 }
 
 app.put('/api/settings', async (req, res) => {
-  const { settings } = req.body ?? {};
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-    return badRequest(res, 'settings (object) is required');
-  }
-  // The merge lives in settings-merge.js so it can be tested — this once
-  // destroyed my human's voiceTts by writing the request body wholesale, and a
-  // data-loss path with no test is a data-loss path waiting for its turn.
-  let prior = null;
-  try { prior = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); }
-  catch { /* no prior settings, or unreadable — the payload stands alone */ }
-  const merged = mergeSettings(prior, settings);
-
-  let serialised;
-  try { serialised = JSON.stringify(merged, null, 2); }
-  catch (err) { return badRequest(res, `settings not serialisable: ${err.message}`); }
-  if (serialised.length > SETTINGS_MAX_BYTES) {
-    return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
-  }
-
-  // L2 (audit): route the prior-snapshot + write through thalamus's
-  // per-file lock so two PUTs racing each other can't read each
-  // other's stale priorCreds and fire spurious Phylactery respawns.
-  // The atomic .tmp+rename already prevented torn-file states; the
-  // lock here makes the prior-vs-next diff consistent against the
-  // file each PUT actually replaces.
-  let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
-  let priorNoticingEnabled;
-  try {
-    await withLock(SETTINGS_FILE, async () => {
-      try {
-        const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-        const prior = JSON.parse(raw);
-        priorCreds = phylacteryCredsSnapshot(prior);
-        priorNoticingEnabled = prior?.noticingEnabled;
-      } catch { /* no prior settings — first write */ }
-      const tmp = SETTINGS_FILE + '.tmp';
-      await fsp.writeFile(tmp, serialised, 'utf8');
-      await fsp.rename(tmp, SETTINGS_FILE);
-    });
-  } catch (err) {
-    return res.status(500).json({ error: `failed to write settings: ${err.message}` });
-  }
+  // A page sends only the keys it changed, with the revision each was based on;
+  // putSettings (settings-write.js) refuses an old page's whole-copy save and a
+  // key that changed elsewhere since the page loaded.
+  const put = await putSettings(req.body, { maxBytes: SETTINGS_MAX_BYTES });
+  if (put.body?.code === 'conflict') console.log(`[settings] save refused, changed elsewhere since that page loaded: ${put.body.conflicts.join(', ')}`);
+  if (put.body?.code === 'stale-page') console.log('[settings] save refused from a page running older code (it needs a reload)');
+  if (put.status !== 200) return res.status(put.status).json(put.body);
+  const result = put.result;
+  // Key names only, never values (they hold API keys). When connections go
+  // missing again, this says when and in what save.
+  if (result.changed.length) console.log(`[settings] saved from a page: ${result.changed.join(', ')}`);
+  const prior = result.prior;
+  const merged = result.settings;
+  const priorCreds = phylacteryCredsSnapshot(prior);
+  const priorNoticingEnabled = prior?.noticingEnabled;
 
   // If the Phylactery API-key designation changed (different connection
   // picked, or the same connection's key/provider/model edited), respawn
@@ -5399,7 +5366,7 @@ app.put('/api/settings', async (req, res) => {
     setIdentityGraduationPaused(merged.identityGraduationPaused === true).catch(() => {});
   }
 
-  return res.json({ ok: true });
+  return res.json({ ok: true, revisions: result.revisions });
 });
 
 app.get('/api/tailscale', async (_req, res) => {
