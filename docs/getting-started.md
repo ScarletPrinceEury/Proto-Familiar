@@ -227,6 +227,7 @@ That exposes the loopback server over HTTPS to your tailnet without changing Pro
 | `HOST` | `0.0.0.0` | Bind address. The runtime gate keeps non-loopback requests out until you flip the in-UI toggle — override only if you need to force a different bind. |
 | `TAILSCALE` | `0` | Seeds the persisted toggle state on first launch (when `.proto-familiar-config.json` doesn't exist yet). After that, the in-UI toggle is the source of truth. |
 | `UNRUH_PATH` | auto: `./unruh/src/unruh/__main__.py` | Absolute path to Unruh's entry module. Rarely needed — Unruh ships in-tree at `./unruh/`. |
+| `PROTO_FAMILIAR_UNRUH_DISABLED` | unset | `1` stops thalamus.js from spawning Unruh at all (schedule, reminders and temporal context go absent). Mostly for tests and fault-finding. Phylactery's twin is `PROTO_FAMILIAR_PHYLACTERY_DISABLED`. |
 | `UV_BIN` | auto: probes `~/.local/bin/uv`, `~/.cargo/bin/uv`, `/usr/local/bin/uv`, `/opt/homebrew/bin/uv` on Unix, and the Windows equivalents | Absolute path to the `uv` binary thalamus.js uses to spawn Unruh. Override if `uv` is installed somewhere unusual and isn't on the PATH that `node server.js` inherits. |
 
 Phylactery's own env vars (read by Phylactery itself, not by Proto-Familiar; documented for completeness because the **+ Phylactery** connection designation sets them automatically):

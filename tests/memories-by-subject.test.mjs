@@ -17,28 +17,38 @@
 // getMemoriesBySubject() must RESOLVE to the degraded shape — never
 // reject/throw.
 //
-// Env setup MUST happen before importing thalamus.js:
-//   - PROTO_FAMILIAR_PHYLACTERY_DISABLED=1 short-circuits connectPhylactery()
-//     before it ever touches `uv` (see the module's off-switch check).
-//   - UV_BIN is pointed at /bin/false. Phylactery's own venv/pyproject exist
-//     in this checkout, but so do Unruh's — and startThalamus() always
-//     attempts connectUnruh() too (it has no disable env var of its own).
-//     Unruh's pre-checks (source + venv present) pass in this repo, so
-//     without this override the test would actually spawn a real `uv run
-//     python -m unruh` child process. Pointing UV_BIN at /bin/false (which
-//     exists on this box and exits immediately) makes that spawn fail fast:
-//     the child process closes almost instantly, the MCP SDK's transport
-//     `onclose` rejects the in-flight `initialize` request right away
-//     (see @modelcontextprotocol/sdk's Protocol._onclose), and
-//     connectUnruh()'s own .catch() swallows the failure — startThalamus()
-//     settles in well under a second instead of hanging on a live
-//     subprocess or the SDK's 60s default request timeout.
+// Env setup MUST happen before importing thalamus.js: both MCP peers are
+// switched off, so startThalamus() returns without spawning anything.
+// PROTO_FAMILIAR_PHYLACTERY_DISABLED / PROTO_FAMILIAR_UNRUH_DISABLED
+// short-circuit connectPhylactery() / connectUnruh() before either touches
+// `uv`. (This test used to point UV_BIN at /bin/false instead. That path
+// doesn't exist on Windows, so resolveUv() fell back to the real uv, spawned a
+// live `uv run python -m unruh`, and `npm test` sat there until someone killed
+// the child by hand.)
 process.env.PROTO_FAMILIAR_PHYLACTERY_DISABLED = '1';
-process.env.UV_BIN = '/bin/false';
+process.env.PROTO_FAMILIAR_UNRUH_DISABLED = '1';
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { getMemoriesBySubject } from '../thalamus.js';
+import {
+  getMemoriesBySubject, startThalamus, probeOrgans,
+  shutdownUnruh, shutdownPhylactery,
+} from '../thalamus.js';
+
+// If an off-switch ever stops working, a real child may be running by now.
+// Close it so the regression shows up as the failed assertion below, not as a
+// suite that never exits.
+after(() => {
+  shutdownUnruh();
+  shutdownPhylactery();
+});
+
+test('with both off-switches set, thalamus starts no Phylactery or Unruh child', async () => {
+  await startThalamus();
+  const organs = await probeOrgans();
+  assert.equal(organs.unruh, false, 'Unruh connected despite PROTO_FAMILIAR_UNRUH_DISABLED=1');
+  assert.equal(organs.phylactery, false, 'Phylactery connected despite PROTO_FAMILIAR_PHYLACTERY_DISABLED=1');
+});
 
 test('getMemoriesBySubject degrades to { ok: false, items: [] } instead of throwing when Phylactery is unreachable', async () => {
   let r;

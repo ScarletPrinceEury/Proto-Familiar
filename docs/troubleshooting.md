@@ -553,6 +553,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_SPINE_STATES_DISABLED` | spine states |
 | `PROTO_FAMILIAR_BASELINES_DISABLED` | contact baselines |
 | `PROTO_FAMILIAR_WEATHER_DISABLED` | the weather sense |
+| `PROTO_FAMILIAR_UNRUH_DISABLED` | Unruh entirely — schedule, reminders, intentions, interests and the temporal context. Your Familiar loses all of them, so reminders stop firing (**safety-adjacent** — mostly for tests and narrowing down a fault) |
 
 **Memory**
 
