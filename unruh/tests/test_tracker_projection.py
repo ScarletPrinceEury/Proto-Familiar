@@ -164,3 +164,24 @@ def test_menses_resolves_a_superseded_cycle(conn):
     open_holds = [row for row, p in _nodes(conn, type="hold", projection=proj.MENSES_PROJECTION)
                   if row["resolution"] is None]
     assert len(open_holds) == 1, "exactly one live hold — the current cycle"
+
+
+def test_pantry_reminder_resolves_when_the_item_is_used_up(conn):
+    pid = _pantry(conn)
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "spinach", "expires": _d(1)})
+    assert proj.project_nodes(conn, now=NOW)["minted"] == 1
+    tracker.use_item(conn, tracker_id=pid, name="spinach")
+    r = proj.project_nodes(conn, now=NOW)
+    assert r["resolved"] == 1 and r["minted"] == 0
+
+
+def test_partly_using_an_expiring_item_doesnt_re_nag(conn):
+    pid = tracker.create_tracker(conn, label="Pantry", archetype="inventory", schema=[
+        {"name": "name", "type": "text", "required": True},
+        {"name": "qty", "type": "quantity"}, {"name": "expires", "type": "date"},
+    ], config={"project_dates": True})["id"]
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "eggs", "qty": 6, "expires": _d(1)})
+    assert proj.project_nodes(conn, now=NOW)["minted"] == 1
+    tracker.use_item(conn, tracker_id=pid, name="eggs", amount=2)
+    r = proj.project_nodes(conn, now=NOW)
+    assert r["minted"] == 0 and r["resolved"] == 0, "same eggs, same reminder"

@@ -4,7 +4,8 @@ Pure functions over a sqlite3.Connection (the interest.py / schedule.py shape) s
 they're trivial to unit-test with an in-memory DB. Four archetypes:
 
   state     — one field, one current value (laundry: clean/in-progress/dirty).
-  inventory — items, each an upsert keyed by a required `name` field (pantry).
+  inventory — items, each an upsert keyed by a required `name` field (pantry),
+              and taken back off with use_item when they're eaten or used up.
   series    — dated entries over time (mood, sleep, meds).
   gauge     — decaying UPKEEP (eating, hydration): an entry is a REFILL; the level
               is derived in code from time-since-last-refill (§10). The safety
@@ -31,9 +32,17 @@ from .db import insert_with_slug_retry, now_iso, now_local, to_local_naive, to_n
 
 ARCHETYPES = {"state", "inventory", "series", "gauge"}
 FIELD_TYPES = {"enum", "number", "scale", "quantity", "date", "text", "text[]", "boolean"}
-ENTRY_SOURCES = {"chat", "inferred", "clarified", "send-button"}
+# 'ui' = my human's own hand in the Trackers tab (add-entry, a gauge refill, an
+# item marked used up). It was missing here, so every one of those was refused.
+ENTRY_SOURCES = {"chat", "inferred", "clarified", "send-button", "ui"}
+
+# What an entry does (migration 0009). Only 'set' entries count toward the daily
+# cap: a 'use'/'remove' can't run away, there's only so much on the list.
+ENTRY_OPS = {"set", "use", "remove"}
 
 DEFAULT_ENTRY_CAP_PER_DAY = 24
+# A grocery haul is easily more than 24 items in a day.
+DEFAULT_INVENTORY_ENTRY_CAP_PER_DAY = 100
 
 # §4 inventory-expiry projection: pantry-class items get a "use first" cue this
 # many days before they expire. Pure derivation — code owns the date maths.
@@ -396,9 +405,11 @@ def log_entry(conn: sqlite3.Connection, *, tracker_id: str, payload: Any = None,
 
     entry_ts = to_local_naive(ts) or now_iso()
     day = entry_ts[:10]
-    cap = int(cfg.get("entry_cap_per_day", DEFAULT_ENTRY_CAP_PER_DAY))
+    default_cap = DEFAULT_INVENTORY_ENTRY_CAP_PER_DAY if trk["archetype"] == "inventory" else DEFAULT_ENTRY_CAP_PER_DAY
+    cap = int(cfg.get("entry_cap_per_day", default_cap))
     count = conn.execute(
-        "SELECT COUNT(*) AS c FROM tracker_entries WHERE tracker_id = ? AND substr(ts,1,10) = ? AND superseded = 0",
+        "SELECT COUNT(*) AS c FROM tracker_entries WHERE tracker_id = ? AND substr(ts,1,10) = ? "
+        "AND superseded = 0 AND op = 'set'",
         (tracker_id, day),
     ).fetchone()["c"]
     if count >= cap:
@@ -420,6 +431,107 @@ def log_entry(conn: sqlite3.Connection, *, tracker_id: str, payload: Any = None,
     dropped = [k for k in (payload or {}) if k not in v["cleaned"] and k not in {s["name"] for s in schema}]
     if dropped:
         out["dropped_fields"] = dropped
+    return out
+
+
+def _amount_field(schema: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The field an inventory keeps an item's amount in: the first `quantity`,
+    else the first `number`. None when the inventory doesn't count anything."""
+    for t in ("quantity", "number"):
+        f = next((f for f in schema if f.get("type") == t), None)
+        if f is not None:
+            return f
+    return None
+
+
+def _parse_amount(amount: Any) -> tuple[float, str | None] | None:
+    """A used amount: a bare number or {value, unit?}. None when malformed or ≤ 0."""
+    unit = None
+    if isinstance(amount, dict):
+        unit = amount.get("unit") if isinstance(amount.get("unit"), str) and amount["unit"].strip() else None
+        amount = amount.get("value")
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount <= 0:
+        return None
+    return float(amount), unit
+
+
+def _tidy_number(x: float) -> int | float:
+    x = round(x, 6)
+    return int(x) if x == int(x) else x
+
+
+def use_item(conn: sqlite3.Connection, *, tracker_id: str, name: str, amount: Any = None,
+             ts: str | None = None, source: str = "chat") -> dict[str, Any]:
+    """Take an item off an inventory: my human ate it, used it up, tossed it.
+    With no `amount` the item is gone. With an amount, code subtracts it from the
+    item's stored quantity and keeps what's left; reaching zero removes it. The
+    model never does the subtraction (the exact-values rule).
+
+    The item is matched by name, ignoring case and spacing. An unknown name comes
+    back as {ok:false, code:'no_item', items:[...]} so the caller can pick the
+    right one, never a guess. An amount that can't come off the stored quantity
+    (no quantity logged, or a different unit) is {ok:false, code:'cant_subtract'}
+    and nothing changes. Returns {ok, id, name, removed, left?}."""
+    trk = _get_tracker(conn, tracker_id)
+    if trk is None:
+        return {"ok": False, "code": "no_tracker", "error": f"no tracker {tracker_id!r}"}
+    if trk["archetype"] != "inventory":
+        return {"ok": False, "code": "not_inventory", "error": f"{trk['label']} isn't a list of items"}
+    if source not in ENTRY_SOURCES:
+        raise ValueError(f"unknown source {source!r}; expected {sorted(ENTRY_SOURCES)}")
+    key = item_key(name)
+    if not key:
+        return {"ok": False, "code": "missing_required", "error": "name is required"}
+    items = current_items(conn, tracker_id)
+    item = items.get(key)
+    if item is None:
+        return {"ok": False, "code": "no_item", "error": f"no {name!r} in {trk['label']}",
+                "items": [it["name"] for it in items.values()]}
+
+    schema = json.loads(trk["schema_json"] or "[]")
+    entry_ts = to_local_naive(ts) or now_iso()
+    op, payload, left = "remove", {"name": item["name"]}, None
+
+    if amount is not None:
+        parsed = _parse_amount(amount)
+        if parsed is None:
+            return {"ok": False, "code": "invalid", "error": "amount must be a positive number or {value, unit}"}
+        used, used_unit = parsed
+        field = _amount_field(schema)
+        stored = item.get(field["name"]) if field else None
+        have = _as_number(stored)
+        have_unit = stored.get("unit") if isinstance(stored, dict) and isinstance(stored.get("unit"), str) else None
+        if field is None or have is None:
+            return {"ok": False, "code": "cant_subtract", "name": item["name"],
+                    "error": f"no amount logged for {item['name']}"}
+        if used_unit and have_unit and used_unit.strip().casefold() != have_unit.strip().casefold():
+            return {"ok": False, "code": "cant_subtract", "name": item["name"], "have": stored,
+                    "error": f"{item['name']} is logged in {have_unit}, not {used_unit}"}
+        remaining = have - used
+        if remaining > 1e-9:
+            op = "use"
+            payload = {k: v for k, v in item.items() if k not in _ITEM_META}
+            if field["type"] == "quantity":
+                left = {"value": _tidy_number(remaining), **({"unit": have_unit} if have_unit else {})}
+            else:
+                left = _tidy_number(remaining)
+            payload[field["name"]] = left
+            v = validate_entry(schema, payload)
+            if not v["ok"]:
+                return {"ok": False, "code": "invalid", "error": "; ".join(v["errors"] + v["missing"])}
+            payload = v["cleaned"]
+
+    created = now_iso()
+    eid = insert_with_slug_retry(
+        conn,
+        """INSERT INTO tracker_entries (id, tracker_id, ts, payload_json, source, superseded, created_at, op)
+           VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+        lambda eid: (eid, tracker_id, entry_ts, json.dumps(payload), source, created, op),
+        label=trk["label"], kind="tke",
+    )
+    out: dict[str, Any] = {"ok": True, "id": eid, "name": item["name"], "removed": op == "remove"}
+    if left is not None:
+        out["left"] = left
     return out
 
 
@@ -495,6 +607,44 @@ def _timedelta_days(days: int):
     return timedelta(days=days)
 
 
+# Bookkeeping keys current_items adds beside an item's own fields.
+_ITEM_META = ("as_of", "entry_id", "stock_ref")
+
+
+def item_key(name: Any) -> str:
+    """How inventory items are matched: case and spacing don't make a new item
+    ("Eggs" and "eggs " are the same eggs)."""
+    return " ".join(str(name or "").split()).casefold()
+
+
+def current_items(conn: sqlite3.Connection, tid: str) -> dict[str, dict[str, Any]]:
+    """What's on an inventory right now, keyed by item_key. Replays every live
+    entry in time order: 'set' puts the item as given, 'use' puts what's left,
+    'remove' takes it off. Each item carries its own fields plus `as_of` (when
+    it was last touched), `entry_id` (that entry) and `stock_ref` (the 'set'
+    entry this stock came in on: a partial use keeps it, so the expiry
+    projection doesn't re-nag about the same food). The one place every
+    inventory reader gets its list from."""
+    items: dict[str, dict[str, Any]] = {}
+    rows = conn.execute(
+        "SELECT * FROM tracker_entries WHERE tracker_id = ? AND superseded = 0 ORDER BY ts ASC, rowid ASC",
+        (tid,),
+    ).fetchall()
+    for r in rows:
+        p = json.loads(r["payload_json"] or "{}")
+        key = item_key(p.get("name"))
+        if not key:
+            continue
+        op = r["op"] if r["op"] in ENTRY_OPS else "set"
+        if op == "remove":
+            items.pop(key, None)
+            continue
+        prev = items.get(key)
+        stock_ref = prev["stock_ref"] if op == "use" and prev else r["id"]
+        items[key] = {**p, "as_of": r["ts"], "entry_id": r["id"], "stock_ref": stock_ref}
+    return items
+
+
 def read_tracker(conn: sqlite3.Connection, *, id: str, days: int = 14, now: datetime | None = None) -> dict[str, Any]:
     """Archetype-aware summary (code, no LLM). state → current value; inventory →
     item list (latest per name); series → windowed entries; gauge → level/band."""
@@ -530,13 +680,8 @@ def read_tracker(conn: sqlite3.Connection, *, id: str, days: int = 14, now: date
         return base
 
     if arch == "inventory":
-        items: dict[str, dict[str, Any]] = {}
-        for r in _entries(conn, id):
-            p = json.loads(r["payload_json"] or "{}")
-            name = p.get("name")
-            if name:
-                items[name] = {**p, "as_of": r["ts"]}
-        base["items"] = list(items.values())
+        base["items"] = [{k: v for k, v in it.items() if k not in ("entry_id", "stock_ref")}
+                         for it in current_items(conn, id).values()]
         return base
 
     # series
@@ -675,7 +820,9 @@ def expiring_items(conn: sqlite3.Connection, *, within_days: int = EXPIRY_LEAD_D
     """§4 inventory-expiry projection: pantry-class items (inventory archetype with
     `project_dates`) whose `expires` date is within `within_days` of today —
     already-expired items included (days_left < 0), soonest first. Pure derivation;
-    code owns the date maths, the model never computes days-left. Returns
+    code owns the date maths, the model never computes days-left. Used-up items
+    are off the list, so they drop out here and their projection resolves.
+    `entry_id` is the item's stock_ref, so a partial use doesn't re-nag. Returns
     {items: [{tracker_id, tracker_label, name, expires, days_left, entry_id}]}."""
     n = _naive(now) if now is not None else now_local()
     today = n.date()
@@ -684,21 +831,15 @@ def expiring_items(conn: sqlite3.Connection, *, within_days: int = EXPIRY_LEAD_D
         cfg = json.loads(trk["config_json"] or "{}")
         if not cfg.get("project_dates"):
             continue
-        latest: dict[str, dict[str, Any]] = {}
-        for r in _entries(conn, trk["id"]):
-            p = json.loads(r["payload_json"] or "{}")
-            name = p.get("name")
-            if name:
-                latest[name] = {**p, "_entry_id": r["id"]}
-        for name, p in latest.items():
+        for p in current_items(conn, trk["id"]).values():
             d = _parse_date(p.get("expires"))
             if d is None:
                 continue
             days_left = (d - today).days
             if days_left <= within_days:
                 out.append({
-                    "tracker_id": trk["id"], "tracker_label": trk["label"], "name": name,
-                    "expires": p.get("expires"), "days_left": days_left, "entry_id": p.get("_entry_id"),
+                    "tracker_id": trk["id"], "tracker_label": trk["label"], "name": p["name"],
+                    "expires": p.get("expires"), "days_left": days_left, "entry_id": p["stock_ref"],
                 })
     out.sort(key=lambda x: x["days_left"])
     return {"items": out}

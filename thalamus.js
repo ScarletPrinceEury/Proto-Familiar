@@ -1060,6 +1060,21 @@ export async function logTrackerEntry({ tracker_id, payload, ts, supersedes, sou
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// Take an item off an inventory (eaten, used up, tossed). Code does any
+// subtraction; an unknown name comes back with the real item names.
+export async function useTrackerItem({ tracker_id, name, amount, ts, source } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { tracker_id, name };
+  if (amount !== undefined) args.amount = amount;
+  if (ts     !== undefined) args.ts     = ts;
+  if (source !== undefined) args.source = source;
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_use_item', arguments: args });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function readTracker({ tracker_id, days = 14 } = {}) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };

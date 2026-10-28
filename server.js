@@ -53,7 +53,7 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
   addVillagerTell,
   listTrackers, readTracker, archiveTracker, dropTracker, trackerReflectionSeries,
-  ensureTrackerFromTemplate, createTrackerFromTemplate, listTrackerTemplates, logTrackerEntry,
+  ensureTrackerFromTemplate, createTrackerFromTemplate, listTrackerTemplates, logTrackerEntry, useTrackerItem,
 } from './thalamus.js';
 import { checkCanaries, readCanaryEvents } from './src/memory/identity-canaries.js';
 // Mood → threat link (T-D.2, ward-signed): a distress mood-send gently raises
@@ -4810,6 +4810,21 @@ app.post('/api/trackers/:id/entries', async (req, res) => {
   if (!logged.ok) return res.status(400).json({ ok: false, error: logged.error, code: logged.code });
   try { res.json({ ok: true, read: await readTracker({ tracker_id: req.params.id }) }); }
   catch { res.json({ ok: true }); }
+});
+
+// My human takes an item off an inventory by hand (the Trackers tab's "Used up"),
+// the same Unruh path my tracker_remove_item uses. No amount = all of it.
+app.post('/api/trackers/:id/items/use', async (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (!name) return badRequest(res, 'name is required');
+  const amount = req.body?.amount;
+  const used = await useTrackerItem({
+    tracker_id: req.params.id, name, source: 'ui',
+    ...(amount !== undefined && amount !== null && amount !== '' ? { amount } : {}),
+  });
+  if (!used.ok) return res.status(400).json({ ok: false, error: used.error, code: used.code, items: used.items });
+  try { res.json({ ok: true, ...used, read: await readTracker({ tracker_id: req.params.id }) }); }
+  catch { res.json({ ok: true, ...used }); }
 });
 
 // ── Graph ─────────────────────────────────────────────────────────────────

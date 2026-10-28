@@ -1478,6 +1478,24 @@ def tracker_log(tracker_id: str, payload: dict | None = None, ts: str | None = N
 
 
 @mcp.tool()
+def tracker_use_item(tracker_id: str, name: str, amount: float | dict | None = None,
+                     ts: str | None = None, source: str = "chat") -> dict[str, Any]:
+    """I use this when my human ate something, used it up, or tossed it, so it
+    comes off the list (the pantry, or any inventory). No `amount` = it's all
+    gone. With an amount (a number, or {value, unit}), code takes that much off
+    what's logged and keeps the rest. The name matches whatever casing is on the
+    list. Returns {ok, id, name, removed, left?}, or {ok:false, code:'no_item',
+    items} with what's actually there, or {ok:false, code:'cant_subtract'} when
+    the amount can't come off what's logged (nothing changes then)."""
+    try:
+        with get_conn() as conn:
+            return trk.use_item(conn, tracker_id=tracker_id, name=name, amount=amount,
+                                ts=ts, source=source)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def tracker_read(tracker_id: str, days: int = 14) -> dict[str, Any]:
     """I use this to see where a tracker stands: a `state`'s current value, an
     `inventory`'s items, a `series`'s recent entries (last `days`), or a `gauge`'s

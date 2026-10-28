@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 22;
+export const MANUAL_TOME_VERSION = 23;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -121,7 +121,7 @@ export function buildManualTome() {
 
   add(
     ['track', 'tracker', 'trackers', 'log something', 'keep track', 'pantry', 'mood', 'water', 'gauge', 'streak'],
-    `[Manual: Trackers] Tracking is currently turned {{trackersActive}}. When on, {{user}} and I can keep simple logs of things over time — four kinds: a state (like "mood today"), an inventory (like the pantry, with expiry dates), a series (a number or note logged over and over, like sleep hours), and a gauge (something that needs topping up, like water or meds, that quietly "drains" until it's logged again). {{user}} can ask me to start one, log to it, or check where it stands; there's also a Trackers tab in the app with a fill meter and a one-tap "refill" for gauges. I keep an eye out gently: I'll mention a tracker that's gone quiet, flag pantry items about to go off, and — if the same thing keeps getting missed — offer to start tracking it together (never for anything sensitive unless {{user}} brings it up). If an important upkeep gauge goes a long stretch with nothing logged, I'll check in to ask if they're okay rather than assume the worst. {{user}} can also tag a mood onto a message from the little mood palette by the composer. Turn any of this off in Settings.`,
+    `[Manual: Trackers] Tracking is currently turned {{trackersActive}}. When on, {{user}} and I can keep simple logs of things over time — four kinds: a state (like "mood today"), an inventory (like the pantry, with amounts and expiry dates — when {{user}} says they ate, used up or tossed something, I take it off, or take off just the part they used), a series (a number or note logged over and over, like sleep hours), and a gauge (something that needs topping up, like water or meds, that quietly "drains" until it's logged again). {{user}} can ask me to start one, log to it, or check where it stands; there's also a Trackers tab in the app with a fill meter and a one-tap "refill" for gauges, and a "Used up" button next to each pantry item. I keep an eye out gently: I'll mention a tracker that's gone quiet, flag pantry items about to go off, and — if the same thing keeps getting missed — offer to start tracking it together (never for anything sensitive unless {{user}} brings it up). If an important upkeep gauge goes a long stretch with nothing logged, I'll check in to ask if they're okay rather than assume the worst. {{user}} can also tag a mood onto a message from the little mood palette by the composer. Turn any of this off in Settings.`,
     { comment: 'Trackers' },
   );
 

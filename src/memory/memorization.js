@@ -215,7 +215,7 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow, listTrackers, logTrackerEntry } from '../../thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow, listTrackers, logTrackerEntry, useTrackerItem } from '../../thalamus.js';
 import { applyMemoryIntegrityGate } from '../safety/memory-integrity.js';
 import { getRegistry, standingConsentActive } from '../village/village.js';
 import { withoutBlockedLines } from '../village/blocklist.js';
@@ -541,7 +541,7 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `,\n      "tracker_observations": [{ "tracker": "sleep-x7", "ts": "2026-06-18T08:00:00", "payload": { "hours": 5 } }]`
     : '';
   const trackerFieldRules = tLegend.length
-    ? `\n### Field rules — tracker_observations\n\ntracker_observations — OPTIONAL. When a fact records something I actively keep a ledger on for my human — a mood, a night's sleep, a pantry item, an upkeep like eating or drinking — I add a structured reading so it lands in that ledger too, not just as prose. Each entry:\n  tracker  — an id from the legend below, and ONLY those (never one I invent).\n  ts       — when the reading was ABOUT, local ISO (YYYY-MM-DDTHH:MM:SS, no offset) as my [Now] block shows; omit for now.\n  payload  — the fields matching that tracker's schema (see the legend).\nMost facts track nothing — for those I omit this field entirely. I only record what was genuinely said; I never infer a value my human didn't actually give me.\n`
+    ? `\n### Field rules — tracker_observations\n\ntracker_observations — OPTIONAL. When a fact records something I actively keep a ledger on for my human — a mood, a night's sleep, a pantry item, an upkeep like eating or drinking — I add a structured reading so it lands in that ledger too, not just as prose. Each entry:\n  tracker  — an id from the legend below, and ONLY those (never one I invent).\n  ts       — when the reading was ABOUT, local ISO (YYYY-MM-DDTHH:MM:SS, no offset) as my [Now] block shows; omit for now.\n  payload  — the fields matching that tracker's schema (see the legend).\n  used     — instead of payload, when my human ate, used up or tossed something on an [inventory] list like the pantry: { "name": "eggs" }, plus "amount" (and "unit") if they only used some. Only stuff that already happened, not plans.\nMost facts track nothing — for those I omit this field entirely. I only record what was genuinely said; I never infer a value my human didn't actually give me.\n`
     : '';
   const trackerLegendBlock = tLegend.length
     ? `\n### Tracker legend (my human's ledgers — for tracker_observations only)\n${tLegend.slice(0, 20).map(t => `  ${t.label} [${t.archetype ?? 'tracker'}] = ${t.id}${Array.isArray(t.fields) && t.fields.length ? ` · fields: ${t.fields.join(', ')}` : ''}`).join('\n')}\n`
@@ -966,12 +966,25 @@ export function parseTrackerObservations(facts, validIds = new Set()) {
     for (const o of obs) {
       const tracker = String(o?.tracker ?? '').trim();
       if (!validIds.has(tracker)) continue;               // off-legend / invented id → drop
-      if (!o?.payload || typeof o.payload !== 'object' || Array.isArray(o.payload)) continue; // shape gate
       const ts = typeof o?.ts === 'string' && o.ts.trim() ? o.ts.trim() : undefined;
-      const key = `${tracker}|${ts ?? ''}|${JSON.stringify(o.payload)}`;
+      // Something used up: { used: { name, amount?, unit? } } (0.14.108).
+      const used = o?.used && typeof o.used === 'object' && !Array.isArray(o.used) ? o.used : null;
+      let entry;
+      if (used) {
+        const name = typeof used.name === 'string' ? used.name.trim() : '';
+        if (!name) continue;
+        const amount = Number(used.amount);
+        const hasAmount = used.amount !== undefined && used.amount !== null && Number.isFinite(amount) && amount > 0;
+        const unit = typeof used.unit === 'string' && used.unit.trim() ? used.unit.trim() : null;
+        entry = { tracker, ...(ts ? { ts } : {}), used: { name, ...(hasAmount ? { amount, ...(unit ? { unit } : {}) } : {}) } };
+      } else {
+        if (!o?.payload || typeof o.payload !== 'object' || Array.isArray(o.payload)) continue; // shape gate
+        entry = { tracker, ...(ts ? { ts } : {}), payload: o.payload };
+      }
+      const key = `${tracker}|${ts ?? ''}|${JSON.stringify(entry.used ?? entry.payload)}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ tracker, ...(ts ? { ts } : {}), payload: o.payload });
+      out.push(entry);
       if (out.length >= MAX_TRACKER_OBS_PER_JOB) return out;
     }
   }
@@ -1047,17 +1060,53 @@ function buildByNameLookup(registry) {
  * as source:'inferred'; a refusal (off-schema payload, entry cap) is Unruh's
  * own visible verdict — logged, never fabricated as a success.
  */
-async function logTrackerObservations(facts, validTrackerIds, logTrackerEntryDep) {
+async function logTrackerObservations(facts, validTrackerIds, { logTrackerEntryDep, useTrackerItemDep, messages }) {
   const observations = parseTrackerObservations(facts, validTrackerIds);
-  let logged = 0;
+  const handledLive = itemsTakenOffLive(messages);
+  let logged = 0, alreadyDone = 0;
   for (const obs of observations) {
+    // Already taken off during the chat → don't take it off twice (a second
+    // "ate 2 eggs" would eat eggs that are still there).
+    if (obs.used && handledLive.has(`${obs.tracker}|${trackerItemKey(obs.used.name)}`)) { alreadyDone++; continue; }
     try {
-      const r = await logTrackerEntryDep({ tracker_id: obs.tracker, payload: obs.payload, ts: obs.ts, source: 'inferred' });
+      let r;
+      if (obs.used) {
+        const { name, amount, unit } = obs.used;
+        r = await useTrackerItemDep({
+          tracker_id: obs.tracker, name, ts: obs.ts, source: 'inferred',
+          ...(amount !== undefined ? { amount: unit ? { value: amount, unit } : amount } : {}),
+        });
+      } else {
+        r = await logTrackerEntryDep({ tracker_id: obs.tracker, payload: obs.payload, ts: obs.ts, source: 'inferred' });
+      }
       if (r?.ok) logged++;
       else console.warn(`[memorization] tracker observation not logged (${obs.tracker}): ${r?.code ?? r?.error ?? 'refused'}`);
-    } catch (err) { console.warn('[memorization] logTrackerEntry failed:', err?.message ?? err); }
+    } catch (err) { console.warn('[memorization] tracker observation failed:', err?.message ?? err); }
   }
-  if (observations.length) console.log(`[memorization] tracker observations: ${logged}/${observations.length} logged (inferred)`);
+  if (observations.length) console.log(`[memorization] tracker observations: ${logged}/${observations.length} logged (inferred)${alreadyDone ? `, ${alreadyDone} already done in the chat` : ''}`);
+}
+
+// Unruh matches items ignoring case and spacing (tracker.item_key); this is the
+// same rule for the live-call dedup below.
+function trackerItemKey(name) {
+  return String(name ?? '').split(/\s+/).filter(Boolean).join(' ').toLowerCase();
+}
+
+// Items the live chat already took off a list, read from the slice's own
+// tool calls: "tracker_id|item".
+export function itemsTakenOffLive(messages) {
+  const out = new Set();
+  for (const m of Array.isArray(messages) ? messages : []) {
+    for (const tc of Array.isArray(m?.tool_calls) ? m.tool_calls : []) {
+      if (tc?.function?.name !== 'tracker_remove_item') continue;
+      let args;
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { continue; }
+      if (typeof args?.tracker_id === 'string' && typeof args?.name === 'string') {
+        out.add(`${args.tracker_id.trim()}|${trackerItemKey(args.name)}`);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -1107,6 +1156,7 @@ export async function processJob(job, deps = {}) {
     applyMemoryIntegrityGate: applyGateDep = applyMemoryIntegrityGate,
     listTrackers: listTrackersDep = listTrackers,
     logTrackerEntry: logTrackerEntryDep = logTrackerEntry,
+    useTrackerItem: useTrackerItemDep = useTrackerItem,
     readSettings: readSettingsDep = readSettingsSync,
   } = deps;
 
@@ -1255,7 +1305,7 @@ export async function processJob(job, deps = {}) {
   // logs as `source:'inferred'`; a refusal (off-schema payload, entry cap) is
   // Unruh's own visible verdict, logged and never fabricated as a success.
   if (trackersOn && validTrackerIds.size) {
-    await logTrackerObservations(facts, validTrackerIds, logTrackerEntryDep);
+    await logTrackerObservations(facts, validTrackerIds, { logTrackerEntryDep, useTrackerItemDep, messages: job.messages });
   }
 
   // Build name → villager lookup for the remember gate (registry already loaded

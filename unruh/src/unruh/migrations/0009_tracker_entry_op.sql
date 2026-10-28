@@ -1,0 +1,11 @@
+-- Inventory items can be used up (0.14.108).
+--
+-- Before this an inventory only ever grew: an entry was an upsert keyed by
+-- `name`, and nothing took an item back out, so the pantry kept food my human
+-- had already eaten and I offered it to them. `op` says what an entry does:
+--   'set'    — the item as it now stands (every entry before this migration).
+--   'use'    — part of it was used; the payload is what's left, worked out in
+--              code from the item's stored quantity (never by the model).
+--   'remove' — it's gone (eaten, used up, tossed). The payload carries the name.
+-- Replaying the entries in order gives the current list (tracker.current_items).
+ALTER TABLE tracker_entries ADD COLUMN op TEXT NOT NULL DEFAULT 'set';
