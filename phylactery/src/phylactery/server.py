@@ -133,15 +133,29 @@ def identity_append(
     filename: str,
     content: str,
     instanceId: Optional[str] = None,
-) -> str:
+) -> dict[str, Any]:
     """I use this to append new content to one of my identity files, creating it
     if it doesn't exist yet. I reach for it when I've learned something about myself
     that should become part of who I am — additions that don't replace existing content.
+    Returns {ok, chars, under, created, message}: `under` is the heading the new
+    text now sits under. A failure is {ok:false, error} (it used to be a
+    "Failed: …" string that callers read as success).
     """
     result = ident.append_file(category, filename, content, conn=_c())
-    if not result["ok"]:
-        return f"Failed: {result['error']}"
-    return f"Identity file {category}/{filename} updated."
+    if result["ok"]:
+        result["message"] = f"Identity file {category}/{filename} updated."
+    return result
+
+
+@mcp.tool()
+def identity_read_file(category: str, filename: str) -> dict[str, Any]:
+    """I use this to read one of my identity files as it is right now — the copy
+    in front of me was loaded when the turn started, so after an edit this is how
+    I check what the file actually says. Returns {ok, content, chars, outline}:
+    the outline lists the headings with their sizes, and numbers a heading that
+    repeats (occurrence 1 of 2) so I can pass that number to a rewrite or delete.
+    No such file → {ok:false, error, files} with the files the category has."""
+    return ident.read_file(category, filename, conn=_c())
 
 
 @mcp.tool()
@@ -169,6 +183,7 @@ def identity_rewrite_section(
     section: str,
     content: str,
     create_if_missing: Optional[bool] = None,
+    occurrence: Optional[int] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to rewrite a specific section of one of my identity files (auto-snapshots first).
@@ -176,11 +191,13 @@ def identity_rewrite_section(
     I want the old version preserved in a snapshot before the rewrite lands.
     With no section by that heading it's added at the end, unless create_if_missing
     is false: then nothing changes and I get {ok:false, error, sections} listing the
-    headings the file has. Returns {ok, replaced}.
+    headings the file has. A heading that appears more than once needs `occurrence`
+    (from identity_read_file's outline); new content carrying another section's
+    heading is refused. Returns {ok, replaced, chars}.
     """
     return ident.rewrite_section(
         category, filename, section, content, conn=_c(),
-        create_if_missing=create_if_missing is not False,
+        create_if_missing=create_if_missing is not False, occurrence=occurrence,
     )
 
 
@@ -219,12 +236,14 @@ def identity_delete_section(
     category: str,
     filename: str,
     section: str,
+    occurrence: Optional[int] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to remove one section (its heading and body) from an identity
-    file (auto-snapshots first). Returns {ok}, or {ok:false, error} if the file or
-    section isn't found — it never silently no-ops."""
-    return ident.delete_section(category, filename, section, conn=_c())
+    file (auto-snapshots first). A heading that appears more than once needs
+    `occurrence` (from identity_read_file's outline). Returns {ok, chars}, or
+    {ok:false, error} if the file or section isn't found — it never silently no-ops."""
+    return ident.delete_section(category, filename, section, conn=_c(), occurrence=occurrence)
 
 
 # ── Village registry (routing/gating state — NOT identity) ─────────────────────

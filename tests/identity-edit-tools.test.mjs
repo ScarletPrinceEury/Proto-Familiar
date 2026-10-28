@@ -33,7 +33,7 @@ test('remove_from_identity cuts a quoted passage through identity_remove_text', 
   reply = () => ({ ok: true, removed_chars: 45, chars: 780 });
   const out = await run('remove_from_identity', { category: 'ward', filename: 'user_notes.md', passage: '**Pets:** two cats.' });
   assert.deepEqual(sent('identity_remove_text'), { category: 'ward', filename: 'user_notes.md', passage: '**Pets:** two cats.', instanceId: 'proto-familiar' });
-  assert.equal(out, 'ok');
+  assert.equal(out, 'Cut 45 characters from ward/user_notes.md (now 780). read_identity_file shows it now.');
 });
 
 test('a passage Phylactery refuses comes back as "Nothing removed", never ok', async () => {
@@ -62,16 +62,16 @@ test('a file with no headings points me at remove_from_identity', async () => {
   assert.match(out, /no ## headings, so I cut lines with remove_from_identity/);
 });
 
-test('a section that is there is rewritten quietly', async () => {
-  reply = () => ({ ok: true, replaced: true });
+test('a section that is there is rewritten, and the result says so (A1: no more quiet ok)', async () => {
+  reply = () => ({ ok: true, replaced: true, chars: 412 });
   const out = await run('rewrite_identity_section', { category: 'ward', filename: 'user_identity.md', section: 'Places', content: 'Lisbon' });
-  assert.equal(out, 'ok');
+  assert.equal(out, 'Rewrote "Places" in ward/user_identity.md (now 412 chars). read_identity_file shows it now.');
 });
 
 test('delete_identity_section removes a whole section, and says so when it cannot', async () => {
   const ok = await run('delete_identity_section', { category: 'ward', filename: 'user_identity.md', section: 'Pets' });
   assert.deepEqual(sent('identity_delete_section'), { category: 'ward', filename: 'user_identity.md', section: 'Pets', instanceId: 'proto-familiar' });
-  assert.equal(ok, 'ok');
+  assert.equal(ok, 'Removed the section "Pets" from ward/user_identity.md. read_identity_file shows it now.');
   reply = (name) => name === 'identity_delete_section' ? { ok: false, error: "section not found: 'Nope'" } : { ok: true };
   assert.match(await run('delete_identity_section', { category: 'ward', filename: 'user_identity.md', section: 'Nope' }), /^Nothing deleted: section not found/);
 });

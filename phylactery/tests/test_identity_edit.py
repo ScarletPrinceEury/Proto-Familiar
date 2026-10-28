@@ -141,8 +141,10 @@ def test_rewrite_can_refuse_a_missing_heading_and_names_the_real_ones():
 def test_rewrite_reports_whether_it_replaced_and_still_appends_by_default():
     c = _conn()
     ident.set_file("custom", "notes.md", "## One\na\n", conn=c)
-    assert ident.rewrite_section("custom", "notes.md", "One", "b", conn=c) == {"ok": True, "replaced": True}
-    assert ident.rewrite_section("custom", "notes.md", "Two", "c", conn=c) == {"ok": True, "replaced": False}
+    r = ident.rewrite_section("custom", "notes.md", "One", "b", conn=c)
+    assert (r["ok"], r["replaced"]) == (True, True)
+    r = ident.rewrite_section("custom", "notes.md", "Two", "c", conn=c)
+    assert (r["ok"], r["replaced"], r["chars"]) == (True, False, len(_content(c, "custom", "notes.md")))
     assert "## Two" in _content(c, "custom", "notes.md"), "other clients keep the old append-on-missing"
 
 
@@ -151,3 +153,93 @@ def test_rewrite_keeps_a_backslash_in_the_new_body_as_text():
     ident.set_file("custom", "notes.md", "## Paths\nold\n", conn=c)
     ident.rewrite_section("custom", "notes.md", "Paths", r"C:\Users\me and \1", conn=c)
     assert r"C:\Users\me and \1" in _content(c, "custom", "notes.md")
+
+
+# ── Reading a file, and edits that act on one section (known-issues A1) ──────
+# Rewrite and delete used to act on EVERY section with a matching heading, a
+# section ended at any line starting with "#", and a rewrite whose new body
+# carried the next section left that section in twice.
+
+# The shape the live files have: one # title, then ## sections.
+REAL = "# My Persona\n\nIntro.\n\n## Tone\nwarm\n\n## Habits\n#nightowl\nlate nights\n\n## Tone\nblunt\n"
+
+
+def test_outline_numbers_repeated_headings_and_ignores_hashtags():
+    out = ident.outline(REAL)
+    assert [o["heading"] for o in out] == ["My Persona", "Tone", "Habits", "Tone"]
+    assert (out[1]["occurrence"], out[1]["of"]) == (1, 2) and (out[3]["occurrence"], out[3]["of"]) == (2, 2)
+    assert "occurrence" not in out[2]
+    habits = REAL[REAL.index("## Habits"):REAL.index("## Tone\nblunt")]
+    assert out[2]["chars"] == len(habits), "#nightowl is text inside Habits, not a heading"
+
+
+def test_rewrite_refuses_a_repeated_heading_without_occurrence():
+    c = _conn()
+    ident.set_file("self", "my_persona.md", REAL, conn=c)
+    r = ident.rewrite_section("self", "my_persona.md", "Tone", "calm", conn=c, create_if_missing=False)
+    assert r["ok"] is False and r["code"] == "duplicate" and r["count"] == 2
+    assert _content(c, "self", "my_persona.md") == REAL
+    r = ident.rewrite_section("self", "my_persona.md", "Tone", "calm", conn=c, create_if_missing=False, occurrence=2)
+    assert r["ok"] is True
+    after = _content(c, "self", "my_persona.md")
+    assert "## Tone\nwarm" in after and "## Tone\ncalm" in after and "blunt" not in after
+    assert ident.rewrite_section("self", "my_persona.md", "Tone", "x", conn=c, occurrence=3)["code"] == "bad_occurrence"
+
+
+def test_rewrite_refuses_a_body_that_carries_another_section():
+    c = _conn()
+    text = "# T\n\n## A\nold a\n\n## B\nold b\n"
+    ident.set_file("self", "my_wants.md", text, conn=c)
+    r = ident.rewrite_section("self", "my_wants.md", "A", "new a\n\n## B\nold b", conn=c, create_if_missing=False)
+    assert r["ok"] is False and r["code"] == "includes_heading" and r["headings"] == ["B"]
+    assert _content(c, "self", "my_wants.md") == text, "nothing changed"
+
+
+def test_rewrite_of_one_section_keeps_the_rest_and_the_title():
+    c = _conn()
+    ident.set_file("self", "my_wants.md", "# T\n\nintro\n\n## A\nold a\n\n## B\nold b\n", conn=c)
+    r = ident.rewrite_section("self", "my_wants.md", "A", "## A\nnew a", conn=c, create_if_missing=False)
+    assert r["ok"] is True and r["chars"] == len(_content(c, "self", "my_wants.md"))
+    after = _content(c, "self", "my_wants.md")
+    assert after.count("## A") == 1, "a body that opens with its own heading doesn't double it"
+    assert "# T\n\nintro" in after and "new a" in after and "old a" not in after and "## B\nold b" in after
+
+
+def test_rewrite_of_a_section_doesnt_stop_at_a_hashtag_line():
+    c = _conn()
+    ident.set_file("self", "my_persona.md", "## Habits\n#nightowl\nlate\n\n## Other\nx\n", conn=c)
+    ident.rewrite_section("self", "my_persona.md", "Habits", "early now", conn=c, create_if_missing=False)
+    after = _content(c, "self", "my_persona.md")
+    assert "#nightowl" not in after and "late" not in after and "## Other\nx" in after
+
+
+def test_delete_refuses_a_repeated_heading_and_then_removes_just_one():
+    c = _conn()
+    ident.set_file("self", "my_persona.md", REAL, conn=c)
+    r = ident.delete_section("self", "my_persona.md", "Tone", conn=c)
+    assert r["ok"] is False and r["code"] == "duplicate" and r["count"] == 2
+    assert _content(c, "self", "my_persona.md") == REAL
+    r = ident.delete_section("self", "my_persona.md", "Tone", conn=c, occurrence=1)
+    assert r["ok"] is True
+    after = _content(c, "self", "my_persona.md")
+    assert "warm" not in after and "## Tone\nblunt" in after and "# My Persona" in after
+
+
+def test_read_file_returns_the_current_text_and_outline_or_the_real_files():
+    c = _conn()
+    ident.set_file("self", "my_persona.md", REAL, conn=c)
+    r = ident.read_file("self", "my_persona.md", conn=c)
+    assert r["ok"] and r["content"] == REAL and r["chars"] == len(REAL) and len(r["outline"]) == 4
+    miss = ident.read_file("self", "my_persna.md", conn=c)
+    assert miss["ok"] is False and miss["files"] == ["my_persona.md"]
+
+
+def test_append_says_where_the_text_landed():
+    c = _conn()
+    ident.set_file("self", "my_wants.md", "# T\n\n## Things I'm curious about\n- moths\n", conn=c)
+    r = ident.append_file("self", "my_wants.md", "- tide pools", conn=c)
+    assert r["ok"] and r["under"] == "Things I'm curious about" and r["chars"] == len(_content(c, "self", "my_wants.md"))
+    r = ident.append_file("self", "my_wants.md", "## New\n- a", conn=c)
+    assert r["under"] == "New"
+    r = ident.append_file("self", "brand_new.md", "plain", conn=c)
+    assert r["created"] is True and r["under"] is None

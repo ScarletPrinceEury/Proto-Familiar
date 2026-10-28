@@ -98,14 +98,14 @@ beforeEach(async () => {
 });
 const run = (tool, args, ctx) => executeToolCall(tool, JSON.stringify(args), ctx);
 
-test('an identity edit that breaks a stamp says so right away; one that does not stays quiet', async () => {
-  assert.equal(await run('remove_from_identity', { category: 'self', filename: 'my_persona.md', passage: 'More.' }), 'ok');
+test('an identity edit that breaks a stamp says so right away; one that does not has no stamp note', async () => {
+  assert.doesNotMatch(await run('remove_from_identity', { category: 'self', filename: 'my_persona.md', passage: 'More.' }), /Heads up/);
   identity = files('I\'m blunt.\nMore.');   // the edit took the stamp with it
   const out = await run('remove_from_identity', { category: 'self', filename: 'my_persona.md', passage: PERSONA });
-  assert.match(out, /^Cut 10 characters from self\/my_persona\.md \(now 100\)\. Heads up: after that edit my canary stamp "persona" isn't in self\/my_persona\.md any more\./);
+  assert.match(out, /^Cut 10 characters from self\/my_persona\.md \(now 100\)\. read_identity_file shows it now\. Heads up: after that edit my canary stamp "persona" isn't in self\/my_persona\.md any more\./);
   assert.match(out, /add_identity_canary/);
   const appended = await run('update_identity', { category: 'custom', filename: 'notes.md', content: 'x' });
-  assert.equal(appended, 'ok', 'appending to a file whose end marker is still last is fine');
+  assert.doesNotMatch(appended, /Heads up/, 'appending to a file whose end marker is still last is fine');
   identity = files(undefined, `Odds.\n${TAIL}\nappended after the tail`);
   assert.match(await run('update_identity', { category: 'custom', filename: 'notes.md', content: 'appended after the tail' }),
     /canary stamp "tail" isn't the last thing in my identity any more/);
