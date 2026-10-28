@@ -2391,8 +2391,18 @@ stripping the identity assembly uses), renders `[Canary check …]` only when on
 is broken, and logs state changes to `logs/identity-canary-events.jsonl`. Every
 identity edit tool (`update_identity`, `rewrite_identity_section`,
 `remove_from_identity`, `delete_identity_section`, `apply_cleanup_proposal`)
-re-checks the stamps in the file it just changed and returns a full-text
-warning instead of a quiet "ok" when one broke. Detection only — nothing blocks
+re-checks the stamps in the file it just changed and adds a warning when one
+broke. **Since 0.14.112 every identity edit answers in full** (what it did,
+where, the file's new size; `src/memory/identity-results.js`) ending
+"read_identity_file shows it now", and **`read_identity_file`** (core, refused
+when `ctx.wardPrivate === false`) → `readIdentityFile` → Phylactery
+`identity_read_file` returns a file as it is now, with an outline whose
+repeated headings are numbered. Phylactery's one heading parser (`_sections`,
+real headings only: `^#{1,6}\s`, a section runs to the next heading of any
+level) backs rewrite, delete and the outline: a repeated heading needs
+`occurrence`, a rewrite whose body carries another section's heading is
+refused (`includes_heading`), and `identity_append` returns
+`{ok, chars, under, created}` (a failed append used to read as success). Detection only — nothing blocks
 an edit. Out of reach: anything that happens after the request leaves the app
 (provider-side context trimming); the Familiar's own reading of its stamps
 covers that.

@@ -144,12 +144,16 @@ below lets the Familiar drop a rule instead of carrying it:
   synced item (the next sync would bring it back) and points at cancelling it
   or deleting it in Google. Rule it retires: "check where a duplicate came from
   before retiring it".
-- **Identity edits can't be checked in the same turn.** A quiet "ok" doesn't
-  say what changed, `rewrite_identity_section` duplicates the next section when
-  the new body includes it, and there's no tool to read one identity file
-  (see the two identity entries below). Rules it caused: "an ok from
-  update_identity means something was added somewhere", "called vs verified",
-  "an empty search tells me where it isn't, never where it is".
+- ~~**Identity edits can't be checked in the same turn.**~~ Fixed 0.14.112:
+  `read_identity_file` (core, own conversations only) shows a file as it is,
+  with a heading outline that numbers repeats. Every identity edit says what it
+  did and where ("Added 312 chars at the end of self/my_wants.md, under
+  …"), ending "read_identity_file shows it now". Rewrite and delete act on one
+  section (`occurrence` picks a repeated heading), a rewrite carrying another
+  section's heading is refused, and a `#hashtag` line no longer ends a section.
+  `appendIdentity` used to report a failed append as ok. Rules it retires:
+  "an ok from update_identity means something was added somewhere", "called vs
+  verified".
 - **Tomes.** The Familiar can create tomes, add entries, and since 0.14.101 read
   them on purpose (`read_tome`: list, search, read one entry in full), but can't
   edit or delete an existing entry.

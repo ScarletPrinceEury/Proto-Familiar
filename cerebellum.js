@@ -50,7 +50,7 @@ import {
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
-  updateMemory, deleteMemory, rewriteIdentitySection, removeIdentityText, deleteIdentitySection,
+  updateMemory, deleteMemory, rewriteIdentitySection, removeIdentityText, deleteIdentitySection, readIdentityFile,
   listCleanupProposals, applyCleanupProposal, dismissCleanupProposal,
   listIdentityCanaries, addIdentityCanary, retireIdentityCanary,
   listMemories, readMemory, readMemoryById, moveMemoryDate, updateMemoryById, deleteMemoryById,
@@ -77,6 +77,7 @@ import { formatCleanupProposalsReview } from './src/memory/cleanup-proposals.js'
 import { checkCanariesInFiles, formatCanaryEditNote, formatCanaryList, lastCanaryStates } from './src/memory/identity-canaries.js';
 import { gcalMarkerFor } from './src/schedule/temporal-format.js';
 import { identityBudgetNote, identityBudgetTokens } from './src/memory/identity-budget.js';
+import { CHECK_TAIL, formatIdentityRead, identityFileMissing, identityRefusal, appendedText, removeRefusal } from './src/memory/identity-results.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
 import { disclosableVillagerFields } from './src/village/village-card.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './src/vision/media.js';
@@ -1828,8 +1829,23 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'read_identity_file',
+      description: 'I read one of my identity files as it is right now. The copy in front of me was loaded when this turn started, so after an edit this is how I check what the file actually says. I get its size, its headings (a heading that shows up twice comes numbered, 1 of 2, 2 of 2) and the text. Only in my own conversations with {{user}}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'The file, e.g. my_persona.md.' },
+        },
+        required: ['category', 'filename'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'rewrite_identity_section',
-      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. It only works on a section under a markdown heading (## Heading); if the file has no such heading, nothing changes and the result lists the headings it does have. For NEW facts that just need to land somewhere, I use update_identity (append). To cut a line or a passage, remove_from_identity is simpler.',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. It only works on a section under a markdown heading (## Heading); if the file has no such heading, nothing changes and the result lists the headings it does have. The new content is just this section: if it has another section\'s heading in it, nothing changes (that\'s how a section used to end up in the file twice). For NEW facts that just need to land somewhere, I use update_identity (append). To cut a line or a passage, remove_from_identity is simpler.',
       parameters: {
         type: 'object',
         properties: {
@@ -1837,6 +1853,7 @@ export const BUILTIN_TOOLS = [
           filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
           section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
           content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
+          occurrence: { type: 'integer', description: 'Only when that heading shows up more than once: which one (1, 2, …), as read_identity_file numbers them.' },
         },
         required: ['category', 'filename', 'section', 'content'],
       },
@@ -1869,6 +1886,7 @@ export const BUILTIN_TOOLS = [
           category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'The file, e.g. user_preferences.md.' },
           section:  { type: 'string', description: 'The markdown heading of the section to remove (without leading #s).' },
+          occurrence: { type: 'integer', description: 'Only when that heading shows up more than once: which one (1, 2, …), as read_identity_file numbers them.' },
         },
         required: ['category', 'filename', 'section'],
       },
@@ -3446,9 +3464,11 @@ async function canaryEditNote(category, filename) {
   }
 }
 
+// An identity edit's result says what it did, in full (not a quiet "ok"), and
+// where to check it (identity-results.js), plus any canary stamp it broke.
 async function identityEditResult(okText, category, filename) {
   const note = await canaryEditNote(category, filename);
-  return note ? `${okText} ${note}` : quietOk(okText);
+  return `${okText} ${CHECK_TAIL}${note ? ` ${note}` : ''}`;
 }
 
 export const TOOL_EXECUTORS = {
@@ -3625,14 +3645,13 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await appendIdentity({ category, filename, content: content.trim() });
       if (!result.ok) return `Identity update failed: ${result.error ?? 'unknown error'}`;
-      // The budget nudge (ward-signed 0.14.70): over its share, the result says
-      // so and what to do — the full text, since a quiet "ok" would hide it.
+      // Where it landed (a misplaced append shows here), then the budget nudge
+      // (ward-signed 0.14.70): over its share, the result says so and what to do.
+      const landed = appendedText({ category, filename, added: content.trim().length, chars: result.chars, under: result.under, created: result.created });
       let note = '';
       try { note = identityBudgetNote(await getIdentityAll(), category, identityBudgetTokens(readSettingsSync())); }
       catch { /* best-effort — the append itself succeeded */ }
-      if (!note) return identityEditResult('Identity file updated.', category, filename);
-      const canary = await canaryEditNote(category, filename);
-      return `Identity file updated. ${note}${canary ? ` ${canary}` : ''}`;
+      return identityEditResult(note ? `${landed} ${note}` : landed, category, filename);
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
@@ -4098,24 +4117,36 @@ export const TOOL_EXECUTORS = {
     return r?.wasActive ? "I've left the voice channel." : "I wasn't in a voice channel.";
   },
 
-  rewrite_identity_section: async ({ category, filename, section, content }) => {
+  read_identity_file: async ({ category, filename } = {}, ctx = {}) => {
+    // Ward files are private, and the self files ride only where identity does;
+    // like my care list, I read these in our own conversations.
+    // Any room that isn't ours: a Discord room, or the web chat with others present.
+    if (ctx?.wardPrivate === false) return 'I read my identity files in my own conversations with my human, not here.';
+    if (!VALID_IDENTITY_CATEGORIES.has(category)) return `I need a category: ${[...VALID_IDENTITY_CATEGORIES].join(', ')}.`;
+    if (!filename || !VALID_FILENAME_RE.test(filename)) return 'I need the filename, e.g. my_persona.md.';
+    try {
+      const read = await readIdentityFile({ category, filename });
+      if (!read.ok) return read.files ? identityFileMissing(category, filename, read.files) : `I couldn't read it: ${read.error}.`;
+      let all = null;
+      try { all = await getIdentityAll(); } catch { /* the file alone still reads */ }
+      return formatIdentityRead(read, all, identityBudgetTokens(readSettingsSync()));
+    } catch (err) { return `I couldn't read it: ${err.message}`; }
+  },
+
+  rewrite_identity_section: async ({ category, filename, section, content, occurrence }) => {
     if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Failed to rewrite section: invalid category';
     if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Failed to rewrite section: invalid filename';
     if (typeof content !== 'string') return 'Failed to rewrite section: content required';
     if (content.length > 16384) return 'Failed to rewrite section: content exceeds 16 KB limit';
+    const occ = Number.isInteger(Number(occurrence)) && occurrence !== undefined && occurrence !== null ? Number(occurrence) : undefined;
     try {
       // createIfMissing:false — a heading that isn't there is refused with the
       // real ones, so a misnamed section can't quietly grow the file while I
       // believe I rewrote it.
-      const result = await rewriteIdentitySection({ category, filename, section, content, createIfMissing: false });
-      if (!result.ok) {
-        const heads = Array.isArray(result.sections) ? result.sections : [];
-        const hint = heads.length
-          ? ` Its headings are: ${heads.map(h => `"${h}"`).join(', ')}.`
-          : (result.sections ? ' It has no ## headings, so I cut lines with remove_from_identity instead.' : '');
-        return `Nothing rewritten: ${result.error ?? 'phylactery unavailable'}.${hint}`;
-      }
-      return identityEditResult(`Section "${section}" of ${category}/${filename} rewritten.`, category, filename);
+      const result = await rewriteIdentitySection({ category, filename, section, content, createIfMissing: false, occurrence: occ });
+      if (!result.ok) return identityRefusal('rewritten', result, { category, filename, section });
+      const size = Number.isFinite(result.chars) ? ` (now ${result.chars.toLocaleString('en-US')} chars)` : '';
+      return identityEditResult(`Rewrote "${section}"${occ ? ` (number ${occ})` : ''} in ${category}/${filename}${size}.`, category, filename);
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
   },
 
@@ -4125,19 +4156,21 @@ export const TOOL_EXECUTORS = {
     if (typeof passage !== 'string' || !passage.trim()) return 'Nothing removed: I need the passage to cut, quoted from the file.';
     try {
       const result = await removeIdentityText({ category, filename, passage });
-      if (!result.ok) return `Nothing removed: ${result.error ?? 'phylactery unavailable'}.`;
+      if (!result.ok) return removeRefusal(result, { category, filename });
       return identityEditResult(`Cut ${result.removedChars} characters from ${category}/${filename} (now ${result.chars}).`, category, filename);
     } catch (err) { return `Nothing removed: ${err.message}`; }
   },
 
-  delete_identity_section: async ({ category, filename, section }) => {
+  delete_identity_section: async ({ category, filename, section, occurrence }) => {
     if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Nothing deleted: invalid category.';
     if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Nothing deleted: invalid filename.';
     if (typeof section !== 'string' || !section.trim()) return 'Nothing deleted: I need the section heading.';
+    const occ = Number.isInteger(Number(occurrence)) && occurrence !== undefined && occurrence !== null ? Number(occurrence) : undefined;
     try {
-      const result = await deleteIdentitySection({ category, filename, section: section.trim() });
-      if (!result.ok) return `Nothing deleted: ${result.error ?? 'phylactery unavailable'}.`;
-      return identityEditResult(`Section "${section.trim()}" removed from ${category}/${filename}.`, category, filename);
+      const result = await deleteIdentitySection({ category, filename, section: section.trim(), occurrence: occ });
+      if (!result.ok) return identityRefusal('deleted', result, { category, filename, section: section.trim() });
+      const size = Number.isFinite(result.chars) ? ` (now ${result.chars.toLocaleString('en-US')} chars)` : '';
+      return identityEditResult(`Removed the section "${section.trim()}"${occ ? ` (number ${occ})` : ''} from ${category}/${filename}${size}.`, category, filename);
     } catch (err) { return `Nothing deleted: ${err.message}`; }
   },
 

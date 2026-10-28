@@ -82,7 +82,7 @@ test('my review shows passages whole, and the decided ones when I ask', () => {
   assert.equal(formatCleanupProposalsReview([]), 'There are no open cleanup proposals for my identity.');
 });
 
-test('applying sends my wording and care call, after a snapshot, and answers quietly', async () => {
+test('applying sends my wording and care call, after a snapshot, and says what it did', async () => {
   reply = (name) => name === 'identity_cleanup_apply'
     ? { ok: true, memory_id: 'my-human-likes-tea-k2', removed_chars: 25, file: 'ward/user_notes.md' }
     : { ok: true };
@@ -90,7 +90,7 @@ test('applying sends my wording and care call, after a snapshot, and answers qui
   assert.deepEqual(sent('identity_cleanup_apply'), { id: 'prop-likes-tea-x7', fact: 'Tea, never coffee.', care_weight: 'low' });
   const order = calls.map(c => c.name);
   assert.ok(order.indexOf('snapshot_create') > -1 && order.indexOf('snapshot_create') < order.indexOf('identity_cleanup_apply'));
-  assert.equal(out, 'ok');
+  assert.equal(out, 'Saved the standing fact (my-human-likes-tea-k2) and cut 25 characters from ward/user_notes.md. read_identity_file shows it now.');
   calls = [];
   await run('apply_cleanup_proposal', { id: 'prop-likes-tea-x7' });
   assert.deepEqual(sent('identity_cleanup_apply'), { id: 'prop-likes-tea-x7' }, 'left out, the proposal keeps its own wording and care call');

@@ -3648,18 +3648,37 @@ export async function setStandingConsent(category, until, window) {
  * @param {{ category: string, filename: string, content: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
+// The result is read now: identity_append used to answer a failure with a
+// "Failed: …" string, and this wrapper reported every call as ok. It returns
+// {ok, chars, under, created} — `under` is the heading the text landed under.
 export async function appendIdentity({ category, filename, content }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
-    await mcpClient.callTool({
-      name: 'identity_append',
-      arguments: { category, filename, content },
-    });
+    const result = await callTool('identity_append', { category, filename, content });
+    if (!result || result.ok !== true) {
+      console.error(`[thalamus] appendIdentity rejected for ${category}/${filename}: ${result?.error ?? JSON.stringify(result)}`);
+      return { ok: false, error: result?.error ?? 'append failed' };
+    }
     console.log(`[thalamus] appendIdentity() updated ${category}/${filename}`);
-    return { ok: true };
+    return { ok: true, chars: result.chars, under: result.under ?? null, created: result.created === true };
   } catch (err) {
     console.error('[thalamus] appendIdentity failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// One identity file as it is right now, with its size and a heading outline
+// (repeated headings numbered). {ok:false, error, files} for a file that isn't there.
+export async function readIdentityFile({ category, filename }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('identity_read_file', { category, filename });
+    if (!result || result.ok !== true) return { ok: false, error: result?.error ?? 'read failed', files: result?.files ?? [] };
+    return result;
+  } catch (err) {
+    console.error('[thalamus] readIdentityFile failed:', err.message);
     return { ok: false, error: err.message };
   }
 }
@@ -3986,7 +4005,7 @@ export async function deleteMemory({ granularity, date, instanceId, slug }) {
 // since a plain transport success used to read every refusal as a rewrite.
 // createIfMissing:false (my own tool) means a heading that isn't there is
 // refused with the file's real headings, never quietly appended.
-export async function rewriteIdentitySection({ category, filename, section, content, createIfMissing, instanceId = PROTO_INSTANCE_ID }) {
+export async function rewriteIdentitySection({ category, filename, section, content, createIfMissing, occurrence, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`identity_rewrite_section ${category}/${filename}#${section}`);
@@ -3994,13 +4013,15 @@ export async function rewriteIdentitySection({ category, filename, section, cont
     const result = await callTool('identity_rewrite_section', {
       category, filename, section, content, instanceId,
       ...(createIfMissing === false ? { create_if_missing: false } : {}),
+      ...(Number.isInteger(occurrence) ? { occurrence } : {}),
     });
     if (result && result.ok === false) {
       console.error(`[thalamus] rewriteIdentitySection rejected for ${category}/${filename} § ${section}: ${result.error}`);
-      return { ok: false, error: result.error ?? 'rewrite_section failed', sections: result.sections ?? [] };
+      return { ok: false, error: result.error ?? 'rewrite_section failed', code: result.code ?? null,
+        sections: result.sections ?? [], count: result.count ?? null, headings: result.headings ?? [] };
     }
     console.log(`[thalamus] rewriteIdentitySection ${category}/${filename} § ${section}`);
-    return { ok: true, replaced: result?.replaced !== false, result };
+    return { ok: true, replaced: result?.replaced !== false, chars: result?.chars ?? null, result };
   } catch (err) {
     console.error('[thalamus] rewriteIdentitySection failed:', err.message);
     return { ok: false, error: err.message };
@@ -4018,7 +4039,7 @@ export async function removeIdentityText({ category, filename, passage, instance
     const result = await callTool('identity_remove_text', { category, filename, passage, instanceId });
     if (!result || result.ok !== true) {
       console.error(`[thalamus] removeIdentityText rejected for ${category}/${filename}: ${result?.error}`);
-      return { ok: false, error: result?.error ?? 'remove_text failed' };
+      return { ok: false, code: result?.code ?? null, error: result?.error ?? 'remove_text failed' };
     }
     console.log(`[thalamus] removeIdentityText ${category}/${filename} (-${result.removed_chars} chars)`);
     return { ok: true, removedChars: result.removed_chars, chars: result.chars };
@@ -4051,18 +4072,22 @@ export async function setIdentityFile({ category, filename, content, instanceId 
 }
 
 // Remove one section from an identity file.
-export async function deleteIdentitySection({ category, filename, section, instanceId = PROTO_INSTANCE_ID }) {
+export async function deleteIdentitySection({ category, filename, section, occurrence, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`identity_delete_section ${category}/${filename}#${section}`);
   try {
-    const result = await callTool('identity_delete_section', { category, filename, section, instanceId });
+    const result = await callTool('identity_delete_section', {
+      category, filename, section, instanceId,
+      ...(Number.isInteger(occurrence) ? { occurrence } : {}),
+    });
     if (result && result.ok === false) {
       console.error(`[thalamus] deleteIdentitySection rejected for ${category}/${filename} § ${section}: ${result.error}`);
-      return { ok: false, error: result.error ?? 'delete_section failed' };
+      return { ok: false, error: result.error ?? 'delete_section failed', code: result.code ?? null,
+        count: result.count ?? null, sections: result.sections ?? [] };
     }
     console.log(`[thalamus] deleteIdentitySection ${category}/${filename} § ${section}`);
-    return { ok: true, result };
+    return { ok: true, chars: result?.chars ?? null, result };
   } catch (err) {
     console.error('[thalamus] deleteIdentitySection failed:', err.message);
     return { ok: false, error: err.message };
