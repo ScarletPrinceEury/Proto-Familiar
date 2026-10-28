@@ -101,6 +101,8 @@ const PHYLACTERY_VENV      = path.join(PHYLACTERY_ROOT, '.venv');
 // (subdirectory rather than sibling repo; see docs/unruh-implementation-plan.md
 // §1 Decision 1). Launched via `uv run python -m unruh` with cwd set to
 // the unruh/ root so its ./data/ resolves. UNRUH_PATH overrides the probe.
+// PROTO_FAMILIAR_UNRUH_DISABLED=1 hard-kills it, the same off-switch shape as
+// Phylactery's (tests that import thalamus set it so no real child spawns).
 const UNRUH_ROOT = path.resolve(__dirname, 'unruh');
 const UNRUH_ENTRY = process.env.UNRUH_PATH ?? path.join(UNRUH_ROOT, 'src', 'unruh', '__main__.py');
 const UNRUH_PYPROJECT = path.join(UNRUH_ROOT, 'pyproject.toml');
@@ -487,6 +489,10 @@ export async function reconnectUnruh() {
 // real "not ready yet" state, so we surface a clear actionable message
 // instead of letting `uv run` fail opaquely after spawn.
 async function connectUnruh() {
+  if (process.env.PROTO_FAMILIAR_UNRUH_DISABLED === '1') {
+    console.log('[thalamus] Unruh disabled via PROTO_FAMILIAR_UNRUH_DISABLED=1');
+    return;
+  }
   if (!existsSync(UNRUH_PYPROJECT)) {
     console.log('[thalamus] Unruh source not found at', UNRUH_ROOT, '— skipping');
     return;

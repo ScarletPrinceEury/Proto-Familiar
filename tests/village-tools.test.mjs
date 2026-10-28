@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { initCerebellumTools, executeToolCall } from '../cerebellum.js';
 import { normalizeRegistry, upsertVillager } from '../src/village/village.js';
@@ -20,15 +23,20 @@ test('normalizeRegistry keeps privateNotes when present, drops when blank', () =
   assert.equal('privateNotes' in chen, false, 'blank privateNotes dropped');
 });
 
-test('upsertVillager writes and clears privateNotes (in-memory file)', async () => {
-  const filePath = `/tmp/pf-village-tools-${process.pid}-${Date.now()}.json`;
-  const created = await upsertVillager(
-    { name: 'Sam', privateNotes: 'sensitive thing' }, { filePath });
-  assert.equal(created.privateNotes, 'sensitive thing');
-  // Editing with an empty string clears it (applyOptStr semantics).
-  const edited = await upsertVillager(
-    { id: created.id, privateNotes: '' }, { filePath });
-  assert.equal('privateNotes' in edited, false, 'empty string clears privateNotes');
+test('upsertVillager writes and clears privateNotes (temp file)', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'pf-village-tools-'));
+  const filePath = path.join(dir, 'village.json');
+  try {
+    const created = await upsertVillager(
+      { name: 'Sam', privateNotes: 'sensitive thing' }, { filePath });
+    assert.equal(created.privateNotes, 'sensitive thing');
+    // Editing with an empty string clears it (applyOptStr semantics).
+    const edited = await upsertVillager(
+      { id: created.id, privateNotes: '' }, { filePath });
+    assert.equal('privateNotes' in edited, false, 'empty string clears privateNotes');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 // ── Tool gating (the safety-critical behavior) ──────────────────────
