@@ -59,7 +59,7 @@ import {
   CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
 } from '../village/villager-consent.js';
 import { findVillagerByAlias } from '../village/village.js';
-import { mergeSettings } from '../../settings-merge.js';
+import { writeSettings } from '../../settings-write.js';
 import { loreForTurn } from '../tomes/room-lore.js';
 import {
   isQueueCommand, QUEUE_CID,
@@ -1890,19 +1890,14 @@ async function handleConsentInteraction(gw, d) {
 
 const WARD_SETTINGS_FILE = path.join(REPO_ROOT, 'settings.json');
 
-// Persist a ward settings change with the same locked, atomic write + wholesale
-// top-level merge the HTTP PUT uses, so a Discord change and a web change can't
-// tear the file. Only for ward-authenticated console actions.
+// Persist a ward settings change through the one settings writer
+// (settings-write.js) the HTTP PUT uses: same lock, atomic write, and a
+// revision bump so an open web page holding the old value can't overwrite this
+// change. `patch` may be a function of the current settings (a read-modify-write
+// done under the lock). Only for ward-authenticated console actions.
 async function patchWardSettings(patch) {
-  await withLock(WARD_SETTINGS_FILE, async () => {
-    let prior = {};
-    try { prior = JSON.parse(await fsp.readFile(WARD_SETTINGS_FILE, 'utf8')); }
-    catch { /* first write / unreadable — the patch stands alone */ }
-    const merged = mergeSettings(prior, patch);
-    const tmp = WARD_SETTINGS_FILE + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(merged, null, 2), 'utf8');
-    await fsp.rename(tmp, WARD_SETTINGS_FILE);
-  });
+  const w = await writeSettings(patch, { file: WARD_SETTINGS_FILE });
+  if (!w.ok) throw new Error(w.error ?? w.code);
 }
 
 // The interacting user IS my human — the gate for every ward-console click. A
@@ -2064,11 +2059,12 @@ async function handleConnectionInteraction(gw, d) {
       const feature = parts[2];
       const value   = d.data?.values?.[0];
       if (FEATURE_CONNECTIONS.some(f => f.key === feature)) {
-        const s = snap();
-        const next = { ...(s.featureConnections || {}) };
-        if (value === DEFAULT_VALUE) delete next[feature];
-        else if (s.connections.some(c => String(c.id) === String(value))) next[feature] = value;
-        await patchWardSettings({ featureConnections: next });
+        await patchWardSettings(cur => {
+          const next = { ...(cur.featureConnections || {}) };
+          if (value === DEFAULT_VALUE) delete next[feature];
+          else if ((cur.connections ?? []).some(c => String(c.id) === String(value))) next[feature] = value;
+          return { featureConnections: next };
+        });
         console.log(`[discord] connection: ward routed ${feature} -> ${value === DEFAULT_VALUE ? 'primary' : value}`);
       }
       await respond(buildFeatureView({ feature, ...snap() }));
@@ -2088,14 +2084,17 @@ async function handleConnectionInteraction(gw, d) {
       if (isSettableEffort(value) && s.connections.some(c => String(c.id) === String(connId))) {
         // Rewrite the whole connections array (mergeSettings replaces top-level
         // keys wholesale): copy the target, set or clear its reasoningEffort.
-        const nextConns = s.connections.map(c => {
-          if (String(c.id) !== String(connId)) return c;
-          const copy = { ...c };
-          if (value === DEFAULT_VALUE) delete copy.reasoningEffort;
-          else copy.reasoningEffort = value;
-          return copy;
-        });
-        await patchWardSettings({ connections: nextConns });
+        // Read under the lock, so a connection added on the web a moment ago
+        // isn't dropped by this rewrite.
+        await patchWardSettings(cur => ({
+          connections: (cur.connections ?? []).map(c => {
+            if (String(c.id) !== String(connId)) return c;
+            const copy = { ...c };
+            if (value === DEFAULT_VALUE) delete copy.reasoningEffort;
+            else copy.reasoningEffort = value;
+            return copy;
+          }),
+        }));
         console.log(`[discord] connection: ward set reasoning effort ${connId} -> ${value === DEFAULT_VALUE ? 'default' : value}`);
       }
       await respond(buildEffortView({ connId, ...snap() }));

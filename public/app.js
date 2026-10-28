@@ -669,16 +669,165 @@ function detectWardTz() {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
   catch { return ''; }
 }
+// ── Saving settings: changed keys only, against what this page last saw ──
+//
+// ⚠️ Saved connections vanished (2026-10-28). This page used to PUT its whole
+// copy of every synced setting on any change. A page holding an old copy (a
+// tab opened before connections were added, a device with a weeks-old cache,
+// or this page's own startup save landing before its first read of the
+// server) wrote that old list over the real one.
+//
+// Now the page keeps `_settingsBase`, the server's copy as it last saw it,
+// with each key's revision (settings-write.js). A save sends only the keys
+// that differ from it, never before it exists, and says which revision each
+// was based on. A key someone else changed since comes back as a conflict;
+// the page folds the server's copy in (rebaseSettingValue) and sends what's
+// still its own change.
+let _settingsBase = null;          // { values: {key: json}, revisions: {key: n} }
+let _settingsFlushing = null;
+let _settingsFlushAgain = false;
+
+function settingsJson(v) { return v === undefined ? undefined : JSON.stringify(v); }
+
+function setSettingsBase(remote, keys = SERVER_SYNCED_KEYS) {
+  if (!_settingsBase) _settingsBase = { values: {}, revisions: {} };
+  const revs = (remote && remote._revisions && typeof remote._revisions === 'object') ? remote._revisions : {};
+  for (const k of keys) {
+    _settingsBase.values[k] = settingsJson(remote?.[k]);
+    _settingsBase.revisions[k] = Number(revs[k]) || 0;
+  }
+}
+
+// The keys `current` changed since `base`, and the revision each was based on.
+function settingsPatch(current, base, keys = SERVER_SYNCED_KEYS) {
+  const settings = {}, revs = {};
+  for (const k of keys) {
+    if (settingsJson(current[k]) === base.values[k]) continue;
+    settings[k] = current[k] === undefined ? null : current[k];
+    revs[k] = base.revisions[k] ?? 0;
+  }
+  return { settings, base: revs };
+}
+
+// One key, after the server's copy moved under this page: unchanged here →
+// theirs; unchanged there → mine; both changed → connections merge by id,
+// anything else keeps this page's change (it's a fresh, deliberate edit).
+function rebaseSettingValue(key, baseJson, local, remote) {
+  const l = settingsJson(local), r = settingsJson(remote);
+  if (l === baseJson) return remote;
+  if (r === baseJson || l === r) return local;
+  if (key === 'connections') {
+    return mergeConnectionsByIntent(baseJson === undefined ? [] : JSON.parse(baseJson), local, remote);
+  }
+  return local;
+}
+
+// What this page did to its connections (added, removed, edited — read off
+// base vs local), applied to the server's current list. Connections added
+// elsewhere survive; that's the whole point.
+function mergeConnectionsByIntent(base, local, remote) {
+  const lists = [base, local, remote].map(x => (Array.isArray(x) ? x : []));
+  if (lists.some(list => list.some(c => !c || c.id == null))) return local;   // can't match without ids
+  const [b, l, r] = lists;
+  const baseById = new Map(b.map(c => [String(c.id), JSON.stringify(c)]));
+  const localById = new Map(l.map(c => [String(c.id), c]));
+  const out = [], seen = new Set();
+  for (const rc of r) {
+    const id = String(rc.id);
+    seen.add(id);
+    if (baseById.has(id) && !localById.has(id)) continue;                    // removed here
+    const mine = localById.get(id);
+    if (mine && JSON.stringify(mine) !== baseById.get(id)) { out.push(mine); continue; }   // edited here
+    out.push(rc);
+  }
+  for (const [id, lc] of localById) if (!baseById.has(id) && !seen.has(id)) out.push(lc); // added here
+  return out;
+}
+
+// Fold the server's copy into this page, keeping this page's own unsaved
+// changes, then repaint. With no base yet (the first read failed), the
+// server's copy simply wins.
+function applyRemoteSettings(remote) {
+  if (!remote || typeof remote !== 'object') return false;
+  let changed = false;
+  for (const k of SERVER_SYNCED_KEYS) {
+    const next = _settingsBase
+      ? rebaseSettingValue(k, _settingsBase.values[k], state[k], remote[k])
+      : (k in remote ? remote[k] : state[k]);
+    if (settingsJson(next) === settingsJson(state[k])) continue;
+    if (next === undefined) delete state[k]; else state[k] = next;
+    changed = true;
+  }
+  setSettingsBase(remote);
+  if (changed) {
+    if (!Array.isArray(state.connections)) state.connections = [];
+    if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
+    try {
+      const { messages: _i, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
+      localStorage.setItem('pf_settings', JSON.stringify(settings));
+    } catch { /* quota */ }
+    writeSettingsToUI();
+    renderConnectionsList();
+  }
+  return changed;
+}
+
+async function flushSettings() {
+  if (!_settingsBase) return;                 // never before this page has seen the server's copy
+  if (_settingsFlushing) { _settingsFlushAgain = true; return _settingsFlushing; }
+  _settingsFlushing = (async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { settings, base } = settingsPatch(state, _settingsBase);
+      const keys = Object.keys(settings);
+      if (!keys.length) return;
+      let r, data;
+      try {
+        r = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings, base }),
+        });
+        data = await r.json().catch(() => ({}));
+      } catch (err) { console.warn('settings sync to server failed', err); return; }
+      if (r.ok) {
+        for (const k of keys) {
+          _settingsBase.values[k] = settingsJson(settings[k] === null ? undefined : settings[k]);
+          _settingsBase.revisions[k] = Number(data?.revisions?.[k]) || 0;
+        }
+        return;
+      }
+      if (r.status === 409 && data?.code === 'conflict' && data.settings) {
+        console.log('settings changed elsewhere, merging:', (data.conflicts || []).join(', '));
+        applyRemoteSettings(data.settings);
+        continue;
+      }
+      console.warn('settings not saved:', data?.error || r.status);
+      return;
+    }
+  })().finally(() => {
+    _settingsFlushing = null;
+    if (_settingsFlushAgain) { _settingsFlushAgain = false; flushSettings(); }
+  });
+  return _settingsFlushing;
+}
+
+// An open tab picks up changes made elsewhere when it's looked at again, and
+// every few minutes while it stays open.
+async function refreshSettingsFromServer() {
+  try {
+    const r = await fetch('/api/settings');
+    if (!r.ok) return;
+    const remote = (await r.json())?.settings;
+    if (!remote) return;
+    applyRemoteSettings(remote);
+    await flushSettings();
+  } catch { /* offline; next look tries again */ }
+}
+
 let _settingsPutTimer = null;
 function pushSettingsToServer() {
   clearTimeout(_settingsPutTimer);
-  _settingsPutTimer = setTimeout(() => {
-    fetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: extractServerSettings(state) }),
-    }).catch(err => console.warn('settings sync to server failed', err));
-  }, 500);
+  _settingsPutTimer = setTimeout(() => { flushSettings(); }, 500);
 }
 
 function saveSettings() {
@@ -999,10 +1148,7 @@ async function applyWebSearchBackend() {
   if (status) status.textContent = 'Saving…';
   try {
     readSettingsFromUI(); // pull every modal field into state (also persists)
-    await fetch('/api/settings', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: extractServerSettings(state) }),
-    });
+    await flushSettings();
     if (status) status.textContent = 'Saved.';
   } catch {
     if (status) status.textContent = 'Saved locally.';
@@ -1260,6 +1406,7 @@ async function syncSettingsFromServer() {
   if (!remote || typeof remote !== 'object') {
     // Server is empty — seed it from whatever we just loaded out of
     // localStorage so the user doesn't lose anything on the next load.
+    setSettingsBase({});
     pushSettingsToServer();
     try { localStorage.setItem(ABSORBED_FLAG_KEY, '1'); } catch {}
     return;
@@ -1277,6 +1424,9 @@ async function syncSettingsFromServer() {
   for (const k of SERVER_SYNCED_KEYS) {
     if (k in effective) state[k] = effective[k];
   }
+  // From here on this page knows the server's copy, so saves can go out — as
+  // the keys that differ from it (the absorbed extras, the fix-ups below).
+  setSettingsBase(remote);
   // Migrate field rename from 0.6.x: entityCoreConnectionId → phylacteryConnectionId.
   // settings.json written before the rename still has the old key; the server handles
   // it server-side too, but the UI needs its own copy so the connection picker renders.
@@ -6514,6 +6664,12 @@ function init() {
   // server has data, it overlays + repaints; if it's empty, our local
   // settings get pushed up so the next device sees them.
   syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
+  // …and keep it current while the tab stays open, so a change made on
+  // another device shows up here instead of being saved over.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshSettingsFromServer();
+  });
+  setInterval(() => { if (document.visibilityState === 'visible') refreshSettingsFromServer(); }, 5 * 60_000);
 
   // Auto-resume: if the server has a more recent session than what this
   // device has loaded, silently load it (empty local) or offer a banner.
@@ -6574,11 +6730,7 @@ function init() {
       if (el) el.textContent = 'Applying…';
       try {
         readSettingsFromUI(); // pull the latest field values into state
-        await fetch('/api/settings', {
-          method:  'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ settings: extractServerSettings(state) }),
-        });
+        await flushSettings();
         await fetch('/api/discord/apply', { method: 'POST' });
       } catch { /* fall through to the status refresh either way */ }
       // The gateway connects asynchronously — poll the status a few times so
@@ -9759,15 +9911,20 @@ async function refreshVoiceBackendPane() {
  * clobber each other.
  */
 async function updateVoiceTts(patch) {
-  const current = await (await fetch('/api/settings')).json();
-  const voiceTts = { ...(current?.settings?.voiceTts ?? {}), ...patch };
-  const res = await fetch('/api/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ settings: { voiceTts } }),
-  });
-  if (!res.ok) throw new Error(`settings PUT HTTP ${res.status}`);
-  return voiceTts;
+  // voiceTts isn't in SERVER_SYNCED_KEYS, so it carries its own revision: read
+  // it, send it back based on that read, and re-read once if it moved between.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const current = (await (await fetch('/api/settings')).json())?.settings ?? {};
+    const voiceTts = { ...(current.voiceTts ?? {}), ...patch };
+    const res = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { voiceTts }, base: { voiceTts: Number(current._revisions?.voiceTts) || 0 } }),
+    });
+    if (res.ok) return voiceTts;
+    if (res.status !== 409) throw new Error(`settings PUT HTTP ${res.status}`);
+  }
+  throw new Error('settings PUT kept conflicting');
 }
 
 /**
