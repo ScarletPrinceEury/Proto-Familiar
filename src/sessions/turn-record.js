@@ -32,7 +32,7 @@ const isIso = (s) => typeof s === 'string' && s.length <= 40 && Number.isFinite(
 
 /** The app note for a turn that was cut off. Plain fact, no verdict (CLAUDE.md #6). */
 export function cutOffNoteText(toolsRan) {
-  return `${CUT_OFF_NOTE_PREFIX} before I finished answering.${toolsRan ? ' The tools above had already run.' : ''}]`;
+  return `${CUT_OFF_NOTE_PREFIX} before I finished.${toolsRan ? ' The tools above had already run.' : ''}]`;
 }
 
 /**

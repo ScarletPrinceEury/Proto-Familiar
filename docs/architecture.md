@@ -2632,7 +2632,7 @@ lock as `writeSessionLog`):
 - the reply when it lands (removing a cut-off note an earlier try left);
 - if the request ends after the turn began and before it finished (`settle`,
   in the route's `finally`): the words so far (`cutOff: true`) and an app note
-  (`kind: 'app-note'`, "[App note: that turn was cut off …]") when anything ran
+  (`kind: 'app-note'`, "[App note: that turn got cut off before I finished. …]") when anything ran
   or was said.
 
 A send of a turn that already ran tools gets **409 `_turnAlreadyRan`** with its

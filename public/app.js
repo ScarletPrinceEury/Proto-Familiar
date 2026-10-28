@@ -2911,9 +2911,9 @@ const CONTINUE_OFFERS = {
     message: 'Go on — you have a fresh set of tool rounds. Pick up exactly where you left off.',
   },
   'cut-off': {
-    note: 'That turn was cut off after its tools ran.',
+    note: 'That turn got cut off after its tools ran.',
     button: '▶ Go on',
-    message: 'Go on — pick up where that turn was cut off.',
+    message: 'Go on, pick up where that turn got cut off.',
   },
 };
 
@@ -3070,7 +3070,7 @@ function appendMessageEl(msg, index) {
 // text is written for the Familiar to read; my human gets the same fact here.
 function appNoteDisplayText(msg) {
   if (msg.noteType === 'cut-off') {
-    return `This turn was cut off before the reply finished.${msg.toolsRan ? ' The tools above had already run.' : ''}`;
+    return `This turn got cut off before the reply finished.${msg.toolsRan ? ' The tools above had already run.' : ''}`;
   }
   return String(msg.content ?? '').replace(/^\[App note:\s*/, '').replace(/\]$/, '');
 }
