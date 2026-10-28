@@ -93,7 +93,10 @@ test('PIPELINE: a turn cut off after two rounds keeps my human\'s message, both 
   // The next turn's line, read from that record:
   const line = lastTurnRecord([...stored, { role: 'user' }]);
   assert.match(line, /tools used: save_memory \(ok\), update_identity \(ok\)\./);
-  assert.match(line, /It was cut off before I finished answering\./);
+  assert.match(line, /It got cut off before I finished\./);
+  // A note stored with the first wording (0.14.106) still counts.
+  const older = stored.map(m => (isAppNote(m) ? { ...m, content: '[App note: that turn was cut off before I finished answering.]' } : m));
+  assert.match(lastTurnRecord([...older, { role: 'user' }]), /It got cut off before I finished\./);
   assert.ok(!isReadableMessage(note), 'memorization skips the note');
 });
 

@@ -63,7 +63,9 @@ export function isToolRecord(m) {
 // a muted line, and memorization skips it. Defined here so the history readers
 // can tell it apart without importing the writer.
 export const APP_NOTE_KIND = 'app-note';
-export const CUT_OFF_NOTE_PREFIX = '[App note: that turn was cut off';
+export const CUT_OFF_NOTE_PREFIX = '[App note: that turn got cut off';
+// The first wording (0.14.106) said "was cut off"; a note stored then still counts.
+const CUT_OFF_NOTE_RE = /^\[App note: that turn (?:got|was) cut off/;
 
 export function isAppNote(m) {
   return !!m && m.role === 'system' && m.kind === APP_NOTE_KIND && typeof m.content === 'string';
@@ -188,7 +190,7 @@ export function lastTurnRecord(messages = [], { results: withResults = true } = 
   const calls = [];
   const results = {};
   const written = [];
-  const cutOff = turn.some(m => m?.role === 'system' && typeof m.content === 'string' && m.content.startsWith(CUT_OFF_NOTE_PREFIX));
+  const cutOff = turn.some(m => m?.role === 'system' && typeof m.content === 'string' && CUT_OFF_NOTE_RE.test(m.content));
   for (const m of turn) {
     if (m?.role === 'assistant' && Array.isArray(m.tool_calls)) {
       for (const tc of m.tool_calls) calls.push({ id: tc?.id, name: tc?.function?.name });
@@ -204,7 +206,7 @@ export function lastTurnRecord(messages = [], { results: withResults = true } = 
   const textOnly = written.filter(n => !ran.has(n));
   const note = (textOnly.length
     ? ` My reply had ${textOnly.join(', ')} written out as text, which doesn't run it.`
-    : '') + (cutOff ? ' It was cut off before I finished answering.' : '');
+    : '') + (cutOff ? ' It got cut off before I finished.' : '');
   // Plain facts, not an audit voice (0.14.83): it rides nearly every turn.
   return calls.length
     ? `[Last turn, tools used: ${describeCalls(calls, results, { withResults })}.${note}]`
