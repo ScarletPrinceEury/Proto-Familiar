@@ -421,6 +421,30 @@ stored content, but the gap is real.
 isn't one of CLAUDE.md's ward sign-off paths, but it governs what reaches
 other people.
 
+#### C1.6 What the ward changed, and what was built (0.14.110)
+
+- **No `confirm_detail`.** The ward pointed out that an override the
+  Familiar can reach is one a prompt injection can reach too. A held relay
+  now waits for the ward alone: the chat notice's **Send it as written**
+  button, or `!send <id>` / `!held` in their Discord DM (console↔UI parity).
+  The Familiar can only send a new version without the flagged bit. No
+  decision model is needed: code finds the shapes, the ward decides.
+- **"[private]"** is the live-reply stand-in, chosen over holding the reply
+  (a silent room) or dropping the match unmarked (a broken sentence).
+- **The "extra filter call" on relays was already there.** Pass 1 said the
+  relay skipped `filterOutgoingReply`; on a closer read it runs the same
+  restricted search at the same threshold, and lacks only the rewrite loop,
+  which for a relay is worse than holding and telling. So no extra call.
+- **Two gaps found while wiring:** the raw non-stream `/api/chat` path had no
+  outgoing filter, and warm reach-outs to villagers had no outgoing check.
+  Both go through the gates now (`gateRoomReply`, and the restricted search +
+  list swap in `deliverVillagerReach`). The filter's rewrite caller moved to
+  `callProviderChat` (RULE A).
+- **Wording** (ward-approved, casual): the `message` parameter, the hold
+  result the Familiar gets, and the ward's notice.
+- **Not done:** the presence block's "what stays out" line, and the web chat
+  with others present (it streams, so neither gate runs there).
+
 ### C2. Web memorization tags every web session as "my human's own room"
 
 #### C2.1 The problem
