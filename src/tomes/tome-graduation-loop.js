@@ -16,6 +16,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { createTickGuard } from '../util/tick-guard.js';
+import { excerpt } from '../util/excerpt.js';
 import { promises as fsp } from 'fs';
 
 import {
@@ -132,7 +133,7 @@ async function decideGraduation(candidates) {
     try {
       const r = await searchMemory({ query: (c.entry.content || '').slice(0, 200), maxResults: 3 });
       recall = (Array.isArray(r?.results) ? r.results : [])
-        .map(h => `- (${[h.granularity, h.date].filter(Boolean).join('/')}) ${(h.excerpt || '').trim().slice(0, 160)}`)
+        .map(h => `- (${[h.granularity, h.date].filter(Boolean).join('/')}) ${excerpt((h.excerpt || '').trim(), 160)}`)
         .join('\n');
     } catch { /* dedup context is best-effort */ }
     return { uid: c.uid, tomeName: c.tomeName, comment: c.entry.comment, content: c.entry.content || '', recall };

@@ -101,3 +101,14 @@ test('triage: older lines under the ceiling are whole too — a sentence at the 
   assert.ok(body.includes("I don't want to be here anymore."));
   assert.ok(!body.includes(EXCERPT_MARKER));
 });
+
+// The shared fixture (known-issues A3): Phylactery builds recall excerpts with
+// a Python mirror of excerpt(); both suites run these pairs, so the two can't
+// drift. Regenerate the fixture from this implementation if it changes on
+// purpose.
+test('excerpt matches the shared Node/Python fixture', async () => {
+  const { readFileSync } = await import('fs');
+  const { cases } = JSON.parse(readFileSync(new URL('./fixtures/excerpt-cases.json', import.meta.url), 'utf8'));
+  assert.ok(cases.length >= 40);
+  for (const c of cases) assert.equal(excerpt(c.text, c.max), c.out, c.name);
+});
