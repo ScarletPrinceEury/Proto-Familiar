@@ -647,6 +647,13 @@ root-cause class CLAUDE.md warns about: a fix applied to one surface.
 unfinished fact. Consumers that slice again (tome-graduation's `.slice(0,160)`)
 switch to `excerpt()`.
 
+**Built (0.14.114).** The fixture was generated from the Node excerpt and
+caught a real drift at once: Python's `$` also matches before a trailing
+newline, so a cut ending on a newline picked a different word. The Python side
+anchors on `\Z`. Lengths are characters in both; the fixture stays in the
+basic plane, where JavaScript's UTF-16 length and Python's agree. The
+consolidate report's 120-char sample moved to `excerpt()` too.
+
 ### A4. Tome entries can be edited and deleted
 
 #### A4.1 Plan

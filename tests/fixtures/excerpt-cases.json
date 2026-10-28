@@ -1,0 +1,257 @@
+{
+  "about": "Input/output pairs for excerpt(). Generated from src/util/excerpt.js; run by tests/excerpt.test.mjs AND phylactery/tests/test_excerpt.py so the Node and Python excerpts cannot drift.",
+  "cases": [
+    {
+      "name": "short @300",
+      "text": "All done!",
+      "max": 300,
+      "out": "All done!"
+    },
+    {
+      "name": "short @200",
+      "text": "All done!",
+      "max": 200,
+      "out": "All done!"
+    },
+    {
+      "name": "short @120",
+      "text": "All done!",
+      "max": 120,
+      "out": "All done!"
+    },
+    {
+      "name": "short @60",
+      "text": "All done!",
+      "max": 60,
+      "out": "All done!"
+    },
+    {
+      "name": "short @30",
+      "text": "All done!",
+      "max": 30,
+      "out": "All done!"
+    },
+    {
+      "name": "short @10",
+      "text": "All done!",
+      "max": 10,
+      "out": "All done!"
+    },
+    {
+      "name": "long prose @300",
+      "text": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but you would miss the opening of the exhibition you mentioned. Either way, I think booking tonight is smart because the prices tend to jump by Friday, so let me know which one you like and I will put a reminder in for the booking.",
+      "max": 300,
+      "out": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but [… cut for length …] so let me know which one you like and I will put a reminder in for the booking."
+    },
+    {
+      "name": "long prose @200",
+      "text": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but you would miss the opening of the exhibition you mentioned. Either way, I think booking tonight is smart because the prices tend to jump by Friday, so let me know which one you like and I will put a reminder in for the booking.",
+      "max": 200,
+      "out": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which [… cut for length …] like and I will put a reminder in for the booking."
+    },
+    {
+      "name": "long prose @120",
+      "text": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but you would miss the opening of the exhibition you mentioned. Either way, I think booking tonight is smart because the prices tend to jump by Friday, so let me know which one you like and I will put a reminder in for the booking.",
+      "max": 120,
+      "out": "I looked into the train times for Saturday and there are two good [… cut for length …] reminder in for the booking."
+    },
+    {
+      "name": "long prose @60",
+      "text": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but you would miss the opening of the exhibition you mentioned. Either way, I think booking tonight is smart because the prices tend to jump by Friday, so let me know which one you like and I will put a reminder in for the booking.",
+      "max": 60,
+      "out": "I looked into the train [… cut for length …] booking."
+    },
+    {
+      "name": "long prose @30",
+      "text": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but you would miss the opening of the exhibition you mentioned. Either way, I think booking tonight is smart because the prices tend to jump by Friday, so let me know which one you like and I will put a reminder in for the booking.",
+      "max": 30,
+      "out": "I look [… cut for length …] g."
+    },
+    {
+      "name": "long prose @10",
+      "text": "I looked into the train times for Saturday and there are two good options. The early one gets you there by nine, which leaves the whole morning for the market, and the later one is cheaper but you would miss the opening of the exhibition you mentioned. Either way, I think booking tonight is smart because the prices tend to jump by Friday, so let me know which one you like and I will put a reminder in for the booking.",
+      "max": 10,
+      "out": "I looked i"
+    },
+    {
+      "name": "one unbroken run @300",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max": 300,
+      "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx [… cut for length …] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "one unbroken run @200",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max": 200,
+      "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx [… cut for length …] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "one unbroken run @120",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max": 120,
+      "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx [… cut for length …] xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "one unbroken run @60",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max": 60,
+      "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxx [… cut for length …] xxxxxxxxxxx"
+    },
+    {
+      "name": "one unbroken run @30",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max": 30,
+      "out": "xxxxxx [… cut for length …] xx"
+    },
+    {
+      "name": "one unbroken run @10",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max": 10,
+      "out": "xxxxxxxxxx"
+    },
+    {
+      "name": "lines @300",
+      "text": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea",
+      "max": 300,
+      "out": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- [… cut for length …] after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea"
+    },
+    {
+      "name": "lines @200",
+      "text": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea",
+      "max": 200,
+      "out": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee [… cut for length …] - reads late most nights\n- grew up by the sea"
+    },
+    {
+      "name": "lines @120",
+      "text": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea",
+      "max": 120,
+      "out": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads [… cut for length …] nights\n- grew up by the sea"
+    },
+    {
+      "name": "lines @60",
+      "text": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea",
+      "max": 60,
+      "out": "- tea, never coffee\n- naps [… cut for length …] by the sea"
+    },
+    {
+      "name": "lines @30",
+      "text": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea",
+      "max": 30,
+      "out": "- tea, [… cut for length …] ea"
+    },
+    {
+      "name": "lines @10",
+      "text": "- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea- tea, never coffee\n- naps after lunch\n- hates loud chewing\n- reads late most nights\n- grew up by the sea",
+      "max": 10,
+      "out": "- tea, nev"
+    },
+    {
+      "name": "accents @300",
+      "text": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long.",
+      "max": 300,
+      "out": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long."
+    },
+    {
+      "name": "accents @200",
+      "text": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long.",
+      "max": 200,
+      "out": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long."
+    },
+    {
+      "name": "accents @120",
+      "text": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long.",
+      "max": 120,
+      "out": "Zoë mentioned the café near the fjord again, the one with the crêpes [… cut for length …] and the evenings are long."
+    },
+    {
+      "name": "accents @60",
+      "text": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long.",
+      "max": 60,
+      "out": "Zoë mentioned the café [… cut for length …] are long."
+    },
+    {
+      "name": "accents @30",
+      "text": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long.",
+      "max": 30,
+      "out": "Zoë me [… cut for length …] g."
+    },
+    {
+      "name": "accents @10",
+      "text": "Zoë mentioned the café near the fjord again, the one with the crêpes and the old piano, and said she would go back in the spring when the ferries run more often and the evenings are long.",
+      "max": 10,
+      "out": "Zoë mentio"
+    },
+    {
+      "name": "trailing spaces @300",
+      "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "max": 300,
+      "out": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word [… cut for length …] word word word word word word word word word word word word word word word word "
+    },
+    {
+      "name": "trailing spaces @200",
+      "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "max": 200,
+      "out": "word word word word word word word word word word word word word word word word word word word word word word word word word [… cut for length …] word word word word word word word word word word "
+    },
+    {
+      "name": "trailing spaces @120",
+      "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "max": 120,
+      "out": "word word word word word word word word word word word word word [… cut for length …] word word word word word "
+    },
+    {
+      "name": "trailing spaces @60",
+      "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "max": 60,
+      "out": "word word word word word [… cut for length …] word word "
+    },
+    {
+      "name": "trailing spaces @30",
+      "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "max": 30,
+      "out": "word w [… cut for length …] d "
+    },
+    {
+      "name": "trailing spaces @10",
+      "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+      "max": 10,
+      "out": "word word "
+    },
+    {
+      "name": "exactly the limit @300",
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max": 300,
+      "out": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "exactly the limit @200",
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max": 200,
+      "out": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa [… cut for length …] aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "exactly the limit @120",
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max": 120,
+      "out": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa [… cut for length …] aaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "exactly the limit @60",
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max": 60,
+      "out": "aaaaaaaaaaaaaaaaaaaaaaaaaaa [… cut for length …] aaaaaaaaaaa"
+    },
+    {
+      "name": "exactly the limit @30",
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max": 30,
+      "out": "aaaaaa [… cut for length …] aa"
+    },
+    {
+      "name": "exactly the limit @10",
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max": 10,
+      "out": "aaaaaaaaaa"
+    }
+  ]
+}
