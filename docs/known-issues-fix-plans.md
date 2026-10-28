@@ -573,7 +573,7 @@ stop to real headings only (`^#{1,6}\s`).
 - Result texts as above.
 - The Manual tome entry, and the "self-made rules" known issue updated.
 
-**Built (0.14.111).** Also found on the way: `appendIdentity` called the MCP
+**Built (0.14.112).** Also found on the way: `appendIdentity` called the MCP
 tool raw and ignored its answer, so a failed append (Phylactery returned a
 "Failed: …" string) came back as ok. `identity_append` now returns a dict,
 and the wrapper reads it. The read tool is refused in any room that isn't

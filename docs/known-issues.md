@@ -144,7 +144,7 @@ below lets the Familiar drop a rule instead of carrying it:
   synced item (the next sync would bring it back) and points at cancelling it
   or deleting it in Google. Rule it retires: "check where a duplicate came from
   before retiring it".
-- ~~**Identity edits can't be checked in the same turn.**~~ Fixed 0.14.111:
+- ~~**Identity edits can't be checked in the same turn.**~~ Fixed 0.14.112:
   `read_identity_file` (core, own conversations only) shows a file as it is,
   with a heading outline that numbers repeats. Every identity edit says what it
   did and where ("Added 312 chars at the end of self/my_wants.md, under

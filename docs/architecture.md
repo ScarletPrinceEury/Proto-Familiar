@@ -2392,7 +2392,7 @@ is broken, and logs state changes to `logs/identity-canary-events.jsonl`. Every
 identity edit tool (`update_identity`, `rewrite_identity_section`,
 `remove_from_identity`, `delete_identity_section`, `apply_cleanup_proposal`)
 re-checks the stamps in the file it just changed and adds a warning when one
-broke. **Since 0.14.111 every identity edit answers in full** (what it did,
+broke. **Since 0.14.112 every identity edit answers in full** (what it did,
 where, the file's new size; `src/memory/identity-results.js`) ending
 "read_identity_file shows it now", and **`read_identity_file`** (core, refused
 when `ctx.wardPrivate === false`) → `readIdentityFile` → Phylactery
