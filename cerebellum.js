@@ -62,7 +62,7 @@ import {
   convertUnruhIds, convertGraphIds, convertMemoryIds,
   bumpInterest, setStandingInterest, saveBookmark,
   setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
-  createTracker, createTrackerFromTemplate, logTrackerEntry, readTracker, listTrackers, adjustTracker,
+  createTracker, createTrackerFromTemplate, logTrackerEntry, useTrackerItem, readTracker, listTrackers, adjustTracker,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations, listCareFacts, listCareFactsForReview, getIdentityAll,
   searchMemoryRestricted, searchMemory, memByTimerange,
@@ -2255,7 +2255,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'tracker_log',
-      description: 'I record an entry on one of {{user}}\'s trackers — a mood, a night\'s sleep, an item into the pantry, "just ate" for a meal gauge. For a gauge, logging is what refills it. If I got an earlier entry wrong, I pass "supersedes" with its id to replace it (the old one stays for the record, marked corrected). I never invent a value {{user}} didn\'t give me — if I\'m unsure, I ask.',
+      description: 'I record an entry on one of {{user}}\'s trackers — a mood, a night\'s sleep, an item into the pantry, "just ate" for a meal gauge. For a gauge, logging is what refills it. When something comes OFF a list (eaten, used up, tossed), that\'s tracker_remove_item, not this. If I got an earlier entry wrong, I pass "supersedes" with its id to replace it (the old one stays for the record, marked corrected). I never invent a value {{user}} didn\'t give me — if I\'m unsure, I ask.',
       parameters: {
         type: 'object',
         properties: {
@@ -2271,8 +2271,26 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'tracker_remove_item',
+      description: 'When {{user}} ate something, used it up, tossed it or gave it away, I take it off the list (the pantry, or any inventory) so I don\'t offer them stuff they don\'t have anymore. Leave out "amount" if it\'s all gone. If they only used some, I pass how much and the app works out what\'s left. If the name doesn\'t match, I get back what\'s actually on the list.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tracker_id: { type: 'string', description: 'The inventory\'s id (from tracker_list).' },
+          name: { type: 'string', description: 'The item, as it\'s called on the list. Case doesn\'t matter.' },
+          amount: { type: 'number', description: 'Optional. How much they used, if not all of it.' },
+          unit: { type: 'string', description: 'Optional. The unit of that amount, like "g" or "pcs", if they said one.' },
+          ts: { type: 'string', description: 'Optional. When it happened, local ISO (YYYY-MM-DDTHH:MM:SS) as my [Now] block shows. Omit for now.' },
+        },
+        required: ['tracker_id', 'name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'tracker_read',
-      description: 'I see where one of {{user}}\'s trackers stands: a state\'s current value, an inventory\'s items, a series over the recent window, or a gauge\'s current level and band. I read before I log, or when {{user}} asks how something\'s been going.',
+      description: 'I see where one of {{user}}\'s trackers stands: a state\'s current value, an inventory\'s items (with when each was last noted), a series over the recent window, or a gauge\'s current level and band. I read before I log, before I suggest food from the pantry, or when {{user}} asks how something\'s been going.',
       parameters: {
         type: 'object',
         properties: {
@@ -3303,12 +3321,43 @@ function resolveCircleInList(cats, name) {
  * server hands in: { sessionInfo } today.
  */
 
+// A stored tracker value as text: a quantity {value, unit} reads "4 pcs" (it
+// used to read "[object Object]"), a list reads "a/b".
+export function formatTrackerValue(v) {
+  if (Array.isArray(v)) return v.join('/');
+  if (v && typeof v === 'object' && 'value' in v) return `${v.value}${v.unit ? ` ${v.unit}` : ''}`;
+  return String(v);
+}
+
+// What I hear back after taking something off a list. Plain facts: an unknown
+// name hands me what's really there, an amount that can't come off says why.
+export function trackerUseResultText(data, name) {
+  if (data?.ok) {
+    if (data.removed) return quietOk(`Took ${data.name ?? name} off the list.`);
+    return `${data.name ?? name}: ${formatTrackerValue(data.left)} left.`;
+  }
+  if (data?.code === 'no_item') {
+    const there = Array.isArray(data.items) && data.items.length ? data.items.join(', ') : 'nothing';
+    return `There's no "${name}" on that list, so nothing came off. What's on it: ${there}.`;
+  }
+  if (data?.code === 'cant_subtract') {
+    return `Couldn't take that much off ${data.name ?? name}: ${data.error ?? 'no amount is logged for it'}. Nothing changed. I can take it off entirely, or log what's left if {{user}} tells me.`;
+  }
+  if (data?.code === 'not_inventory') return `That tracker isn't a list of items, so there's nothing to take off. Nothing changed.`;
+  return `Didn't take anything off: ${data?.error ?? 'Unruh didn\'t answer'}. Nothing changed.`;
+}
+
 // Render a tracker_read payload as a plain, neutral line (code only, no LLM).
 // Deliberately gap-neutral (invariant T4): never "streak", "broke", or
 // "missed day" — a quiet stretch is just an older timestamp, not a failure.
-function renderTrackerRead(data) {
+// `nowMs` is ward-local now parsed the way stored local-naive stamps parse,
+// so an inventory item's age ("noted 3 days ago") is worked out in code.
+export function renderTrackerRead(data, nowMs = Date.parse(wardLocalNowISO(readSettingsSync()?.wardTimeZone || null))) {
   const label = data?.label ?? data?.id ?? 'tracker';
   const arch = data?.archetype;
+  const fieldsOf = (obj, skip) => Object.entries(obj)
+    .filter(([k]) => !skip.includes(k))
+    .map(([k, v]) => `${k}: ${formatTrackerValue(v)}`).join(', ');
   if (arch === 'gauge') {
     const band = data.band ?? 'unknown';
     const hrs = Number.isFinite(data.hours_since) ? `${Math.round(data.hours_since)}h since the last one` : 'nothing logged yet';
@@ -3317,17 +3366,15 @@ function renderTrackerRead(data) {
   }
   if (arch === 'state') {
     if (!data.current) return `${label}: nothing recorded yet.`;
-    const val = Object.entries(data.current).map(([k, v]) => `${k}: ${v}`).join(', ');
-    return `${label}: ${val}${data.as_of ? ` (as of ${data.as_of})` : ''}.`;
+    return `${label}: ${fieldsOf(data.current, [])}${data.as_of ? ` (as of ${data.as_of})` : ''}.`;
   }
   if (arch === 'inventory') {
     const items = Array.isArray(data.items) ? data.items : [];
     if (!items.length) return `${label}: empty.`;
     const lines = items.map(it => {
-      const extras = Object.entries(it)
-        .filter(([k]) => k !== 'name' && k !== 'as_of')
-        .map(([k, v]) => `${k}: ${v}`).join(', ');
-      return `· ${it.name}${extras ? ` — ${extras}` : ''}`;
+      const extras = fieldsOf(it, ['name', 'as_of']);
+      const age = it.as_of && Number.isFinite(nowMs) ? plainInterval(it.as_of, nowMs) : '';
+      return `· ${it.name}${extras ? ` — ${extras}` : ''}${age ? ` (noted ${age} ago)` : ''}`;
     });
     return [`${label} (${items.length} item${items.length === 1 ? '' : 's'}):`, ...lines].join('\n');
   }
@@ -3335,9 +3382,7 @@ function renderTrackerRead(data) {
   const entries = Array.isArray(data.entries) ? data.entries : [];
   if (!entries.length) return `${label}: no entries in the window.`;
   const lines = entries.slice(-10).map(e => {
-    const fields = Object.entries(e)
-      .filter(([k]) => k !== 'id' && k !== 'ts')
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join('/') : v}`).join(', ');
+    const fields = fieldsOf(e, ['id', 'ts']);
     return `· ${e.ts}${fields ? ` — ${fields}` : ''}`;
   });
   const head = `${label} — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}${entries.length > 10 ? ' (showing the last 10)' : ''}:`;
@@ -4479,6 +4524,22 @@ export const TOOL_EXECUTORS = {
       }
       return quietOk(`Logged (entry: ${data.id ?? 'unknown'}).`, { id: data.id });
     } catch (err) { return `I couldn't log that entry: ${err.message}. Nothing was recorded.`; }
+  },
+
+  tracker_remove_item: async ({ tracker_id, name, amount, unit, ts } = {}) => {
+    if (!tracker_id || typeof tracker_id !== 'string') return 'Didn\'t take anything off: tracker_id (string) is required.';
+    if (!name || typeof name !== 'string' || !name.trim()) return 'Didn\'t take anything off: name (string) is required.';
+    const used = Number(amount);
+    const hasAmount = amount !== undefined && amount !== null && amount !== '';
+    if (hasAmount && !(Number.isFinite(used) && used > 0)) return `Didn't take anything off: amount should be a number above 0.`;
+    try {
+      const data = await useTrackerItem({
+        tracker_id: tracker_id.trim(), name: name.trim(),
+        ...(hasAmount ? { amount: unit && typeof unit === 'string' && unit.trim() ? { value: used, unit: unit.trim() } : used } : {}),
+        ...(ts && typeof ts === 'string' ? { ts: ts.trim() } : {}),
+      });
+      return trackerUseResultText(data, name.trim());
+    } catch (err) { return `Didn't take anything off: ${err.message}. Nothing changed.`; }
   },
 
   tracker_read: async ({ tracker_id, days } = {}) => {
@@ -5651,7 +5712,7 @@ const PAGE_WATCH_TOOL_NAMES = new Set(['watch_page', 'list_page_watches', 'unwat
 // (never in villagerToolNames), so a gated turn never reaches them regardless.
 const TRACKER_TOOL_NAMES = new Set([
   'tracker_create', 'tracker_create_from_template', 'tracker_log',
-  'tracker_read', 'tracker_list', 'tracker_adjust',
+  'tracker_remove_item', 'tracker_read', 'tracker_list', 'tracker_adjust',
 ]);
 
 export function trackersEnabled(settings = readSettingsSync()) {

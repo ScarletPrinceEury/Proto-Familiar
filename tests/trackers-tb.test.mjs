@@ -10,11 +10,11 @@ import {
 } from '../cerebellum.js';
 import { selectModules, trackerTermsRegex, TOOL_MODULES } from '../tool-surfacing.js';
 
-// The six ward-only tracker tools (trackers build spec §3). The list is the
+// The ward-only tracker tools (trackers build spec §3). The list is the
 // contract every gating assertion below is checked against.
 const TRACKER_TOOLS = [
   'tracker_create', 'tracker_create_from_template', 'tracker_log',
-  'tracker_read', 'tracker_list', 'tracker_adjust',
+  'tracker_remove_item', 'tracker_read', 'tracker_list', 'tracker_adjust',
 ];
 const has = (tools, name) => tools.some(t => t.function?.name === name);
 const namesOf = (tools) => tools.map(t => t.function?.name);
@@ -88,6 +88,12 @@ test('trackersEnabled defaults ON when unset', () => {
 
 test('surfacing: tracking language surfaces the trackers module', () => {
   for (const turnText of ['log my mood today', 'what\'s in the pantry?', 'I slept badly', 'add milk to groceries']) {
+    assert.ok(selectModules({ turnText }).has('trackers'), `"${turnText}" should surface trackers`);
+  }
+});
+
+test('surfacing: eating and running-out language surfaces the trackers module (0.14.108)', () => {
+  for (const turnText of ['I had the last of the yogurt', 'we ran out of milk', 'what can I eat tonight?', 'threw the bread out, it went bad', 'used up the rice']) {
     assert.ok(selectModules({ turnText }).has('trackers'), `"${turnText}" should surface trackers`);
   }
 });

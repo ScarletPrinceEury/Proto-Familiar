@@ -1641,6 +1641,9 @@ button { cursor: pointer; font-family: var(--font); }
 .ke-trk-tpl-add { align-self: flex-start; }
 
 .ke-trk-spark { margin: 4px 0 10px; }
+.ke-trk-items { list-style: none; padding: 0; margin: 0 0 10px; }
+.ke-trk-items li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
+.ke-trk-used { flex-shrink: 0; font-size: 0.85em; }
 .ke-spark {
   display: block;
   width: 100%;

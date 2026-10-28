@@ -444,7 +444,7 @@ def test_archive_hides_from_active_surfaces_and_list_but_keeps_data(conn):
     shown = [t for t in tracker.list_trackers(conn, include_archived=True) if t["id"] == tid]
     assert len(shown) == 1 and shown[0]["archived"] is True
     # The entry data survives (read still works).
-    assert tracker.read_tracker(conn, id=tid)["count"] == 1
+    assert tracker.read_tracker(conn, id=tid, now=NOW)["count"] == 1
 
     # Un-archive restores it.
     assert tracker.archive_tracker(conn, id=tid, archived=False)["archived"] is False
@@ -513,3 +513,124 @@ def test_list_templates_without_conn_omits_exists_annotation(conn):
     # No conn → catalog still lists, every card just reads not-yet-added.
     tpls = tracker.list_templates()
     assert tpls and all(t["exists"] is False for t in tpls)
+
+
+# ── Using items up (0.14.108) ────────────────────────────────────────────────
+# Before this an inventory only grew: nothing took an item back off, so the
+# pantry kept food my human had already eaten.
+
+def _pantry_tpl(conn):
+    return tracker.create_from_template(conn, template_id="pantry")["id"]
+
+
+def _names(conn, tid):
+    return [i["name"] for i in tracker.read_tracker(conn, id=tid, now=NOW)["items"]]
+
+
+def test_use_item_with_no_amount_takes_it_off(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs", "qty": {"value": 6, "unit": "pcs"}})
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "rice"})
+    r = tracker.use_item(conn, tracker_id=tid, name="eggs")
+    assert r["ok"] and r["removed"] is True and r["name"] == "eggs"
+    assert _names(conn, tid) == ["rice"]
+
+
+def test_use_item_partial_subtracts_in_code_and_zero_removes(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs", "qty": {"value": 6, "unit": "pcs"}, "expires": "2026-10-01"})
+    expires = tracker.read_tracker(conn, id=tid, now=NOW)["items"][0]["expires"]
+    r = tracker.use_item(conn, tracker_id=tid, name="eggs", amount=2)
+    assert r["ok"] and r["removed"] is False and r["left"] == {"value": 4, "unit": "pcs"}
+    item = tracker.read_tracker(conn, id=tid, now=NOW)["items"][0]
+    assert item["qty"] == {"value": 4, "unit": "pcs"} and item["expires"] == expires, "the rest of the item carries over"
+    r = tracker.use_item(conn, tracker_id=tid, name="eggs", amount={"value": 4, "unit": "PCS"})
+    assert r["ok"] and r["removed"] is True, "using the last of it takes it off; unit case doesn't matter"
+    assert _names(conn, tid) == []
+
+
+def test_use_item_more_than_logged_still_just_removes(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "milk", "qty": {"value": 0.5, "unit": "l"}})
+    assert tracker.use_item(conn, tracker_id=tid, name="milk", amount=1)["removed"] is True
+
+
+def test_use_item_cant_subtract_changes_nothing(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "rice", "qty": {"value": 1, "unit": "bag"}})
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "salt"})
+    r = tracker.use_item(conn, tracker_id=tid, name="rice", amount={"value": 200, "unit": "g"})
+    assert r["ok"] is False and r["code"] == "cant_subtract"
+    r = tracker.use_item(conn, tracker_id=tid, name="salt", amount=1)
+    assert r["ok"] is False and r["code"] == "cant_subtract", "no amount logged to take it from"
+    items = tracker.read_tracker(conn, id=tid, now=NOW)["items"]
+    assert [i["name"] for i in items] == ["rice", "salt"] and items[0]["qty"] == {"value": 1, "unit": "bag"}
+
+
+def test_use_item_unknown_name_lists_whats_there(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs"})
+    r = tracker.use_item(conn, tracker_id=tid, name="egg")
+    assert r["ok"] is False and r["code"] == "no_item" and r["items"] == ["eggs"]
+    assert tracker.use_item(conn, tracker_id=tid, name="eggs", amount=-1)["code"] == "invalid"
+    series = tracker.create_tracker(conn, label="Sleep", archetype="series", schema=[{"name": "h", "type": "number"}])["id"]
+    assert tracker.use_item(conn, tracker_id=series, name="eggs")["code"] == "not_inventory"
+
+
+def test_items_match_ignoring_case_and_spacing(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs", "qty": 6})
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "Eggs ", "qty": 4})
+    items = tracker.read_tracker(conn, id=tid, now=NOW)["items"]
+    assert len(items) == 1 and items[0]["qty"] == {"value": 4}, "one item, not two"
+    assert tracker.use_item(conn, tracker_id=tid, name="EGGS")["removed"] is True
+    assert _names(conn, tid) == []
+
+
+def test_a_used_up_item_can_come_back(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs"}, ts="2026-09-17T10:00:00")
+    tracker.use_item(conn, tracker_id=tid, name="eggs", ts="2026-09-17T18:00:00")
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs"}, ts="2026-09-18T09:00:00")
+    assert _names(conn, tid) == ["eggs"]
+
+
+def test_a_use_dated_before_the_purchase_doesnt_eat_the_new_stock(conn):
+    # A use is replayed at the time it was ABOUT: eggs eaten yesterday don't
+    # take today's fresh box off the list.
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs"}, ts="2026-09-16T10:00:00")
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs"}, ts="2026-09-18T09:00:00")
+    tracker.use_item(conn, tracker_id=tid, name="eggs", ts="2026-09-17T08:00:00")
+    assert _names(conn, tid) == ["eggs"]
+
+
+def test_used_up_items_leave_the_expiry_list(conn):
+    tid = _pantry_tpl(conn)
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "yoghurt", "expires": (NOW.date()).isoformat()})
+    assert [i["name"] for i in tracker.expiring_items(conn, now=NOW)["items"]] == ["yoghurt"]
+    tracker.use_item(conn, tracker_id=tid, name="yoghurt")
+    assert tracker.expiring_items(conn, now=NOW)["items"] == []
+
+
+def test_uses_and_removals_dont_count_toward_the_daily_cap(conn):
+    tid = tracker.create_tracker(conn, label="Box", archetype="inventory", config={"entry_cap_per_day": 2}, schema=[
+        {"name": "name", "type": "text", "required": True}, {"name": "qty", "type": "quantity"},
+    ])["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "a", "qty": 5})
+    tracker.use_item(conn, tracker_id=tid, name="a", amount=1)
+    tracker.use_item(conn, tracker_id=tid, name="a", amount=1)
+    assert tracker.log_entry(conn, tracker_id=tid, payload={"name": "b"})["ok"], "only the one add counts"
+
+
+def test_inventory_default_cap_fits_a_grocery_haul(conn):
+    tid = _pantry_tpl(conn)
+    for i in range(30):
+        assert tracker.log_entry(conn, tracker_id=tid, payload={"name": f"item {i}"})["ok"]
+
+
+def test_ui_is_a_valid_entry_source(conn):
+    # The Trackers tab logs with source 'ui'; it used to be refused outright.
+    tid = _pantry_tpl(conn)
+    assert tracker.log_entry(conn, tracker_id=tid, payload={"name": "eggs"}, source="ui")["ok"]
+    assert tracker.use_item(conn, tracker_id=tid, name="eggs", source="ui")["ok"]

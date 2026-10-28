@@ -119,7 +119,7 @@ export const TOOL_MODULES = {
   // villagerToolNames); surfaced by tracking language, by any existing
   // tracker's own label (trackerTermsRegex), and by the [Tracker cues] block.
   tracker_create: 'trackers', tracker_create_from_template: 'trackers',
-  tracker_log: 'trackers', tracker_read: 'trackers',
+  tracker_log: 'trackers', tracker_remove_item: 'trackers', tracker_read: 'trackers',
   tracker_list: 'trackers', tracker_adjust: 'trackers',
 
   // vision (vision build spec §6.5/§10) — looking again at an image + tying it
@@ -155,7 +155,7 @@ export const MODULE_INDEX =
   'maintenance (id tidy-up, register/list/retire my identity canary stamps), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'media (look again at an image shared earlier, tie an image to someone/something in my graph), ' +
-  'trackers (my human\'s private ledgers: mood, sleep, the pantry, laundry, upkeep gauges — list/create/log/read/adjust), ' +
+  'trackers (my human\'s private ledgers: mood, sleep, the pantry, laundry, upkeep gauges — list/create/log/read/adjust, and taking used-up stuff off a list), ' +
   'browser (open a web page in my own browser to read it or use it — click, fill, scroll, follow a flow)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
@@ -248,7 +248,9 @@ const TRIGGERS = {
     // rule): a false surface costs a few hundred tokens once; a miss costs one
     // request_tools round. A registered tracker's OWN label also surfaces the
     // module (trackerTermsRegex, wired in selectModules like villager names).
-    text: /\b(track(er|ing)?|log (it|this|that)|inventory|pantry|groceries|grocery|laundry|slept|sleep(ing)?|meds?|medication|took my|period|menses|cycle|cramps|went out(side)?|left the house|mood|hydrat\w*|drank|drink water|ate\b|eaten|meal)\b/i,
+    // Eating and running-out language is here too (0.14.108): something used up
+    // has to come off the pantry, and "what can I eat?" needs it read first.
+    text: /\b(track(er|ing)?|log (it|this|that)|inventory|pantry|groceries|grocery|laundry|slept|sleep(ing)?|meds?|medication|took my|period|menses|cycle|cramps|went out(side)?|left the house|mood|hydrat\w*|drank|drink water|ate\b|eat(ing)?|eaten|meal|food|hungry|snack\w*|breakfast|lunch|dinner|cook(ed|ing)?|fridge|freezer|leftovers|ran out|run(ning)? out|out of|used (it |them |the |all )?up|the last (of|one)|finished (off |up )?(the|my)|threw (it |them |that )?(out|away)|tossed|went bad|gone off|expired|bought|shopping)\b/i,
     blocks: ['[Tracker cues]', '[Pantry — use first]', '[Likely period window]', '[Might be worth offering to track]'],
   },
   media: {

@@ -11805,9 +11805,10 @@ async function keOpenTracker(t) {
   } catch { /* still show the controls even if the read fails */ }
   const schema = Array.isArray(read.schema) ? read.schema : [];
   const canAddEntry = !t.archived && t.archetype !== 'gauge' && schema.length > 0;
+  const summaryOpts = { canUse: !t.archived && t.archetype === 'inventory' };
   det.innerHTML = `
     <div class="ke-detail-header"><h3>${esc(t.label)} <span class="vl-count">${esc(t.archetype)}</span>${t.sensitive ? ' 🔒' : ''}</h3></div>
-    <div class="ke-trk-summary">${keTrackerSummary(read)}</div>
+    <div class="ke-trk-summary">${keTrackerSummary(read, summaryOpts)}</div>
     ${t.archetype === 'series' ? `<div class="ke-trk-spark">${keTrackerSparkline(read)}</div>` : ''}
     ${canAddEntry ? keTrackerEntryForm(schema) : ''}
     <div class="ke-actions">
@@ -11818,11 +11819,24 @@ async function keOpenTracker(t) {
   // Re-render the summary + sparkline from a fresh read (shared by refill + add-entry).
   const refreshFromRead = (r) => {
     if (!r) return;
-    det.querySelector('.ke-trk-summary').innerHTML = keTrackerSummary(r);
+    det.querySelector('.ke-trk-summary').innerHTML = keTrackerSummary(r, summaryOpts);
     const spark = det.querySelector('.ke-trk-spark');
     if (spark) spark.innerHTML = keTrackerSparkline(r);
   };
   if (canAddEntry) keWireTrackerEntryForm(det, t, schema, refreshFromRead);
+  // "Used up" on an inventory item (delegated: the list re-renders on refresh).
+  det.querySelector('.ke-trk-summary').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.ke-trk-used');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/trackers/${encodeURIComponent(t.id)}/items/use`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: btn.dataset.item }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) { alert(`Couldn’t take it off: ${data.error ?? r.status}`); btn.disabled = false; return; }
+      refreshFromRead(data.read);
+    } catch (err) { alert(`Couldn’t take it off: ${err?.message ?? err}`); btn.disabled = false; }
+  });
   det.querySelector('.ke-trk-refill')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget; btn.disabled = true;
     try {
@@ -11849,7 +11863,7 @@ async function keOpenTracker(t) {
   });
 }
 
-function keTrackerSummary(read) {
+function keTrackerSummary(read, { canUse = false } = {}) {
   if (!read || read.ok === false) return '<p class="logs-empty">Couldn’t read its current state.</p>';
   const arch = read.archetype;
   if (arch === 'gauge') {
@@ -11865,7 +11879,21 @@ function keTrackerSummary(read) {
   if (arch === 'state') return `<p>${read.current ? esc(Object.entries(read.current).map(([k, v]) => `${k}: ${v}`).join(', ')) : 'nothing recorded yet'}</p>`;
   if (arch === 'inventory') {
     const items = Array.isArray(read.items) ? read.items : [];
-    return items.length ? `<ul class="ke-trk-items">${items.map(i => `<li>${esc(String(i.name ?? ''))}</li>`).join('')}</ul>` : '<p class="logs-empty">empty</p>';
+    if (!items.length) return '<p class="logs-empty">empty</p>';
+    // Each item with what's logged about it, and a "Used up" button that takes
+    // it off the list (the same path the Familiar's tracker_remove_item uses).
+    const qtyText = (q) => (q && typeof q === 'object' && 'value' in q) ? `${q.value}${q.unit ? ` ${q.unit}` : ''}` : String(q);
+    const li = (i) => {
+      const name = String(i.name ?? '');
+      const bits = [];
+      if (i.qty !== undefined) bits.push(qtyText(i.qty));
+      if (i.expires) bits.push(`use by ${String(i.expires).replace(/T00:00:00$/, '')}`);
+      const used = canUse
+        ? ` <button type="button" class="btn-ghost ke-trk-used" data-item="${esc(name)}" aria-label="Mark ${esc(name)} as used up">Used up</button>`
+        : '';
+      return `<li><span>${esc(name)}${bits.length ? ` <span class="field-hint">${esc(bits.join(' · '))}</span>` : ''}</span>${used}</li>`;
+    };
+    return `<ul class="ke-trk-items">${items.map(li).join('')}</ul>`;
   }
   const entries = Array.isArray(read.entries) ? read.entries : [];
   return `<p>${entries.length} recent ${entries.length === 1 ? 'entry' : 'entries'}.</p>`;
