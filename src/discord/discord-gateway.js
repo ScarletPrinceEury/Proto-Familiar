@@ -3099,6 +3099,7 @@ async function answerTurn(gw, msg, decision, turn, recHolder) {
 
   let rawReply;
   let ranToolNames = [];   // every tool this turn ran (the promise catch reads them)
+  let turnUnbackedClaim = null;   // a claim no tool backed, after the retry (claimed-actions.js)
   if (discordTools.length) {
     // The result gate rides in toolCtx: a non-ward turn is wardPrivate:false and
     // carries the room's visible-audience set, so audience-scoped reads (recall)
@@ -3193,7 +3194,7 @@ async function answerTurn(gw, msg, decision, turn, recHolder) {
     } : null;
     const turnDiagStart = Date.now();
     try {
-      const { data, toolRounds, usage } = await runToolCallLoop({
+      const { data, toolRounds, usage, unbackedClaim } = await runToolCallLoop({
         // opts.forceText (round-cap closing round): call WITHOUT tools so the
         // model must answer in text instead of ending the turn silent.
         callUpstream: (msgs, roundTools, opts) => callChatRaw({
@@ -3227,6 +3228,7 @@ async function answerTurn(gw, msg, decision, turn, recHolder) {
         rawReply = extractTurnReply(finalChoice);
       }
       turnRounds = Array.isArray(toolRounds) ? toolRounds : [];
+      turnUnbackedClaim = unbackedClaim ?? null;
     } catch (err) {
       closingErr = err;
       if (isTimeoutError(err)) {
@@ -3374,6 +3376,10 @@ async function answerTurn(gw, msg, decision, turn, recHolder) {
     signal: turnSignal, turnId,
   });
   await rec.finish(null);   // deliverReply stored the reply itself
+  // The reply says something was done and no tool ran, even after the one
+  // retry (claimed-actions.js): the log keeps a note under it, which the web
+  // view of this conversation shows and the next turn's record carries.
+  if (turnUnbackedClaim) await rec.unbackedClaim(turnUnbackedClaim);
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
   // A promise I make in my human's DM gets a timed intention behind it
   // (src/schedule/promise-catch.js) — the same catch the web chat runs.

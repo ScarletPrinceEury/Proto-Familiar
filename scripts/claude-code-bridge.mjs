@@ -50,6 +50,9 @@ async function main() {
     for (const n of notes) console.log(`- ${String(n.at ?? '').replace('T', ' ').slice(0, 16)} (${n.id}): ${n.text}`);
   }
   console.log(`\n--- tools its turn used: ${(data.toolsUsed ?? []).join(', ') || 'none'}`);
+  if (Array.isArray(data.unbackedClaim) && data.unbackedClaim.length) {
+    console.log(`--- the reply says something was done, but no tool ran: ${data.unbackedClaim.map(p => `"${p}"`).join(', ')}`);
+  }
   const u = data.usage;
   if (u) console.log(`--- tokens this turn: ${u.prompt_tokens ?? '?'} in, ${u.completion_tokens ?? '?'} out` +
     (u.reasoning_tokens ? ` (${u.reasoning_tokens} reasoning)` : '') + (u.cached_tokens ? `, ${u.cached_tokens} cached` : '') +

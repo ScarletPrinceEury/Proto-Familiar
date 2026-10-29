@@ -2146,6 +2146,8 @@ let _excludeHistoryId = null;
 // Set when the server reports the tool-round budget ran out mid-reach
 // (_roundCapHit) — after the reply lands we offer a one-click "Go on".
 let _roundCapHitThisTurn = false;
+// The app note for a reply that claimed an action no tool backed (claimed-actions.js).
+let _unbackedClaimNoteThisTurn = null;
 // Who is speaking this turn: null = my human, else a listed other speaker
 // (web-speakers, 0.14.87). Set when a message is sent, from the picker.
 let _turnSpeaker = null;
@@ -3223,6 +3225,13 @@ function appNoteDisplayText(msg) {
   if (msg.noteType === 'cut-off') {
     return `This turn got cut off before the reply finished.${msg.toolsRan ? ' The tools above had already run.' : ''}`;
   }
+  if (msg.noteType === 'claim-check') {
+    return 'No tool ran for the reply above, so the app asked once more.';
+  }
+  if (msg.noteType === 'unbacked-claim') {
+    const said = Array.isArray(msg.phrases) && msg.phrases.length ? ` ("${msg.phrases.join('", "')}")` : '';
+    return `The reply above says something was done${said}, but no tool ran this turn, so it didn't happen.`;
+  }
   return String(msg.content ?? '').replace(/^\[App note:\s*/, '').replace(/\]$/, '');
 }
 
@@ -4239,6 +4248,7 @@ async function runTurn(apiMessages, turn, { prevUserMessageAt = null, moodTag = 
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     _roundCapHitThisTurn = false;
+    _unbackedClaimNoteThisTurn = null;
     // Counted before the turn so read-aloud-by-default can tell a NEW reply
     // from the last one; see speakLatestReply.
     _speakButtonsBeforeTurn = document.querySelectorAll('.msg-speak-btn').length;
@@ -4249,6 +4259,11 @@ async function runTurn(apiMessages, turn, { prevUserMessageAt = null, moodTag = 
       await doNonStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag);
     }
     if (_roundCapHitThisTurn) offerContinueRounds();
+    if (_unbackedClaimNoteThisTurn) {
+      // Stored server-side under the same id, so a later reload never doubles it.
+      if (commitTurnMessages([_unbackedClaimNoteThisTurn])) { appendAppNoteEl(_unbackedClaimNoteThisTurn); saveHistory(); }
+      _unbackedClaimNoteThisTurn = null;
+    }
     if (state.readAloudByDefault) speakLatestReply(_speakButtonsBeforeTurn);
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
@@ -4552,6 +4567,29 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         _roundCapHitThisTurn = true;
         continue;
       }
+      // The reply says something was done and no tool ran (claimed-actions.js):
+      // the server's stored note, shown under the reply once it lands.
+      if (parsed._unbackedClaimNote) {
+        _unbackedClaimNoteThisTurn = parsed._unbackedClaimNote;
+        continue;
+      }
+      // The reply so far said something was done with no tool run, so the
+      // server is asking once more: it stays as it was, with a note under it,
+      // and the next round streams into a fresh bubble (like a tool round).
+      if (parsed._claimCheck) {
+        const stored = Array.isArray(parsed._claimCheck.messages) ? parsed._claimCheck.messages : [];
+        if (stored.length) pendingMsgs.push(...stored);
+        else if (fullContent) pendingMsgs.push({ role: 'assistant', content: fullContent, timestamp: new Date().toISOString(), id: generateId() });
+        if (shell?.el) toolUseEls.push(shell.el);
+        const noteMsg = stored.find(m => m.kind === 'app-note')
+          ?? { kind: 'app-note', noteType: 'claim-check', phrases: parsed._claimCheck.phrases ?? [] };
+        setTyping(false);
+        toolUseEls.push(appendAppNoteEl(noteMsg));
+        setTyping(true);
+        shell       = null;
+        fullContent = '';
+        continue;
+      }
       // A thinking model streamed its finished answer only in reasoning_content;
       // the server recovered it and sends it once at the end. The stream carried
       // no delta.content, so render this as the reply (else the turn shows empty).
@@ -4779,6 +4817,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
   }
   if (data._thalamus) lastThalamus = data._thalamus;
   if (data._roundCapHit) _roundCapHitThisTurn = true;
+  if (data._unbackedClaimNote) _unbackedClaimNoteThisTurn = data._unbackedClaimNote;
   if (data._priorTurnRecord && spliceTurnMessages(data._priorTurnRecord.turnId, data._priorTurnRecord.messages)) _rerenderAfterTurn = true;
 
   // The rounds exactly as the server stored them (turn-record.js), when it sent

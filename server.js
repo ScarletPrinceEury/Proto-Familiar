@@ -214,6 +214,7 @@ import { withCorePrompts } from './core-prompts.js';
 import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
 import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth, lastTurnRecord } from './message-sanitize.mjs';
 import { settleTextToolCalls, createDsmlStreamGuard, guardStreamEvent } from './src/util/text-tool-calls.js';
+import { unbackedClaims, claimCheckNote } from './src/util/claimed-actions.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1271,8 +1272,13 @@ async function chatTurn(req, res, rec, priorTurn) {
         }
         // The stored turn, for a caller that keeps the conversation itself (voice,
         // the bridge): it stores these rather than building its own copy.
+        // The reply still says something was done, and no tool ran even after
+        // the one retry (claimed-actions.js): my human (or the bridge) is told
+        // under the reply, and the log keeps the same note.
+        if (loopOutcome.unbackedClaim) data._unbackedClaim = loopOutcome.unbackedClaim;
         if (rec) {
           await rec.finish(stripLlmTimestamps(extractTurnReply(data.choices?.[0] ?? {})));
+          if (loopOutcome.unbackedClaim) [data._unbackedClaimNote] = await rec.unbackedClaim(loopOutcome.unbackedClaim);
           data._turnRecord = { turnId: rec.turnId, messages: rec.messages() };
         }
         if (priorTurn) data._priorTurnRecord = priorTurn;
@@ -1309,6 +1315,9 @@ async function chatTurn(req, res, rec, priorTurn) {
     // The closing round's one retry in words, when its reply was only a call
     // written out as DSML markup (text-tool-calls.js). Needs the +2 below.
     let closingRetried = false;
+    // The one claim-check retry, and a claim it still left unbacked (claimed-actions.js).
+    let claimRetried = false;
+    let unbackedClaim = null;
     const streamToolNames = [];   // every tool this turn ran, for the promise catch
     // Live ward conversation → the ward-configurable round budget.
     const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
@@ -1464,6 +1473,32 @@ async function chatTurn(req, res, rec, priorTurn) {
         content: fullContent, reasoning: fullReasoning, closing: forceTextRound,
         textCalls: settled.stripped ? { recovered: settled.recovered ? settled.names : [], notRun: settled.recovered ? [] : settled.names } : null,
       }));
+      // A reply that says it read, filed or saved something, on a turn where no
+      // tool ran (claimed-actions.js). It already streamed, so it stays as it
+      // was; one more round, tools still on, with the note after it.
+      const claimed = (finishReason === 'tool_calls' && toolCalls.length > 0) ? null : unbackedClaims({
+        content: fullContent, toolsRanThisTurn: streamToolNames.length > 0,
+        toolsOffered: payload.tools, closing: forceTextRound,
+      });
+      if (claimed && turnDiag?.rounds.length) turnDiag.rounds.at(-1).claimedWithoutCalls = claimed;
+      if (claimed && !claimRetried && round < liveMaxRounds) {
+        claimRetried = true;
+        const note = claimCheckNote(claimed);
+        console.log(`[tools] reply claimed an action with no tool run (${claimed.join(' | ')}) — one more round (stream)`);
+        const stored = rec ? await rec.claimCheck({ round, content: fullContent, note, phrases: claimed }) : null;
+        if (clientGone()) return;
+        res.write(`data: ${JSON.stringify({ _claimCheck: { phrases: claimed, ...(stored ? { messages: stored } : {}) } })}\n\n`);
+        currentMsgs = [
+          ...currentMsgs,
+          { role: 'assistant', content: fullContent },
+          { role: 'system', content: note },
+        ];
+        continue;
+      }
+      if (claimed) {
+        unbackedClaim = claimed;
+        console.log(`[tools] reply still claims an action with no tool run (${claimed.join(' | ')}) — turn ends (stream)`);
+      }
       // The closing reply was nothing but a written-out call: one more try, in words.
       if (forceTextRound && settled.stripped && !fullContent.trim() && !closingRetried) {
         closingRetried = true;
@@ -1550,9 +1585,18 @@ async function chatTurn(req, res, rec, priorTurn) {
       if (recoveredReply) res.write(`data: ${JSON.stringify({ _recoveredReply: stripLlmTimestamps(recoveredReply) })}\n\n`);
       // Round budget ran out mid-reach → the client offers a one-click "go on".
       if (forceTextRound) res.write(`data: ${JSON.stringify({ _roundCapHit: true })}\n\n`);
+      // The reply still says something was done and no tool ran, even after
+      // the retry: stored under the reply, and shown under it.
+      let recorded = false;
+      if (unbackedClaim && rec) {
+        await rec.finish(stripLlmTimestamps(finalText ?? ''));
+        recorded = true;
+        const [note] = await rec.unbackedClaim(unbackedClaim);
+        if (note) res.write(`data: ${JSON.stringify({ _unbackedClaimNote: note })}\n\n`);
+      }
       res.write('data: [DONE]\n\n');
       res.end();
-      await rec?.finish(stripLlmTimestamps(finalText ?? ''));
+      if (!recorded) await rec?.finish(stripLlmTimestamps(finalText ?? ''));
     }
     catchPromises(finalText, streamToolNames);
     // M8 idle-mode outcome reporting (streaming path). Fire-and-forget.

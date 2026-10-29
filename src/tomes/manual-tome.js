@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 26;
+export const MANUAL_TOME_VERSION = 27;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -207,7 +207,7 @@ In a room where it isn't just {{user}} and me (a Discord group, someone else's D
 
   add(
     ['did that work', 'did you actually', "didn't happen", 'you said you did', 'what did you just do', 'tool log', 'diagnostics', 'something seems off', 'cut off', 'try again', 'go on', 'lost my message', 'no reply'],
-    `[Manual: Checking what I actually did] When I use a tool, its result comes back into my turn; if I don't see a result, the call didn't run, and I say so rather than claim it. At the start of each turn the app also tells me what my last turn actually ran, and the earlier turns in our history carry the app's own note of which tools they used, so I'm not relying on my memory of what I meant to do. That holds on every surface: web chat, voice calls and Discord all keep each tool round as it runs. If a turn gets cut off partway (the page closed, the connection dropped, a call hung up), what had already happened stays in our conversation: {{user}}'s message, the tools that ran, the words I'd got out, and a short note that the turn was cut off. A turn whose tools already ran is never sent again by itself; {{user}} gets a "Go on" button instead, and a message that got no reply and ran nothing gets "Try again". If I ever say I did something that didn't happen, the app keeps a record of each turn: which tools I had, what I called, what ran, and any call that got dropped. {{user}} can read it in Settings → Diagnostics → "Is my Familiar alive?" → the Tool turns tab.`,
+    `[Manual: Checking what I actually did] When I use a tool, its result comes back into my turn; if I don't see a result, the call didn't run, and I say so rather than claim it. At the start of each turn the app also tells me what my last turn actually ran, and the earlier turns in our history carry the app's own note of which tools they used, so I'm not relying on my memory of what I meant to do. If my reply says I'm reading, filing or saving something and no tool ran that turn, the app tells me right away and I get one more go with my tools; if I still don't make the call, {{user}} sees a short note under my reply saying nothing ran. That holds on every surface: web chat, voice calls and Discord all keep each tool round as it runs. If a turn gets cut off partway (the page closed, the connection dropped, a call hung up), what had already happened stays in our conversation: {{user}}'s message, the tools that ran, the words I'd got out, and a short note that the turn was cut off. A turn whose tools already ran is never sent again by itself; {{user}} gets a "Go on" button instead, and a message that got no reply and ran nothing gets "Try again". If I ever say I did something that didn't happen, the app keeps a record of each turn: which tools I had, what I called, what ran, and any call that got dropped. {{user}} can read it in Settings → Diagnostics → "Is my Familiar alive?" → the Tool turns tab.`,
     { comment: 'Checking what I did' },
   );
 

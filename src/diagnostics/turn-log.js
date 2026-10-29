@@ -32,7 +32,7 @@ export function turnLogEnabled() {
  * whose calls arrived without finish_reason 'tool_calls' is `dropped`: the loop
  * treats it as the final answer and the calls never run.
  */
-export function describeRound({ round, finishReason, toolCalls, ran, content, reasoning, closing = false, textCalls = null }) {
+export function describeRound({ round, finishReason, toolCalls, ran, content, reasoning, closing = false, textCalls = null, claimed = null }) {
   const calls = (Array.isArray(toolCalls) ? toolCalls : []).map(tc => tc?.function?.name || '?');
   // A call written into the reply as text instead of made (0.14.86).
   const written = typeof content === 'string' ? findTextToolCalls(content).filter(n => !calls.includes(n)) : [];
@@ -49,6 +49,8 @@ export function describeRound({ round, finishReason, toolCalls, ran, content, re
     // DSML calls the loop turned into real calls, or stripped unrun (text-tool-calls.js).
     ...(textCalls?.recovered?.length ? { recoveredFromText: textCalls.recovered } : {}),
     ...(textCalls?.notRun?.length ? { textCallsNotRun: textCalls.notRun } : {}),
+    // The reply said it did something, on a turn where no tool ran (claimed-actions.js).
+    ...(Array.isArray(claimed) && claimed.length ? { claimedWithoutCalls: claimed } : {}),
   };
 }
 

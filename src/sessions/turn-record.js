@@ -90,6 +90,16 @@ export function replyMessage({ id, turnId, content, timestamp, cutOff = false })
 
 const cutOffNoteId = (turnId) => `${turnId}-cutoff`;
 
+// The reply said it did something, and no tool ran that turn (claimed-actions.js).
+export const UNBACKED_CLAIM_NOTE_TEXT = "[App note: that reply said something was done, but no tool ran that turn, so it didn't happen.]";
+
+export function unbackedClaimNote({ turnId, phrases = [], timestamp }) {
+  return {
+    id: `${turnId}-claim`, role: 'system', kind: APP_NOTE_KIND, noteType: 'unbacked-claim',
+    phrases: Array.isArray(phrases) ? phrases.slice(0, 3) : [], content: UNBACKED_CLAIM_NOTE_TEXT, timestamp, turnId,
+  };
+}
+
 export function cutOffNote({ turnId, toolsRan, timestamp }) {
   return {
     id: cutOffNoteId(turnId), role: 'system', kind: APP_NOTE_KIND, noteType: 'cut-off',
@@ -238,6 +248,28 @@ export function createTurnRecorder({ envelope, write, now = () => new Date().toI
         if (_active.get(turnId) === done) _active.delete(turnId);
         settleDone();
       }
+    },
+    /**
+     * A streamed reply claimed an action and no tool ran (claimed-actions.js):
+     * my human already saw it, so it's kept as it was, with the note I got for
+     * the one retry under it. No tool ran, so a retry of the turn stays allowed.
+     */
+    async claimCheck({ round, content, note, phrases }) {
+      partial = '';
+      const base = `${turnId}-r${round ?? rounds}`;
+      const at = now();
+      return persist([
+        { id: base, role: 'assistant', content: typeof content === 'string' ? content : '', timestamp: at, turnId },
+        { id: `${base}-check`, role: 'system', kind: APP_NOTE_KIND, noteType: 'claim-check',
+          phrases: Array.isArray(phrases) ? phrases.slice(0, 3) : [], content: note, timestamp: at, turnId },
+      ]);
+    },
+    /**
+     * After the reply: it still claims an action and no tool ran
+     * (claimed-actions.js). Stored as an app note right under it.
+     */
+    async unbackedClaim(phrases) {
+      return persist([unbackedClaimNote({ turnId, phrases, timestamp: now() })]);
     },
     /** Everything this turn wrote, in order. */
     messages() { return [...recorded]; },

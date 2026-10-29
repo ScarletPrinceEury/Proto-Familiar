@@ -125,7 +125,10 @@ export function createClaudeCodeBridge({
           : 'no reply came back (an empty turn)';
         return { ok: false, error, toolsUsed, sessionId, notes, usage };
       }
-      return { ok: true, reply, toolsUsed, sessionId, notes, usage };
+      // The reply says something was done and no tool ran, even after the
+      // retry (claimed-actions.js): handed back as a fact beside the reply.
+      const unbackedClaim = Array.isArray(data?._unbackedClaim) ? data._unbackedClaim : null;
+      return { ok: true, reply, toolsUsed, sessionId, notes, usage, ...(unbackedClaim ? { unbackedClaim } : {}) };
     } catch (err) {
       return { ok: false, error: err?.name === 'AbortError' ? `no reply within ${BRIDGE_TURN_TIMEOUT_MS / 60000} minutes` : (err?.message ?? String(err)) };
     } finally {

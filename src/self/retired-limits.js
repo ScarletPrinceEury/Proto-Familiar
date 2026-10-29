@@ -39,6 +39,7 @@ export const RETIRED_LIMITS = Object.freeze([
   { id: 'write-results', version: '0.14.113', text: 'A write\'s result says what it did ("ok: …"), not just "ok".' },
   { id: 'recall-excerpts', version: '0.14.114', text: 'A long memory in recall shows its start and its real end with [… cut for length …] between. A cut memory isn\'t a missing one; read_memory_by_id shows all of it.' },
   { id: 'tome-edits', version: '0.14.116', text: 'I can fix or take out my own tome entries (edit_tome_entry, delete_tome_entry).' },
+  { id: 'claimed-actions', version: '0.14.118', text: 'If my reply says I filed or saved something and no tool ran, the app tells me in the same turn and I get one more go.' },
 ]);
 
 // Under `node --test` (the runner sets NODE_TEST_CONTEXT in every test
