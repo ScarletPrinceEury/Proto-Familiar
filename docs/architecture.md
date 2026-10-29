@@ -540,6 +540,26 @@ Currently owns:
   `textCallsNotRun` per round. Only DSML is recovered: its fullwidth-bar tags
   never occur in prose. `<tool_call>{…}` and bare JSON blobs stay
   detection-only.
+  **Claimed actions with no tool run (0.14.118, `src/util/claimed-actions.js`):**
+  a reply that says "Reading the newest copy, then fixing. … Re-filed." on a
+  turn where nothing ran (seen three times on the bridge, 2026-10-28/29). Both
+  loops check the round that would end the turn with the same pure gate,
+  `unbackedClaims`: no tool ran this turn, the round has no calls, tools were
+  on offer, not the closing round, and a narrow first-person matcher finds an
+  announced or finished tool-shaped action. Then ONE more round runs, tools
+  still on, with `claimCheckNote` (a plain app fact) after the claimed reply.
+  `runToolCallLoop` (web non-stream, the bridge, Discord, noticing) replaces
+  the reply with the retry's, so nobody sees the claim; the streaming loop has
+  already shown it, so it stays, stored by `rec.claimCheck` with a
+  `claim-check` app note and a `_claimCheck` event that freezes the bubble.
+  If the retry still runs nothing, the turn ends: `unbackedClaim` comes back
+  from the loop, `rec.unbackedClaim` stores an `unbacked-claim` note under the
+  reply, and the web client (`_unbackedClaimNote`), the bridge
+  (`unbackedClaim`, printed by `scripts/claude-code-bridge.mjs`) and the
+  turn log (`claimedWithoutCalls`) all show it. Surface matrix: web stream
+  / web non-stream / bridge: retry + note shown; Discord ward and villager:
+  retry + note in the session log (not posted to the channel); noticing:
+  retry, logged only (nothing goes to a person).
   `request_tools` itself lives here as a core builtin: it validates the
   requested module names against `tool-surfacing.js` and stashes them on
   `toolCtx._requestedModules` for the recompose step.

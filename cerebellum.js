@@ -104,6 +104,7 @@ import { rekeyCueState } from './src/gcal/gcal-projection.js';
 import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules, anchorWithToolRoster, toolCeiling, shouldSurface } from './tool-surfacing.js';
 import { describeRound } from './src/diagnostics/turn-log.js';
 import { settleTextToolCalls } from './src/util/text-tool-calls.js';
+import { unbackedClaims, claimCheckNote } from './src/util/claimed-actions.js';
 import { PROMISE_SOURCE } from './src/schedule/promise-source.js';
 import { rekeyPonderingUids } from './src/pondering/pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './src/gcal/gcal-source.js';
@@ -6429,6 +6430,8 @@ export async function runToolCallLoop({
   const toolRounds   = [];
   let usage          = null;   // summed across every round (addUsage)
   let   data         = null;
+  let claimRetried   = false;  // the one claim-check retry (claimed-actions.js)
+  let unbackedClaim  = null;   // the retry still ran nothing: the phrases, for the caller
   const report = (r) => { try { onRound?.(describeRound(r)); } catch { /* diagnostics never break a turn */ } };
 
   for (let round = 0; round <= maxRounds; round++) {
@@ -6452,8 +6455,28 @@ export async function runToolCallLoop({
     const message = choice?.message;
     const isToolTurn = choice?.finish_reason === 'tool_calls'
       && Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+    // A reply that says it read, filed or saved something, on a turn where no
+    // tool ran (claimed-actions.js): one more round, tools still on.
+    const claimed = isToolTurn ? null : unbackedClaims({
+      content: message?.content, toolsRanThisTurn: toolRounds.length > 0,
+      toolsOffered: roundTools,
+    });
     report({ round, finishReason: choice?.finish_reason, toolCalls: message?.tool_calls,
-      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: message?.reasoning_content, textCalls });
+      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: message?.reasoning_content, textCalls, claimed });
+    if (claimed && !claimRetried && round < maxRounds && !signal?.aborted) {
+      claimRetried = true;
+      console.log(`[tools] reply claimed an action with no tool run (${claimed.join(' | ')}) — one more round`);
+      currentMsgs = [
+        ...currentMsgs,
+        { role: 'assistant', content: message.content },
+        { role: 'system', content: claimCheckNote(claimed) },
+      ];
+      continue;
+    }
+    if (claimed) {
+      unbackedClaim = claimed;
+      console.log(`[tools] reply still claims an action with no tool run (${claimed.join(' | ')}) — turn ends`);
+    }
     if (!isToolTurn || round >= maxRounds) break;
 
     const toolCalls = message.tool_calls;
@@ -6519,5 +6542,5 @@ export async function runToolCallLoop({
     }
   }
 
-  return { data, toolRounds, roundCapHit, usage };
+  return { data, toolRounds, roundCapHit, usage, claimRetried, unbackedClaim };
 }
