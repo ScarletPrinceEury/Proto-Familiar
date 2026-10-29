@@ -25,6 +25,7 @@ export const TOOL_MODULES = {
   get_datetime: 'core', get_session_info: 'core', organ_status: 'core', reader_doctor: 'core',
   recall: 'core', recall_timeframe: 'core', search_conversation: 'core', save_memory: 'core', save_to_tome: 'core',
   list_tomes: 'core', create_tome: 'core',   // the Familiar keeps its own themed tomes (reuse via list_tomes before create)
+  edit_tome_entry: 'core', delete_tome_entry: 'core',   // fixing or taking out one of my entries, logged for my human's Restore (A4)
   read_tome: 'core',   // reading my own tomes on purpose: a quiet moment has no keyword to wake an entry (0.14.101)
   update_identity: 'core', schedule_find: 'core',
   // My identity edit tools travel together (0.14.75): a turn that can ADD to

@@ -1457,6 +1457,10 @@
         <div class="field-hint">Off by default. In a friend's DM, a Discord channel, or a chat with others present, your Familiar brings its own notes along, and notes about you or other people only reach the people you've trusted with that topic. New notes get sorted as they're saved; this lets it go back through the older ones, a batch every few minutes. Anything it's unsure about stays out. You can see and change every note's setting under "In shared rooms" when you edit it.</div>
         <div class="field-hint hint-keep" id="tome-tagging-status" aria-live="polite"></div>
       </div>
+      <details class="modal-body tome-edits" id="tome-edits" hidden>
+        <summary>Recently changed by my Familiar <span class="vl-count" id="tome-edits-count"></span></summary>
+        <ul class="tome-edits-list" id="tome-edits-list"></ul>
+      </details>
       <div class="modal-body" id="tomes-list">
         <p class="logs-loading">Loading…</p>
       </div>

@@ -375,6 +375,7 @@ import { shortSlug } from './slug-ids.js';
 // atomic .tmp+rename pattern live in thalamus.js.
 import { withLock, writeTomeFile, modifyTomeFile, findOrCreateTomeByName, createMemoryFull } from './thalamus.js';
 import { readAllTomes, buildTomeEntry, listTomesSummary, isTomeFile } from './src/tomes/tome-store.js';
+import { editTomeEntry, deleteTomeEntry, listTomeEdits, restoreTomeEdit } from './src/tomes/tome-edits.js';
 import { listQuarantine, releaseQuarantine, discardQuarantine } from './src/safety/memory-quarantine.js';
 import { recordEvent as hippoRecord } from './src/memory/hippocampus.js';
 
@@ -3918,6 +3919,22 @@ async function modifyTome(tomeId, modifyFn) {
 }
 
 // GET /api/tomes — list all tomes (metadata + entry count)
+// My Familiar's own tome changes (tome-edits.js, A4): every edit and delete it
+// made, newest first, with Restore. Nothing it changes in a tome is covert.
+app.get('/api/tome-edits', async (_req, res) => {
+  try { res.json({ ok: true, items: await listTomeEdits() }); }
+  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+app.post('/api/tome-edits/:id/restore', async (req, res) => {
+  try {
+    const r = await restoreTomeEdit({ tomesDir: TOMES_DIR, modify: modifyTomeFile, id: req.params.id });
+    if (!r.ok) return res.status(r.code === 'not-found' ? 404 : 409).json(r);
+    console.log(`[tomes] my human restored "${r.record.before?.comment ?? r.record.uid}" in ${r.record.tomeName} (${r.record.id})`);
+    res.json({ ok: true, changedSince: r.changedSince, text: r.changedSince ? 'Put back. It had been changed again since, and that later change is now undone too.' : 'Put back.' });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 app.get('/api/tomes', async (_req, res) => {
   try {
     const files = await fsp.readdir(TOMES_DIR);
@@ -4187,6 +4204,9 @@ initCerebellumTools({
   createNamedTome,
   listTomes: () => listTomesSummary(TOMES_DIR),
   readTomes: () => readAllTomes(TOMES_DIR),
+  // A4: change / take out one entry, the old one logged first for Restore.
+  editTomeEntry:   (args) => editTomeEntry({ ...args, tomesDir: TOMES_DIR, modify: modifyTomeFile }),
+  deleteTomeEntry: (args) => deleteTomeEntry({ ...args, tomesDir: TOMES_DIR, modify: modifyTomeFile }),
   getVillageRegistry,
   upsertVillager,
   relayToDiscord,

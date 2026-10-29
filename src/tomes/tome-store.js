@@ -13,6 +13,7 @@
 import { promises as fsp } from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { MANUAL_TOME_ID } from './manual-tome.js';
 
 export function isTomeFile(f) {
   // A real, injectable tome is a non-dotfile `.json`. Dotfiles
@@ -66,6 +67,11 @@ export function buildTomeEntry({ comment, content, keys, learnedAt, share = {} }
   } };
 }
 
+/** The app's own manual: rewritten from code, so not mine to edit (or to use as scratch space). */
+export function isProtectedTome(tome) {
+  return tome?.id === MANUAL_TOME_ID || (tome?.graduationExempt === true && /manual/i.test(String(tome?.name ?? '')));
+}
+
 // A compact summary of every tome so the Familiar can see what it already has
 // (reuse before creating) and name one as a save target. The manual is marked
 // `protected` so it isn't treated as scratch space. Never throws.
@@ -77,7 +83,7 @@ export async function listTomesSummary(tomesDir) {
       description: String(t?.description ?? '').trim(),
       entries:     t?.entries && typeof t.entries === 'object' ? Object.keys(t.entries).length : 0,
       enabled:     t?.enabled !== false,
-      protected:   t?.graduationExempt === true && /manual/i.test(String(t?.name ?? '')),
+      protected:   isProtectedTome(t),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

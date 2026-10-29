@@ -9035,8 +9035,38 @@ function closeTomesModal() {
   $('tomes-modal').classList.add('hidden');
 }
 
+// My Familiar's tome edits and deletes (tome-edits.js, A4), newest first, each
+// with Restore. Hidden until there's something; collapsed, so it stays calm.
+async function refreshTomeEdits() {
+  const box = $('tome-edits'), list = $('tome-edits-list');
+  if (!box || !list) return;
+  let items = [];
+  try { items = (await (await fetch('/api/tome-edits')).json()).items ?? []; } catch { /* leave it hidden */ }
+  box.hidden = !items.length;
+  $('tome-edits-count').textContent = items.length ? String(items.length) : '';
+  list.innerHTML = items.slice(0, 20).map(r => {
+    const title = esc(r.before?.comment ?? '(untitled)');
+    const what = r.action === 'delete' ? `Took out “${title}” from ${esc(r.tomeName)}` : `Changed “${title}” in ${esc(r.tomeName)}`;
+    const act = r.restoredAt
+      ? '<span class="field-hint">put back</span>'
+      : `<button type="button" class="btn-ghost tome-edit-restore" data-id="${esc(r.id)}" aria-label="Put back the old “${title}”">Restore</button>`;
+    return `<li><span>${what} <span class="field-hint">${esc(relTimeShort(r.at))}</span></span>${act}</li>`;
+  }).join('');
+  list.querySelectorAll('.tome-edit-restore').forEach(btn => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/tome-edits/${encodeURIComponent(btn.dataset.id)}/restore`, { method: 'POST' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) { alert(data.text || `Couldn’t put it back (${r.status}).`); btn.disabled = false; return; }
+      if (data.changedSince) alert(data.text);
+      refreshTomesList();
+    } catch (err) { alert(`Couldn’t put it back: ${err?.message ?? err}`); btn.disabled = false; }
+  }));
+}
+
 async function refreshTomesList() {
   refreshTomeTaggingStatus();
+  refreshTomeEdits();
   await loadTomesFromServer();
   const container = $('tomes-list');
   container.innerHTML = '';
