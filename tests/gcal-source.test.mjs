@@ -110,7 +110,13 @@ test('cliPresetHint returns a default command for known presets', () => {
   assert.equal(cliPresetHint('unknown'), '');
 });
 
-import { pushIcsViaCli, resolveWriteCommand, writePresetCommand } from '../src/gcal/gcal-source.js';
+import { pushIcsViaCli, resolveWriteCommand, writePresetCommand, shellQuotePath } from '../src/gcal/gcal-source.js';
+import path from 'node:path';
+import os from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
+
+// The command ends with the temp .ics path as ONE quoted argument, on any OS.
+const QUOTED_ICS = /(["'])([^"']+\.ics)\1$/;
 
 test('resolveWriteCommand: override wins, else preset, else empty', () => {
   assert.equal(resolveWriteCommand({ source: 'gcalcli', override: 'my cmd {file}' }), 'my cmd {file}');
@@ -125,7 +131,9 @@ test('pushIcsViaCli: substitutes {file} and reports success', async () => {
   const runner = async (cmd) => { received = cmd; return { code: 0, stdout: 'imported', stderr: '', failed: false }; };
   const r = await pushIcsViaCli({ icsText: ICS, command: 'gcalcli import {file}', runner });
   assert.equal(r.ok, true);
-  assert.match(received, /gcalcli import \/.*\.ics/);   // {file} replaced with a real path
+  assert.ok(received.startsWith('gcalcli import '), received);
+  const m = received.match(QUOTED_ICS);
+  assert.ok(m && path.isAbsolute(m[2]), `{file} replaced with a real, quoted path — got ${received}`);
   assert.ok(!received.includes('{file}'));
 });
 
@@ -133,7 +141,42 @@ test('pushIcsViaCli: appends the path when no {file} placeholder', async () => {
   let received = '';
   const runner = async (cmd) => { received = cmd; return { code: 0, stdout: '', stderr: '', failed: false }; };
   await pushIcsViaCli({ icsText: ICS, command: 'gogcli import', runner });
-  assert.match(received, /^gogcli import \/.*\.ics$/);
+  assert.ok(received.startsWith('gogcli import '), received);
+  const m = received.match(QUOTED_ICS);
+  assert.ok(m && path.isAbsolute(m[2]), `appended as a real, quoted path — got ${received}`);
+});
+
+test('pushIcsViaCli: a {file} the ward already quoted is not quoted twice', async () => {
+  for (const command of ['gcalcli import "{file}"', "gcalcli import '{file}'"]) {
+    let received = '';
+    const runner = async (cmd) => { received = cmd; return { code: 0, stdout: '', stderr: '', failed: false }; };
+    await pushIcsViaCli({ icsText: ICS, command, runner });
+    assert.match(received, /^gcalcli import (["'])[^"']+\.ics\1$/, `${command} → ${received}`);
+  }
+});
+
+test('shellQuotePath: one argument for cmd.exe and for sh', () => {
+  assert.equal(shellQuotePath('C:\\Users\\Jo Smith\\a.ics', 'win32'), '"C:\\Users\\Jo Smith\\a.ics"');
+  assert.equal(shellQuotePath('/tmp/jo smith/a.ics', 'linux'), "'/tmp/jo smith/a.ics'");
+  assert.equal(shellQuotePath("/tmp/o'neil/a.ics", 'darwin'), "'/tmp/o'\\''neil/a.ics'");
+});
+
+test('pushIcsViaCli: a temp folder with a space still reaches the command as one real file (real shell)', async () => {
+  // A Windows temp dir lives under the profile folder, so "Jo Smith" puts a space
+  // in every path. This runs the real exec runner with a real node child that
+  // checks the one argument it got is the file — unquoted, the shell split it.
+  const spaced = await mkdtemp(path.join(os.tmpdir(), 'pf gcal space '));
+  const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+  try {
+    process.env.TMPDIR = process.env.TEMP = process.env.TMP = spaced;
+    const node = shellQuotePath(process.execPath);
+    const check = `${node} -e "require('fs').accessSync(process.argv[1]); if (process.argv.length !== 2) process.exit(3)"`;
+    const r = await pushIcsViaCli({ icsText: ICS, command: `${check} {file}` });
+    assert.equal(r.ok, true, `the import command didn't get the file as one argument: ${r.error}`);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    await rm(spaced, { recursive: true, force: true });
+  }
 });
 
 test('pushIcsViaCli: a failed import reports ok:false (calendar unchanged)', async () => {

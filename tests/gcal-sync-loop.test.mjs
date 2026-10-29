@@ -68,32 +68,47 @@ test('a failed sync retries on the short leash; success consumes the full interv
   let t = 0;
   let ok = false;
   const attempts = [];
+  const done = [];   // ticks that ran a sync, success or failure (reported once _nextDueTs is set)
+  let notDue = 0;    // ticks that looked at the clock and found nothing due
   startGcalSyncLoop({
     baseTickMs: 5,
     now: () => t,
     isEnabled: async () => true,
     getIntervalMs: async () => 60 * 60_000,
+    onTick: (r) => { if (r?.reason === 'not_due') notDue++; else done.push(r); },
     fetchSource: async () => { attempts.push(t); return ok ? { ok: true, icsText: 'x' } : { ok: false, error: 'boom' }; },
     ingest: async () => ({ ok: true, new: [] }),
   });
-  const settle = () => new Promise(r => setTimeout(r, 40));
+  // Wait on what the loop reports, not a fixed sleep. This used to sleep 40ms
+  // per step, and on a loaded full-suite run a 5ms tick sometimes hadn't landed.
+  const waitFor = async (cond, what) => {
+    const end = Date.now() + 5000;
+    while (!cond()) {
+      if (Date.now() > end) assert.fail(`timed out waiting for ${what}`);
+      await new Promise(r => setTimeout(r, 5));
+    }
+  };
+  // "Nothing happens yet" only counts once the loop has looked at the clock
+  // twice since it moved (the first look may have started before the change).
+  const twoLooksFrom = (n0) => waitFor(() => notDue >= n0 + 2, 'two not-due ticks');
   try {
-    await settle();
+    await waitFor(() => done.length === 1, 'the boot attempt');
     assert.equal(attempts.length, 1, 'boot fire attempted once');
-    await settle();
+    await twoLooksFrom(notDue);
     assert.equal(attempts.length, 1, 'a failure does not re-attempt inside the leash');
     t = FAILURE_RETRY_MS + 1;
-    await settle();
+    await waitFor(() => done.length === 2, 'the retry after the failure leash');
     assert.equal(attempts.length, 2, 'retried once the failure leash elapsed — not the full hour');
     ok = true;
     t += FAILURE_RETRY_MS + 1;
-    await settle();
+    await waitFor(() => done.length === 3, 'the second retry');
     assert.equal(attempts.length, 3, 'second retry succeeded');
+    assert.equal(done[2].synced, true);
     t += 30 * 60_000;
-    await settle();
+    await twoLooksFrom(notDue);
     assert.equal(attempts.length, 3, 'success consumed the full interval');
     t += 31 * 60_000;
-    await settle();
+    await waitFor(() => done.length === 4, 'the sync after the full interval');
     assert.equal(attempts.length, 4, 'due again after the interval');
   } finally {
     await stopGcalSyncLoop();
