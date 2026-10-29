@@ -17,6 +17,12 @@ media/
 # makes `git pull` abort on "local changes" to a file the ward never edited.
 voice-model-pins.local.json
 voice-model-pins.local.json.tmp
+# Every dotfile in tomes/ is the app's runtime state (queues, caches, logs),
+# never lore and never tracked. A catch-all, because the per-file list below
+# missed new ones: .held-relays.json (held message drafts) and .tome-edits.jsonl
+# (old versions of tome entries) hold private text. The named entries below
+# stay as documentation of what's there.
+tomes/.*
 # Vision capability cache (provider:model → yes/no) — advisory, rebuildable.
 tomes/.vision-capability.json
 tomes/.vision-capability.json.tmp
