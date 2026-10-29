@@ -15,6 +15,12 @@ import {
   recordRoutineReview,
   readStewardshipState,
 } from '../src/schedule/stewardship.js';
+import { wardLocalNowISO } from '../relative-time.js';
+
+// Unruh times are LOCAL-naive ("YYYY-MM-DDTHH:MM:SS", no offset), so build them
+// on the local clock. `toISOString().slice(0, 19)` is the UTC wall-clock: it only
+// matches local time on a machine set to UTC, and "30 min ago" read as 90 in UTC+1.
+const localNaive = (...args) => wardLocalNowISO(null, new Date(...args).getTime());
 
 // ── tierAtLeastModerate ────────────────────────────────────────────
 test('tierAtLeastModerate: true for moderate, high, severe', () => {
@@ -258,7 +264,7 @@ test('buildOpeningBrief: empty items returns "clear stretch" message', () => {
 
 test('buildOpeningBrief: lists dated items in window', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime(); // Jul 4, 10:00 local
-  const tomorrow = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19); // Jul 5, 14:00
+  const tomorrow = localNaive(2026, 6, 5, 14, 0, 0); // Jul 5, 14:00
   const items = [
     { label: 'Meeting', type: 'event', when: tomorrow, resolution: null },
   ];
@@ -269,7 +275,7 @@ test('buildOpeningBrief: lists dated items in window', () => {
 
 test('buildOpeningBrief: excludes items outside lookahead window', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const farFuture = new Date(2026, 6, 12, 14, 0, 0).toISOString().slice(0, 19); // 8 days ahead
+  const farFuture = localNaive(2026, 6, 12, 14, 0, 0); // 8 days ahead
   const items = [
     { label: 'Distant event', type: 'event', when: farFuture, resolution: null },
   ];
@@ -280,7 +286,9 @@ test('buildOpeningBrief: excludes items outside lookahead window', () => {
 
 test('buildOpeningBrief: excludes items before current time', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const past = new Date(2026, 7, 4, 9, 0, 0).toISOString().slice(0, 19); // before now
+  // 2h ago — past the -1h lower bound. (Month 6 = July; this used to say 7, an
+  // AUGUST date a month in the future, so the test passed for the wrong reason.)
+  const past = localNaive(2026, 6, 4, 8, 0, 0);
   const items = [
     { label: 'Past event', type: 'event', when: past, resolution: null },
   ];
@@ -290,7 +298,7 @@ test('buildOpeningBrief: excludes items before current time', () => {
 
 test('buildOpeningBrief: includes items in the past hour (lower bound is -1h)', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const recentPast = new Date(2026, 6, 4, 9, 30, 0).toISOString().slice(0, 19); // 30 min ago
+  const recentPast = localNaive(2026, 6, 4, 9, 30, 0); // 30 min ago
   const items = [
     { label: 'Recent event', type: 'event', when: recentPast, resolution: null },
   ];
@@ -300,7 +308,7 @@ test('buildOpeningBrief: includes items in the past hour (lower bound is -1h)', 
 
 test('buildOpeningBrief: excludes resolved items', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const tomorrow = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const tomorrow = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     { label: 'Done event', type: 'event', when: tomorrow, resolution: 'completed' },
   ];
@@ -310,7 +318,7 @@ test('buildOpeningBrief: excludes resolved items', () => {
 
 test('buildOpeningBrief: includes tasks, reminders, holds (not just events)', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const tomorrow = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const tomorrow = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     { label: 'Task due', type: 'task', when: tomorrow, resolution: null },
     { label: 'Reminder', type: 'reminder', when: tomorrow, resolution: null },
@@ -324,8 +332,8 @@ test('buildOpeningBrief: includes tasks, reminders, holds (not just events)', ()
 
 test('buildOpeningBrief: sorts items chronologically', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const t1 = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
-  const t2 = new Date(2026, 6, 5, 10, 0, 0).toISOString().slice(0, 19);
+  const t1 = localNaive(2026, 6, 5, 14, 0, 0);
+  const t2 = localNaive(2026, 6, 5, 10, 0, 0);
   const items = [
     { label: 'Later', type: 'event', when: t1, resolution: null },
     { label: 'Earlier', type: 'event', when: t2, resolution: null },
@@ -619,7 +627,7 @@ test('buildStewardshipBlock: includes header when content renders', async () => 
 // ── selectReadiness ────────────────────────────────────────────────
 test('selectReadiness: event with unmet requires prerequisite in-window → returned', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19); // next day, within 48h
+  const eventWhen = localNaive(2026, 6, 5, 14, 0, 0); // next day, within 48h
   const items = [
     { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: null },
@@ -638,7 +646,7 @@ test('selectReadiness: event with unmet requires prerequisite in-window → retu
 
 test('selectReadiness: prerequisite with resolution=done → NOT returned', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const eventWhen = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: 'done' },
@@ -654,7 +662,7 @@ test('selectReadiness: prerequisite with resolution=done → NOT returned', () =
 
 test('selectReadiness: edge kind causes (not requires) → NOT returned', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const eventWhen = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: null },
@@ -670,7 +678,7 @@ test('selectReadiness: edge kind causes (not requires) → NOT returned', () => 
 
 test('selectReadiness: direction check — reversed edge → NOT returned', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const eventWhen = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: null },
@@ -686,7 +694,7 @@ test('selectReadiness: direction check — reversed edge → NOT returned', () =
 
 test('selectReadiness: event outside lead window (10 days ahead) → NOT returned', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 7, 14, 14, 0, 0).toISOString().slice(0, 19); // 10 days away
+  const eventWhen = localNaive(2026, 6, 14, 14, 0, 0); // 10 days away (month 6 = July; it said 7, i.e. 41 days)
   const items = [
     { id: 'event1', label: 'Future meeting', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Prepare', type: 'task', when: null, resolution: null },
@@ -703,7 +711,7 @@ test('selectReadiness: event outside lead window (10 days ahead) → NOT returne
 test('selectReadiness: cooldown — flaggedAt item within 6h → NOT returned', () => {
   const now = Date.now();
   const oneHourAgo = now - 3600 * 1000;
-  const eventWhen = new Date(now + 2 * 3600 * 1000).toISOString().slice(0, 19);
+  const eventWhen = localNaive(now + 2 * 3600 * 1000);
   const items = [
     { id: 'event1', label: 'Call', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Notes', type: 'task', when: null, resolution: null },
@@ -721,7 +729,7 @@ test('selectReadiness: cooldown — flaggedAt item within 6h → NOT returned', 
 test('selectReadiness: cooldown — flaggedAt older than 6h → returned', () => {
   const now = Date.now();
   const sevenHoursAgo = now - 7 * 3600 * 1000;
-  const eventWhen = new Date(now + 2 * 3600 * 1000).toISOString().slice(0, 19);
+  const eventWhen = localNaive(now + 2 * 3600 * 1000);
   const items = [
     { id: 'event1', label: 'Call', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Notes', type: 'task', when: null, resolution: null },
@@ -738,7 +746,7 @@ test('selectReadiness: cooldown — flaggedAt older than 6h → returned', () =>
 
 test('selectReadiness: depends_on kind works same as requires', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const eventWhen = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     { id: 'event1', label: 'Meeting', type: 'event', when: eventWhen, resolution: null },
     { id: 'task1', label: 'Prep', type: 'task', when: null, resolution: null },
@@ -755,7 +763,7 @@ test('selectReadiness: depends_on kind works same as requires', () => {
 
 test('selectReadiness: obstacleTags — event with obstacle_tags payload', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const eventWhen = localNaive(2026, 6, 5, 14, 0, 0);
   const items = [
     {
       id: 'event1', label: 'Outside task', type: 'event', when: eventWhen, resolution: null,
@@ -775,9 +783,9 @@ test('selectReadiness: obstacleTags — event with obstacle_tags payload', () =>
 
 test('selectReadiness: max caps the number returned', () => {
   const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-  const eventWhen1 = new Date(2026, 6, 5, 10, 0, 0).toISOString().slice(0, 19);
-  const eventWhen2 = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
-  const eventWhen3 = new Date(2026, 6, 5, 18, 0, 0).toISOString().slice(0, 19);
+  const eventWhen1 = localNaive(2026, 6, 5, 10, 0, 0);
+  const eventWhen2 = localNaive(2026, 6, 5, 14, 0, 0);
+  const eventWhen3 = localNaive(2026, 6, 5, 18, 0, 0);
   const items = [
     { id: 'event1', label: 'First', type: 'event', when: eventWhen1, resolution: null },
     { id: 'event2', label: 'Second', type: 'event', when: eventWhen2, resolution: null },
@@ -800,7 +808,7 @@ test('buildStewardshipBlock: readiness surfaces when event + unmet prerequisite 
   const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stew-readiness-'));
   try {
     const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
-    const eventWhen = new Date(2026, 6, 4, 12, 0, 0).toISOString().slice(0, 19); // 2 hours ahead
+    const eventWhen = localNaive(2026, 6, 4, 12, 0, 0); // 2 hours ahead
     const scheduleItems = [
       { id: 'event1', label: 'Standup', type: 'event', when: eventWhen, resolution: null },
       { id: 'task1', label: 'Prep notes', type: 'task', when: null, resolution: null },

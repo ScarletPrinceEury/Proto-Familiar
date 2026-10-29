@@ -248,6 +248,15 @@ export function resolveWriteCommand({ source, override } = {}) {
 }
 
 /**
+ * Quote a file path as one argument for the shell `exec` runs (cmd.exe on
+ * Windows, sh elsewhere). Double quotes for cmd.exe — Windows paths can't hold
+ * a `"`; single quotes for sh, with any `'` in the path escaped.
+ */
+export function shellQuotePath(p, platform = process.platform) {
+  return platform === 'win32' ? `"${p}"` : `'${String(p).replaceAll("'", "'\\''")}'`;
+}
+
+/**
  * Import an `.ics` into the real calendar via the ward's configured command.
  * Writes the bytes to a temp file, substitutes {file} (or appends the path),
  * runs the command, and always cleans up the temp file. Never throws —
@@ -268,7 +277,11 @@ export async function pushIcsViaCli({ icsText, command, runner = defaultCliRunne
   try {
     tmpFile = path.join(os.tmpdir(), `pf-gcal-${process.pid}-${Date.now()}.ics`);
     await fsp.writeFile(tmpFile, icsText, 'utf8');
-    const full = cmd.includes('{file}') ? cmd.replaceAll('{file}', tmpFile) : `${cmd} ${tmpFile}`;
+    // The path is quoted: on Windows the temp dir sits under the profile folder,
+    // and a name like "Jo Smith" split it into two arguments. A {file} the ward
+    // already quoted ("{file}" / '{file}') is replaced whole, never double-quoted.
+    const arg = shellQuotePath(tmpFile);
+    const full = cmd.includes('{file}') ? cmd.replace(/(["']?)\{file\}\1/g, arg) : `${cmd} ${arg}`;
     const res = await runner(full);
     if (!res || res.failed || res.code !== 0) {
       const tail = (res?.stderr || '').trim().split('\n').slice(-1)[0] || `exit ${res?.code ?? '??'}`;

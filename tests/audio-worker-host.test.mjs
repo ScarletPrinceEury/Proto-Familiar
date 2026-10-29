@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createAudioWorker, DEFAULT_THREADS } from '../src/voice/audio-worker-host.js';
 
 /**
@@ -16,7 +17,7 @@ async function stubWorker(body) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'awh-'));
   const file = path.join(dir, 'stub-worker.mjs');
   await fs.writeFile(file, `
-import { encodeJson, createFrameReader } from ${JSON.stringify(new URL('../src/voice/audio-frame.js', import.meta.url).pathname)};
+import { encodeJson, createFrameReader } from ${JSON.stringify(new URL('../src/voice/audio-frame.js', import.meta.url).href)};
 const send = (o) => process.stdout.write(encodeJson(o));
 ${body}
 `, 'utf8');
@@ -276,7 +277,10 @@ test('status is honest while parked — the reason is reportable, not just a fla
 // ordinary state, not a failure — and it is the state this sandbox is in.
 // These assert the worker behaves honestly in exactly that case.
 
-const REAL_WORKER = new URL('../src/voice/audio-worker.mjs', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: on Windows `.pathname` is `/C:/…`, which node
+// can't open, so the spawned worker died on arrival and every test below read
+// `worker-died`.
+const REAL_WORKER = fileURLToPath(new URL('../src/voice/audio-worker.mjs', import.meta.url));
 
 test('the real worker starts, answers, and says whether it has a speech engine', async () => {
   const w = createAudioWorker({ workerScript: REAL_WORKER, idleMs: 0 });

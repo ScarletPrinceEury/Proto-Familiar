@@ -562,10 +562,12 @@ test("today's rhythm: phases sorted by local time-of-day, not by stored date", (
   const out = formatTemporalContext({
     schedule: { phase: null, window: [] },
     routine: [
-      // Insertion order deliberately scrambled vs. time-of-day.
-      { id: 'late',  label: 'late night',      when: '2026-05-01T23:00:00Z', end: '2026-05-02T06:00:00Z' },
-      { id: 'early', label: 'early morning',   when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z' },
-      { id: 'noon',  label: 'morning correspondence', when: '2026-05-01T10:00:00Z', end: '2026-05-01T13:00:00Z' },
+      // Insertion order deliberately scrambled vs. time-of-day. Local-naive, as
+      // Unruh stores them: with a `Z` these were UTC, so on a UTC+1 machine
+      // 23:00Z really is 00:00 local and correctly sorted first.
+      { id: 'late',  label: 'late night',      when: '2026-05-01T23:00:00', end: '2026-05-02T06:00:00' },
+      { id: 'early', label: 'early morning',   when: '2026-05-01T06:00:00', end: '2026-05-01T10:00:00' },
+      { id: 'noon',  label: 'morning correspondence', when: '2026-05-01T10:00:00', end: '2026-05-01T13:00:00' },
     ],
   });
   const iEarly = out.indexOf('early morning');

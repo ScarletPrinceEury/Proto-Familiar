@@ -154,23 +154,33 @@ live('extractPageData pierces OPEN shadow DOM (nodes, css that resolves + acts, 
 import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../src/browser/browser-driver.js';
 import { EventEmitter } from 'node:events';
 
-test('systemBrowserCandidates finds Windows Chrome AND Edge (why the download was forced on Windows)', () => {
+// Each platform's candidate list is checked by pinning process.platform, so
+// every list is tested on every OS the suite runs on (the linux test used to
+// read the real platform and failed on Windows and macOS).
+function onPlatform(plat, fn) {
   const realPlat = Object.getOwnPropertyDescriptor(process, 'platform');
+  try {
+    Object.defineProperty(process, 'platform', { value: plat, configurable: true });
+    return fn();
+  } finally {
+    Object.defineProperty(process, 'platform', realPlat);
+  }
+}
+
+test('systemBrowserCandidates finds Windows Chrome AND Edge (why the download was forced on Windows)', () => {
   const prevPF = process.env.ProgramFiles;
   try {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     process.env.ProgramFiles = 'C:\\Program Files';
-    const cands = systemBrowserCandidates();
+    const cands = onPlatform('win32', () => systemBrowserCandidates());
     assert.ok(cands.some(p => /chrome\.exe$/i.test(p)), 'includes an installed Chrome');
     assert.ok(cands.some(p => /msedge\.exe$/i.test(p)), 'includes Edge — always present on Windows, so no download is ever needed');
   } finally {
-    Object.defineProperty(process, 'platform', realPlat);
     if (prevPF === undefined) delete process.env.ProgramFiles; else process.env.ProgramFiles = prevPF;
   }
 });
 
-test('systemBrowserCandidates covers Chrome, Edge and Chromium on this (linux) host', () => {
-  const cands = systemBrowserCandidates();
+test('systemBrowserCandidates covers Chrome, Edge and Chromium on a linux host', () => {
+  const cands = onPlatform('linux', () => systemBrowserCandidates());
   assert.ok(cands.some(p => /google-chrome/.test(p)));
   assert.ok(cands.some(p => /chromium/.test(p)));
   assert.ok(cands.some(p => /microsoft-edge/.test(p)));
