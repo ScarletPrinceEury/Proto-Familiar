@@ -1868,6 +1868,14 @@ chars + `…`, which read back as my own reply breaking off ("I didn't finish th
 sentence"). The same rule covers the noticing / warm reach-out recent lines
 (`formatRecentMessagesForContext`, 300 chars) and is the rule for any context
 block that shortens a message: never a bare `…`, never a silent mid-word cut.
+**Recall excerpts follow it at the source (0.14.114):** Phylactery's
+`excerpt.py` mirrors `excerpt.js` (pinned together by the shared fixture
+`tests/fixtures/excerpt-cases.json`, run by `tests/excerpt.test.mjs` and
+`phylactery/tests/test_excerpt.py`), and every recall result's `excerpt` comes
+from `excerpt_fields` (+ `truncated`, `chars` when cut), so the recall tool,
+the per-turn memory block, pondering's grounding and the endpoints all show a
+long memory as start + marker + end. The recall tool adds "read_memory_by_id
+<id> shows all of it" to a cut line (`recallMoreTag`).
 Triage (ward-signed) reads its recent lines WHOLE — `renderTriageSliceBody`;
 the newest `TRIAGE_UNCUT_LATEST` (5) are never shortened in any way, an older
 line only past `TRIAGE_LINE_CEILING` (10,000 chars) so an old giant paste can't

@@ -33,6 +33,7 @@ from typing import Any
 from phylactery.db import get_conn, now_iso
 from phylactery.memory import create as memory_create
 from phylactery.memory import update_memory_by_id
+from phylactery.excerpt import excerpt
 
 
 # Defaults tuned for always-thinking models (GLM/DeepSeek): they bill their
@@ -312,7 +313,7 @@ def granularity_audit(conn: sqlite3.Connection | None = None, *, sample_limit: i
                 if len(samples) < sample_limit:
                     samples.append({
                         "id": r["id"], "granularity": g, "date_key": r["date_key"],
-                        "migrated": is_migrated, "excerpt": (r["content"] or "")[:120],
+                        "migrated": is_migrated, "excerpt": excerpt(r["content"], 120),
                     })
         return {
             "ok": True,

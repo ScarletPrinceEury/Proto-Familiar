@@ -3408,6 +3408,12 @@ export function trackerUseResultText(data, name) {
   return `Didn't take anything off: ${data?.error ?? 'Unruh didn\'t answer'}. Nothing changed.`;
 }
 
+// A recall excerpt shows the start and end of a long memory (Phylactery's
+// excerpt, known-issues A3); when it's cut, this says how to read all of it.
+export function recallMoreTag(r) {
+  return r?.truncated && r?.id != null ? ` (${Number(r.chars) ? `${r.chars} chars; ` : ''}read_memory_by_id ${r.id} shows all of it)` : '';
+}
+
 // Render a tracker_read payload as a plain, neutral line (code only, no LLM).
 // Deliberately gap-neutral (invariant T4): never "streak", "broke", or
 // "missed day" — a quiet stretch is just an older timestamp, not a failure.
@@ -4002,7 +4008,7 @@ export const TOOL_EXECUTORS = {
         // extraction (temporal-bridges Piece 2) — so I can walk from a memory
         // to the moment on the schedule it belongs to.
         const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
-        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
+        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}${recallMoreTag(r)}`;
       });
       return `What I remember about "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
     } catch (err) {
@@ -4028,7 +4034,7 @@ export const TOOL_EXECUTORS = {
         const idTag = r.id != null ? `, id ${r.id}` : '';
         const srcTag = r.source ? ` [source: ${r.source}]` : '';
         const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
-        return `${i + 1}. (${addr || 'memory'}${idTag})${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
+        return `${i + 1}. (${addr || 'memory'}${idTag})${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}${recallMoreTag(r)}`;
       });
       return `What I kept from around ${span} (newest first):\n${lines.join('\n')}`;
     } catch (err) {

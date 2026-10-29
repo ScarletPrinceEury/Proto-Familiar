@@ -20,6 +20,7 @@ from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
 from phylactery.content_gate import memory_visible_to_grants
+from phylactery.excerpt import excerpt, excerpt_fields
 from phylactery.care import CARE_CATEGORIES, contains_care_critical
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
@@ -94,7 +95,7 @@ def _row_to_thin(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "granularity": row["granularity"],
         "date": row["date_key"],
-        "excerpt": (row["content"] or "")[:300],
+        **excerpt_fields(row["content"]),
     }
 
 
@@ -214,7 +215,7 @@ def search(
                 aw = _attribution_weight(r["attribution_confidence"] if "attribution_confidence" in r.keys() else None)
                 score = similarity * dw * aw
                 item = {"id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)}
+                        "date": r["date_key"], **excerpt_fields(r["content"]), "score": round(score, 4)}
                 if aw < 1.0:
                     item["attribution_confidence"] = round(aw, 2)
                 lbl = _source_label(r["source_json"])
@@ -236,7 +237,7 @@ def search(
                 ORDER BY updated_at DESC LIMIT ?
             """, aud_params + [k]).fetchall()
             results = [{"id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": 0.5}
+                        "date": r["date_key"], **excerpt_fields(r["content"]), "score": 0.5}
                        for r in rows
                        if not gating or memory_visible_to_grants(r["content_tag"], topic_grants)][:max_results]
 
@@ -317,7 +318,7 @@ def by_timerange(
                 continue  # content-tag gate: not shared with this room
             item = {
                 "id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                "date": r["date_key"], "excerpt": (r["content"] or "")[:300],
+                "date": r["date_key"], **excerpt_fields(r["content"]),
             }
             lbl = _source_label(r["source_json"])
             if lbl:

@@ -210,7 +210,17 @@ sensitive schedule items the same way; recall was scoped, the writes weren't.
 Now every id a by-id write names is read first and must be readable by the
 room (`src/village/gated-writes.js`).
 
-### Recall results are cut mid-word with no marker
+### ~~Recall results are cut mid-word with no marker~~ — fixed 0.14.114
+
+Phylactery now builds every recall excerpt with `phylactery/src/phylactery/excerpt.py`,
+a mirror of `src/util/excerpt.js` (start and end at word boundaries, the same
+marker), and a cut result carries `truncated: true` and the memory's full
+`chars`. The recall tool adds "(N chars; read_memory_by_id <id> shows all of
+it)" to a cut line. One fixture, `tests/fixtures/excerpt-cases.json`, runs in
+both test suites so the two can't drift; it caught one on day one (Python's `$`
+matches before a trailing newline, JavaScript's doesn't). The memory block that
+rides every turn, pondering's grounding and the endpoints get it from the same
+source. What it was:
 
 Phylactery's search results carry `excerpt: content[:300]` (`memory.py`, four
 places), and the `recall` tool prints that excerpt as the fact. A longer fact

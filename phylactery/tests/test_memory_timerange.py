@@ -116,3 +116,22 @@ def test_schedule_refs_surface_on_results():
     _mk(c, "m", "2026-07-02", "session with Schmidt", source_json=sj)
     out = memory.by_timerange("2026-07-02", "2026-07-02", conn=c)
     assert out["results"][0]["schedule_refs"] == ["schmidt-kh"]
+
+
+# ── Excerpts cut at words, and say they were cut (known-issues A3) ───────────
+
+def test_a_long_memory_comes_back_as_start_and_end_and_says_its_length():
+    from phylactery.excerpt import EXCERPT_MARKER
+    c = _conn()
+    long = ("We walked the long way round the reservoir and talked about the move. " * 8).strip()
+    _mk(c, "m-long", "2026-07-02", long)
+    _mk(c, "m-short", "2026-07-02", "Short and sweet.")
+    res = memory.by_timerange("2026-07-01", "2026-07-03", conn=c)
+    by_id = {r["id"]: r for r in res["results"]}
+    cut = by_id["m-long"]
+    assert cut["truncated"] is True and cut["chars"] == len(long)
+    assert EXCERPT_MARKER in cut["excerpt"] and len(cut["excerpt"]) <= 300
+    head = cut["excerpt"].split(EXCERPT_MARKER)[0].strip()
+    assert long.startswith(head) and long[len(head)] == " ", "the start ends on a whole word"
+    assert cut["excerpt"].endswith("talked about the move."), "the real ending shows"
+    assert "truncated" not in by_id["m-short"] and by_id["m-short"]["excerpt"] == "Short and sweet."
