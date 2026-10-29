@@ -692,6 +692,13 @@ uses. That covers reachability.
 - **Updates:** the Manual tome, `list_tomes` / `read_tome` texts that name the
   new tools, and tests (including a restore round-trip).
 
+**Built (0.14.116).** One case the plan didn't name: a share tag `checkTomeTag`
+can't read (an old or misspelled topic) is left as it was, rather than cleared
+on a guess. Restoring an edit that was edited again since still puts the
+logged version back, and says the later change is undone too. The tag rule
+that a note naming someone is held at sensitive needs the person's name in
+the people list (my human, villagers), the same list `save_to_tome` uses.
+
 ### A5. Rules outlive their cause, and confabulation
 
 - **Confabulation.** Most of what's left is covered by B (true records on

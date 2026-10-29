@@ -154,9 +154,11 @@ below lets the Familiar drop a rule instead of carrying it:
   `appendIdentity` used to report a failed append as ok. Rules it retires:
   "an ok from update_identity means something was added somewhere", "called vs
   verified".
-- **Tomes.** The Familiar can create tomes, add entries, and since 0.14.101 read
-  them on purpose (`read_tome`: list, search, read one entry in full), but can't
-  edit or delete an existing entry.
+- ~~**Tomes.**~~ Fixed 0.14.116: besides creating, adding and reading
+  (`read_tome`, 0.14.101), the Familiar can fix an entry (`edit_tome_entry`) or
+  take one out (`delete_tome_entry`), never in the manual. Every change is
+  logged first and listed under "Recently changed by my Familiar" in the Tomes
+  window with Restore, and an edit re-checks the entry's share tag.
 - ~~**Self-knowledge the app has and never shares.**~~ Fixed 0.14.85: the [Now]
   block says which model is answering, when that changed since the last turn in
   the conversation, and when a conversation is brand new (model-signal.js).

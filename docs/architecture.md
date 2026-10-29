@@ -578,6 +578,17 @@ Currently owns:
   deliberately keeps isn't drained by tome graduation). All three are `'core'`
   tools (always advertised). Bounded by the prompt (reuse before create), never a
   hard cap.
+  **`edit_tome_entry` / `delete_tome_entry` (0.14.116, `src/tomes/tome-edits.js`,
+  core, refused when `ctx.wardPrivate === false`)** are the fixing half: an
+  entry is named the way `read_tome` shows it (same `findTome`/`findEntry`
+  lookup), the manual (`isProtectedTome`, tome-store.js) refuses, and every
+  change first appends the entry as it was to `tomes/.tome-edits.jsonl`, which
+  the Tomes window lists under "Recently changed by my Familiar" with Restore
+  (`GET /api/tome-edits`, `POST /api/tome-edits/:id/restore`). An edit clears
+  `graduationReviewedAt` and re-checks the share tag: a ward-set tag stays, a
+  sorting-pass tag is cleared for re-sorting, the Familiar's own is held by
+  `checkTomeTag` when the new text names someone, and a tag the checker can't
+  read is left alone. Writes go through `modifyTomeFile` (lock + atomic write).
   **`read_tome` (0.14.101, `src/tomes/tome-reader.js`)** is the reading half:
   keyword activation is the only other way an entry reaches the Familiar, and a
   quiet moment (noticing) has no conversation to wake one, so notes it filed

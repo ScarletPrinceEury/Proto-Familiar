@@ -1375,6 +1375,10 @@ const _toolDeps = {
   listTomes: null,
   // Every tome, parsed (backs read_tome).
   readTomes: null,
+  // Change / take out one tome entry, logged for my human's Restore first
+  // (tome-edits.js; backs edit_tome_entry / delete_tome_entry).
+  editTomeEntry: null,
+  deleteTomeEntry: null,
   // Notes I leave for Claude Code (claude-code-mailbox.js; backs message_claude_code).
   leaveNoteForClaudeCode: null,
   // Where a relay the tripwire stopped waits for my human (held-relays.js).
@@ -1435,7 +1439,7 @@ async function holdRelayForWard({ trip, targetName, delivery, message, privateLi
   return `Didn't send it yet. ${describeShapeHits(trip.hits)}. I can send it without that bit, or {{user}} can okay it as it is — I've asked them.`;
 }
 
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, readTomes, leaveNoteForClaudeCode, holdRelay: holdRelayDep, readPrivateList } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes, readTomes, leaveNoteForClaudeCode, holdRelay: holdRelayDep, readPrivateList, editTomeEntry, deleteTomeEntry } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof holdRelayDep === 'function')        _toolDeps.holdRelay           = holdRelayDep;
   if (typeof readPrivateList === 'function')     _toolDeps.readPrivateList     = readPrivateList;
@@ -1444,6 +1448,8 @@ export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, u
   if (typeof createNamedTome === 'function')     _toolDeps.createNamedTome     = createNamedTome;
   if (typeof listTomes === 'function')           _toolDeps.listTomes           = listTomes;
   if (typeof readTomes === 'function')           _toolDeps.readTomes           = readTomes;
+  if (typeof editTomeEntry === 'function')       _toolDeps.editTomeEntry       = editTomeEntry;
+  if (typeof deleteTomeEntry === 'function')     _toolDeps.deleteTomeEntry     = deleteTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
   if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
@@ -1509,7 +1515,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'read_tome',
-      description: 'I open one of my tomes and read what\'s in it, without waiting for a keyword to bring an entry up. With just a tome name I get its entries, newest first, each with a short id. With an entry id (or its title) I get that entry in full; a long one comes in parts and the result says where the next part starts. With query I search inside the tome, or across all my tomes if I leave the tome out. This is how I get back to drafts, notes and lore I filed myself, in a quiet moment too. Only when it\'s just {{user}} and me.',
+      description: 'I open one of my tomes and read what\'s in it, without waiting for a keyword to bring an entry up. With just a tome name I get its entries, newest first, each with a short id. With an entry id (or its title) I get that entry in full; a long one comes in parts and the result says where the next part starts. With query I search inside the tome, or across all my tomes if I leave the tome out. This is how I get back to drafts, notes and lore I filed myself, in a quiet moment too. If an entry turns out wrong, I fix it with edit_tome_entry or take it out with delete_tome_entry. Only when it\'s just {{user}} and me.',
       parameters: {
         type: 'object',
         properties: {
@@ -1520,6 +1526,39 @@ export const BUILTIN_TOOLS = [
           from:  { type: 'number', description: 'OPTIONAL — where to carry on in a long entry, the number the previous part gave me.' },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_tome_entry',
+      description: 'I fix one of my tome entries: new text, a new title, or new keywords, instead of adding a correction underneath. I name the tome and the entry the way read_tome shows them. The old version is kept, so {{user}} can put it back from the Tomes window. Not the app\'s manual, that one rewrites itself. Only when it\'s just {{user}} and me.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tome:     { type: 'string', description: 'The tome\'s name, as list_tomes shows it.' },
+          entry:    { type: 'string', description: 'The entry\'s id from read_tome (e.g. "draft-section-4-k2"), or its title.' },
+          content:  { type: 'string', description: 'OPTIONAL — the whole new text of the entry (it replaces the old text).' },
+          title:    { type: 'string', description: 'OPTIONAL — a new title.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'OPTIONAL — the new keywords that bring this entry up (they replace the old ones).' },
+        },
+        required: ['tome', 'entry'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_tome_entry',
+      description: 'I take one of my tome entries out when it\'s wrong, done with, or a duplicate. I name it the way read_tome shows it. A copy is kept, so {{user}} can put it back from the Tomes window. Not the app\'s manual. Only when it\'s just {{user}} and me.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tome:  { type: 'string', description: 'The tome\'s name, as list_tomes shows it.' },
+          entry: { type: 'string', description: 'The entry\'s id from read_tome, or its title.' },
+        },
+        required: ['tome', 'entry'],
       },
     },
   },
@@ -3549,6 +3588,33 @@ export const TOOL_EXECUTORS = {
       const settings = readSettingsSync();
       return readTomeText(tomes, { tome, entry, query, page, from }, { resolve: (s) => resolveTomeMacros(s, settings) });
     } catch (err) { return `I couldn't read my tomes: ${err.message}.`; }
+  },
+
+  edit_tome_entry: async ({ tome, entry, content, title, keywords } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) return 'Someone else is here, so I\'ll change my tomes once it\'s just {{user}} and me.';
+    if (!_toolDeps.editTomeEntry) return 'I can\'t reach my tomes right now.';
+    if (!String(tome ?? '').trim() || !String(entry ?? '').trim()) return 'I need the tome and the entry, the way read_tome shows them.';
+    try {
+      let registry = null;
+      try { registry = _toolDeps.getVillageRegistry ? await _toolDeps.getVillageRegistry() : null; } catch { /* names from settings only */ }
+      const people = peopleNames({ settings: readSettingsSync(), registry });
+      const r = await _toolDeps.editTomeEntry({ tome: String(tome).trim(), entry: String(entry).trim(), content, title, keywords, people });
+      if (!r.ok) return r.text ?? 'Nothing changed.';
+      const what = r.changed.map(c => ({ content: 'text', comment: 'title', keys: 'keywords' }[c])).join(', ');
+      const held = r.heldBy ? ` It names someone now, so it's held at sensitive in shared rooms.` : '';
+      return okResult(`Changed the ${what} of "${r.record.after.comment}" in ${r.record.tomeName}.${held} The old version is kept; {{user}} can put it back from the Tomes window.`, { id: r.alias });
+    } catch (err) { return `Nothing changed: ${err.message}.`; }
+  },
+
+  delete_tome_entry: async ({ tome, entry } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) return 'Someone else is here, so I\'ll change my tomes once it\'s just {{user}} and me.';
+    if (!_toolDeps.deleteTomeEntry) return 'I can\'t reach my tomes right now.';
+    if (!String(tome ?? '').trim() || !String(entry ?? '').trim()) return 'I need the tome and the entry, the way read_tome shows them.';
+    try {
+      const r = await _toolDeps.deleteTomeEntry({ tome: String(tome).trim(), entry: String(entry).trim() });
+      if (!r.ok) return r.text ?? 'Nothing deleted.';
+      return okResult(`Took "${r.record.before.comment}" out of ${r.record.tomeName}. A copy is kept; {{user}} can put it back from the Tomes window.`);
+    } catch (err) { return `Nothing deleted: ${err.message}.`; }
   },
 
   create_tome: async ({ name, description } = {}) => {

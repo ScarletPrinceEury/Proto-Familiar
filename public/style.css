@@ -4342,3 +4342,9 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .held-relay-actions .field-hint { margin: 0; }
 /* Spellings the keep-between-us list also catches. */
 .private-variants { margin: 6px 0 0; padding-left: 18px; }
+
+/* My Familiar's recent tome edits, with Restore (tome-edits.js). */
+.tome-edits { border-bottom: 1px solid var(--border, #333); padding-top: 8px; padding-bottom: 8px; }
+.tome-edits summary { cursor: pointer; }
+.tome-edits-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.tome-edits-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
