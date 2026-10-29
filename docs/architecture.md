@@ -2426,6 +2426,17 @@ an edit. Out of reach: anything that happens after the request leaves the app
 (provider-side context trimming); the Familiar's own reading of its stamps
 covers that.
 
+**Retired limits (0.14.117, `src/self/retired-limits.js`).** `RETIRED_LIMITS`
+lists limits the app has fixed that a Familiar may keep a self-made rule about
+(id, version, one plain line). `enrich()` adds the ones not yet told as one
+`[App note (just this once): …]` to the dynamic block, on a live turn in the
+ward's own room only (`liveTurn && !staticOnly && !gated`), and marks them told
+in `tomes/.retired-limits-seen.json`. A fresh install (no session log older than
+a day) starts with every entry marked told. Under `node --test` the store is a
+temp file. The app never edits the Familiar's rules; letting one go is the
+Familiar's call. A fix that retires such a limit adds its entry in the same
+commit.
+
 The sibling `[DISCLOSURE NOTICE]` block (ward-disclosure Phase B) works the same
 way for the content-gating re-tag pass: when `content-regate.js` opens one of the
 ward's own formerly-private facts to be governed by content rules, thalamus

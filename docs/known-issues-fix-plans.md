@@ -723,6 +723,16 @@ the people list (my human, villagers), the same list `save_to_tome` uses.
   was waiting for. Low priority: it goes after A1–A4, which retire the rules
   themselves.
 
+  **Built (0.14.117).** All notes not yet told go out together in one app note
+  (rather than one per turn), in the dynamic block on a live turn in the ward's
+  own room only. A fresh install (no conversation older than a day) marks them
+  all told on first run. Under `node --test` the store is a temp file, since
+  tests run `enrich()` as a live turn and a test run on a live install would
+  otherwise use the notes up. Found on the way: `.gitignore` listed `tomes/`
+  runtime files one by one and missed the new ones (`.held-relays.json`,
+  `.tome-edits.jsonl`), which hold private text; a `tomes/.*` catch-all fixes
+  that.
+
 ---
 
 ## D. Intentions fire and get followed through

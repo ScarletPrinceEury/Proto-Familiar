@@ -1794,6 +1794,7 @@ import { careFactsBlockForTurn, CARE_FACTS_FETCH_LIMIT } from './src/safety/care
 import { formatCleanupProposalsBlock } from './src/memory/cleanup-proposals.js';
 import { checkCanaries, formatCanaryBlock, recordCanaryStates } from './src/memory/identity-canaries.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
+import { takeRetiredLimitsNote } from './src/self/retired-limits.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -2845,6 +2846,15 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Retired limits (known-issues A5) ───────────────────────────────────
+    // Limits the app has fixed since I may have made a rule about them, told
+    // once as a plain app note on my next live turn with my human. Rides this
+    // turn's context; never a gated room, never a background/static call.
+    let retiredLimitsBlock = '';
+    if (liveTurn && !staticOnly && !gated) {
+      retiredLimitsBlock = await takeRetiredLimitsNote();
+    }
+
     // Organ-status readout: which context organs delivered this turn. Gated by
     // organStatusBlock ('degraded' default → shown only when one is down;
     // 'always'; 'off'). Ward-private, non-static turns only. Phylactery/Unruh
@@ -2897,6 +2907,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (cleanupBlock)           dynamicSections.push(cleanupBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);
+    if (retiredLimitsBlock)     dynamicSections.push(retiredLimitsBlock);
     if (careFactsBlock)         dynamicSections.push(careFactsBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);

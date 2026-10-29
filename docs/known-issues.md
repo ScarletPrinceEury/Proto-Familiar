@@ -170,10 +170,14 @@ below lets the Familiar drop a rule instead of carrying it:
   starting `snake_case({`), the next turn's line says "My reply had X written
   out as text, which doesn't run it.", and the turn log records
   `textToolCalls` per round.
-- **Rules outlive their cause.** Some rules work around limits that are gone
-  (webp images were rejected; custom identity files "weren't injected"). A
-  self-rule doesn't record what it works around, so nothing tells the Familiar
-  when it can drop it.
+- ~~**Rules outlive their cause.**~~ Fixed 0.14.117: `src/self/retired-limits.js`
+  keeps a list of limits the app has fixed, and shows each one once as a plain
+  app note on the Familiar's next live turn with the ward ("the app handles
+  these now; if I keep a rule only to work around one of them, I can let it
+  go"). The Familiar decides; the app never touches its rules. A fresh install
+  starts with them all marked told. The examples here (webp images, custom
+  identity files) aren't in the list: nothing in the code confirms when or
+  whether they were fixed, and an entry has to be true.
 
 Fixing these is the plan before any "rules I keep" surface: the app should
 carry what it can, and the Familiar's own rules should be the ones that are
