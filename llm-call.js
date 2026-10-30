@@ -82,7 +82,36 @@ export function deadlineSignal({ signal, timeoutMs } = {}) {
 export function extractContent(message = {}) {
   const content = message?.content ?? '';
   if (content) return content;
+  return reasoningOf(message);
+}
+
+/**
+ * A completion message's chain of thought, whichever field the provider puts
+ * it in: z.ai and DeepSeek's own API use `reasoning_content`, NanoGPT uses
+ * `reasoning` (probed 2026-10-30). '' when there is none.
+ */
+export function reasoningOf(message = {}) {
   return message?.reasoning_content || message?.reasoning || '';
+}
+
+/**
+ * The assistant message for a tool round, as it goes back to the model on the
+ * next round. A thinking model's reasoning rides along as `reasoning_content`:
+ * DeepSeek's docs require it on every later request that carries tools (its own
+ * API returns 400 without it), and NanoGPT and z.ai both take it into the
+ * context under that name (probed: `reasoning` is ignored). Dropping it left the
+ * model reading its own tool calls without the thinking behind them, so it
+ * would plan, read, then stop with the plan written out and nothing saved.
+ * Only reasoning the provider actually sent is passed back, so a provider that
+ * sends none gets the same message shape as before.
+ */
+export function assistantToolTurn({ content = null, toolCalls, reasoning = '' } = {}) {
+  return {
+    role: 'assistant',
+    content: content || null,
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    ...(reasoning ? { reasoning_content: reasoning } : {}),
+  };
 }
 
 /**
@@ -103,7 +132,7 @@ export function extractTurnReply(choice = {}) {
   const content = message?.content ?? '';
   if (content && content.trim()) return content;
   if (choice?.finish_reason === 'length') return '';
-  return message?.reasoning_content || message?.reasoning || '';
+  return reasoningOf(message);
 }
 
 /**

@@ -60,7 +60,7 @@ import { checkCanaries, readCanaryEvents } from './src/memory/identity-canaries.
 // the threat tier, bounded so mood alone never reaches a crisis tier.
 import { applyMoodThreat } from './src/tracker/mood-threat.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
-import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages, extractTurnReply } from './llm-call.js';
+import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages, extractTurnReply, assistantToolTurn } from './llm-call.js';
 import { hydrateNameFieldCache, nameFieldEnabledFor, recordNameFieldResult, stampNamesOnTurns } from './name-field.js';
 import { fetchReadable } from './src/search/websearch.js';
 import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } from './src/browser/page-watch-loop.js';
@@ -1434,7 +1434,9 @@ async function chatTurn(req, res, rec, priorTurn) {
               // Accumulate reasoning separately — NOT forwarded to the display
               // (live-rendering it is the CoT-dump bug); folded in only if the
               // turn ends with empty content and wasn't budget-truncated.
-              if (typeof delta?.reasoning_content === 'string') fullReasoning += delta.reasoning_content;
+              // z.ai and DeepSeek send `reasoning_content`; NanoGPT sends `reasoning`.
+              const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning;
+              if (typeof reasoningDelta === 'string') fullReasoning += reasoningDelta;
               for (const tc of (delta?.tool_calls ?? [])) {
                 const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
                 if (tc.id)                  acc.id                 += tc.id;
@@ -1490,7 +1492,7 @@ async function chatTurn(req, res, rec, priorTurn) {
         res.write(`data: ${JSON.stringify({ _claimCheck: { phrases: claimed, ...(stored ? { messages: stored } : {}) } })}\n\n`);
         currentMsgs = [
           ...currentMsgs,
-          { role: 'assistant', content: fullContent },
+          assistantToolTurn({ content: fullContent, reasoning: fullReasoning }),
           { role: 'system', content: note },
         ];
         continue;
@@ -1529,7 +1531,7 @@ async function chatTurn(req, res, rec, priorTurn) {
         }
         currentMsgs = [
           ...currentMsgs,
-          { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
+          assistantToolTurn({ content: fullContent, toolCalls, reasoning: fullReasoning }),
           ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
           // view_image (§10): place any images I asked to see again before my
           // eyes on the next round (same drain helper as the non-streaming loop).
