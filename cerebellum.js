@@ -40,7 +40,7 @@ import { SETTINGS_FILE, readSettingsSync } from './settings-store.js';
 import { writeSettings } from './settings-write.js';
 
 import { resolveProviderUrl, connectionReady } from './providers.js';
-import { callProviderChat, familiarDeliberationMessages } from './llm-call.js';
+import { callProviderChat, familiarDeliberationMessages, reasoningOf, assistantToolTurn } from './llm-call.js';
 import { listOwnFiles, readOwnFile, searchSessions, isSessionLogPath, readSessionLog } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './src/gcal/gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './src/schedule/schedule-availability.js';
@@ -6462,13 +6462,13 @@ export async function runToolCallLoop({
       toolsOffered: roundTools,
     });
     report({ round, finishReason: choice?.finish_reason, toolCalls: message?.tool_calls,
-      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: message?.reasoning_content, textCalls, claimed });
+      ran: isToolTurn && round < maxRounds, content: message?.content, reasoning: reasoningOf(message), textCalls, claimed });
     if (claimed && !claimRetried && round < maxRounds && !signal?.aborted) {
       claimRetried = true;
       console.log(`[tools] reply claimed an action with no tool run (${claimed.join(' | ')}) — one more round`);
       currentMsgs = [
         ...currentMsgs,
-        { role: 'assistant', content: message.content },
+        assistantToolTurn({ content: message.content, reasoning: reasoningOf(message) }),
         { role: 'system', content: claimCheckNote(claimed) },
       ];
       continue;
@@ -6494,7 +6494,7 @@ export async function runToolCallLoop({
 
     currentMsgs = [
       ...currentMsgs,
-      { role: 'assistant', content: message.content || null, tool_calls: toolCalls },
+      assistantToolTurn({ content: message.content, toolCalls, reasoning: reasoningOf(message) }),
       ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
       // view_image (§10): place any images the Familiar asked to see again
       // before its eyes on the next round (a mid-loop context grow).
@@ -6525,7 +6525,7 @@ export async function runToolCallLoop({
       let textCalls = settleRoundText(data, { closing: true, round: 'closing' });
       let c = data?.choices?.[0];
       report({ round: 'closing', finishReason: c?.finish_reason, toolCalls: c?.message?.tool_calls, ran: false,
-        content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true, textCalls });
+        content: c?.message?.content, reasoning: reasoningOf(c?.message), closing: true, textCalls });
       console.log('[tools] round cap reached with tools still pending — forced a closing text round');
       // The closing reply was nothing but a written-out call: one more try, in words.
       if (textCalls.stripped && !String(c?.message?.content ?? '').trim()) {
@@ -6534,7 +6534,7 @@ export async function runToolCallLoop({
         textCalls = settleRoundText(data, { closing: true, round: 'closing-retry' });
         c = data?.choices?.[0];
         report({ round: 'closing-retry', finishReason: c?.finish_reason, toolCalls: c?.message?.tool_calls, ran: false,
-          content: c?.message?.content, reasoning: c?.message?.reasoning_content, closing: true, textCalls });
+          content: c?.message?.content, reasoning: reasoningOf(c?.message), closing: true, textCalls });
         console.log('[tools] closing reply was only a call written as text — asked once more for words');
       }
     } catch (err) {
