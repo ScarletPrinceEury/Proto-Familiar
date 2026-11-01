@@ -59,6 +59,54 @@ re-derive what's actually being asked.**
   off-switch (`PROTO_FAMILIAR_AUDIO_TAGGING_DISABLED`) and the classifier's
   human-vocal denylist are what keep the shipped feature short of this.
 
+## Setup
+
+- **One-key connection presets for the aggregators.** Setting up models is
+  finicky. You pick a provider and a model, tick vision and video, set a
+  reasoning effort, add fallbacks, and then route six background features
+  (pondering, memorization, triage, reach-outs, tome graduation, vision) in the
+  Connections modal. For someone with executive dysfunction, that wall is
+  where they give up. Wanted: at least one ready-made spread per aggregator
+  (NanoGPT, OpenRouter, Featherless, Chutes). You paste one API key, click
+  once, and get a working set of connections with the features already routed.
+
+  *Shape:* a shipped catalog, one entry per aggregator, listing models with
+  their capabilities: vision/video, thinking (and whether it can be turned
+  off), a sensible `reasoningEffort`, how reliable its tool calls are, context
+  size, and a rough cost tier. Each entry also has a recommended spread: a
+  primary chat model, one or two fallbacks, a cheaper model for the background
+  loops, and a vision describer if chat can't see. Applying a preset creates
+  those connections and fills `featureConnections`. It goes through
+  `writeSettings`, and it never overwrites a connection my human made by hand.
+  Preset connections carry a preset id, so a second apply updates them instead
+  of piling up duplicates. Every choice stays visible and editable afterwards
+  (UI rule: options a user can pick are shown, not hidden).
+
+  *Already there:* NanoGPT and OpenRouter are built-in providers. Featherless
+  and Chutes aren't (both are OpenAI-compatible, so today they only work
+  through `custom`), so they need `providers.js` entries first. Connections
+  already carry `visionCapable`, `videoCapable` and `reasoningEffort`, and
+  `connectionForFeature` already does the routing. So a preset is mostly data
+  plus one apply step, not new plumbing.
+
+  *Open questions:*
+  - **Model ids go stale.** `PROVIDER_MODELS` in `public/app.js` already lists
+    retired models. Ship a static catalog, or check it at apply time against
+    the aggregator's own `/models` list on that key, swapping or dropping
+    missing ids and saying so? Some aggregators also report capabilities
+    there, which could fill the catalog in code.
+  - **Subscription vs per-token pricing.** Some of these sell flat-rate plans
+    limited to certain models. The right spread depends on which plan the key
+    is on. Ask, or detect it?
+  - **Triage routing is a safety path.** With no assignment it runs on the
+    primary. Pointing it elsewhere is a ward-signed exception (see
+    `connectionForFeature`). A preset should leave triage on primary unless
+    the ward signs off on something else.
+  - **A test call before saving.** One tiny request per new connection, so a
+    bad key or a missing model shows up at setup, not mid-chat.
+  - When it ships: a Manual tome entry, and `docs/architecture.md` if the
+    catalog becomes a module.
+
 ## Memory entries
 
 - **Time-code on memory entries.** Memory entries (Tome entries written
