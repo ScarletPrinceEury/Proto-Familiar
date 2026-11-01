@@ -138,3 +138,7 @@ scoping, provenance labels, code-gated actions) rather than on text sanitization
 - [Memory integrity: the memorization-to-Phylactery gate](memory-integrity) — the separate,
   later fix for a fact being poisoned during extraction rather than during a read this page's
   guard would have covered.
+- [Outgoing tripwire: catching private material on the way out](outgoing-tripwire) — the
+  outbound counterpart to this page's inbound guard: a scan of text leaving the ward's own room
+  for the ward's own private material, rather than a scan of incoming text for an adversarial
+  instruction.

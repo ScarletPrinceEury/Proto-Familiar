@@ -1,6 +1,6 @@
 ---
 title: Noticing
-topics: [architecture, autonomous-loops]
+topics: [architecture, autonomous-loops, resilience]
 sources:
   - id: noticing-js
     type: file
@@ -23,6 +23,21 @@ sources:
   - id: memory-module
     type: file
     path: phylactery/src/phylactery/memory.py
+  - id: noticing-held-js
+    type: file
+    path: src/safety/noticing-held.js
+  - id: connection-chain-js
+    type: file
+    path: src/util/connection-chain.js
+  - id: llm-call-js
+    type: file
+    path: llm-call.js
+  - id: retired-limits-js
+    type: file
+    path: src/self/retired-limits.js
+  - id: noticing-reliability-test
+    type: file
+    path: tests/noticing-reliability.test.mjs
 ---
 
 # Noticing
@@ -176,6 +191,20 @@ Before this fix, the self-set cool-down blocked *every* tick, including the due-
 
 Quiet hours were never the blocker here: `isQuietHours()` is passed through to `deliberate` but only gates the warm-knock (`reach_out_to_ward`) — the noticing turn itself still runs and can still read, resolve, and record during quiet hours [@noticing-js].
 
+## Reliability: a failed look isn't a look (0.14.121)
+
+A two-week read of `logs/noticing-events.jsonl` found about one in five noticing deliberations failing outright, and about a third of due-intention looks specifically — provider timeouts past 180s, `fetch failed`, weekly/5-hour usage limits, overloaded 429s, a few 5xx, clustered on bad provider days rather than on the prompt. The loop had a bug that turned one failed look into a long miss, through a different door than the 0.14.99 due-wake fix above: `noticing-loop.js` added a due intention to `_seenDue` before the tick ran, and again from the tick's own conditions, regardless of whether the look actually ran. A failed tick sets no new cool-down, so a due intention that woke the loop during a cool-down and whose look then failed was already marked seen — nothing looked again until the cool-down ended, up to the full six-hour ceiling.
+
+**Only a look that ran marks a due intention seen.** A `deliberation_failed` tick adds nothing to `_seenDue` [@noticing-loop-js]. The one exception: a fresh due intention whose code-evaluated condition didn't pass was settled by code, not the model, so it counts as seen either way — otherwise it would re-wake every base tick.
+
+**Retries, then a hold.** `NOTICING_RETRY_OFFSETS_MS` schedules a retry 5, 15, and 30 minutes after a due intention's first failed look; `settleDueLooks` (pure) computes the retry/hold transition and `retryIsDue` lets an owed retry run even inside a self-set cool-down [@noticing-loop-js]. A one-off timer, `armRetry`, wakes the loop for the retry; if a tick is already running when it fires, it re-arms once rather than firing twice [@noticing-loop-js]. Outside a cool-down, the base tick instead waits for the booked retry time (`_nextAllowedTickTs = retryAt`) so the ordinary 20-minute base tick can't spend a retry early. The first two retries land sooner than the old base tick would have anyway, so this never makes a look later than before the fix. When every connection in the fallback chain (below) reports a usage limit, retrying can't help — the intention is held at once instead of waiting out the retry ladder, since only a connection that merely timed out might still answer later.
+
+**Held for the next chat.** Once retries are exhausted, the intention goes into `tomes/.noticing-held.json` via `src/safety/noticing-held.js` [@noticing-held-js]. The next live ward turn's `enrich()` carries one line, once: "[Came due while the model wasn't answering, so I haven't acted on it yet: `<what>` (due `<time>`, id `<id>`).]" — the id rides along so the Familiar can act on it without a lookup, and a later look that does run takes the note back out (`releaseHeld`) [@noticing-held-js]. This is the same "app reports its own gap as a plain fact" register [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) names elsewhere, applied to a provider outage rather than a tool-budget cap. `retired-limits.js` lists this fix (`noticing-retries`, 0.14.121) so a Familiar carrying an old self-made rule about missed intentions is told, once, that the app now covers it [@retired-limits-js].
+
+**Fallback connections, server-side.** `src/util/connection-chain.js`'s `chainCaller` is the first server-side consumer of a saved connection's `fallbackConnectionIds` — previously only the web chat walked a fallback chain, and only in the browser. It moves to the next connection in the chain only on a failure another connection could plausibly get past (`fallbackWorthy`: a usage limit, 429, 5xx, timeout, or network error — never a 400/401/403-other, and never once the deliberation's own deadline has already aborted the call) [@connection-chain-js]. The chain is sticky (a later round starts at whichever connection last answered) and scoped per provider call rather than per turn, so a tool round that already ran is never re-run — unlike the web chat's own fallback, which re-runs a whole turn on the next connection and therefore only works before any tool call has happened. `isUsageLimitError`/`providerErrorStatus` in `llm-call.js` are the shared classifiers both `chainCaller` and Discord's own failure-note rendering now use, matched against real provider wording (z.ai's weekly/5-hour exhaustion, NanoGPT's weekly token limit, a pay-as-you-go 403) rather than a generic "rate limit" or "overloaded" string [@llm-call-js]. The feature is on by default (`noticingFallbacksEnabled`, ward-signed, since noticing is a sign-off path per the lead above).
+
+`tests/noticing-reliability.test.mjs` exercises the pure retry/hold transitions and the real loop with real timers end to end: a cool-down retry followed by a hold, a retry that gets through, an immediate hold on a usage limit, and the base tick correctly waiting for a booked retry time — plus the real tool loop against a local server returning a genuine weekly-limit body, falling back through the chain, and `enrich()` carrying the held note exactly once [@noticing-reliability-test].
+
 ## Related
 
 - [Tool surfacing](tool-surfacing) — the live-turn module-surfacing and `request_tools` growth mechanism `composeNoticingTools` now reuses, and the module/trigger map it reads.
@@ -191,3 +220,6 @@ Quiet hours were never the blocker here: `isQuietHours()` is passed through to `
 - [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the decision behind the re-resolution sweep described above.
 - [Session Memory Extraction](session-memory-extraction) — where a fact first gets filed with fuzzy attribution.
 - [Slice provenance is captured at the read, never reconstructed on recall](../decisions/slice-provenance-captured-at-read) — the fix that stamps noticing's recent-conversation slice with who was actually in the room.
+- [Providers and connection readiness](providers) — the saved-connection model `connection-chain.js`'s fallback walk builds on, and where the classifiers it shares with Discord's failure notes live.
+- [Stall resilience](stall-resilience) — the narrower 180-second/600-second provider and whole-deliberation bounds noticing's reliability fixes above build retries and holds on top of.
+- [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the voice rule the held-intention note and `retired-limits.js` both follow when reporting a provider outage back to the Familiar.

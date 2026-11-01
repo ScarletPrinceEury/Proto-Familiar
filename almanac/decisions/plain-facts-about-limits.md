@@ -17,6 +17,9 @@ sources:
   - id: server-js
     type: file
     path: server.js
+  - id: retired-limits-js
+    type: file
+    path: src/self/retired-limits.js
 ---
 
 # Plain Facts About Limits, Never a Verdict
@@ -105,6 +108,31 @@ Going forward, any new place in the codebase that tells the Familiar about a lim
 action, or a harness gap should default to this same plain-fact register, and should prefer
 fixing the gap in code over adding a new self-referential rule for the Familiar to carry.
 
+## Retiring a rule once its cause is fixed (A5, 0.14.117)
+
+The decision above changes the *voice* of a limit report. It does not, on its own, do anything
+about the roughly eighty self-made rules the original identity review already found — most of
+which exist to compensate for a harness gap, not a judgment call, and most of which the app has no
+way to tell the Familiar is now unnecessary once that gap closes. `RETIRED_LIMITS` in
+`src/self/retired-limits.js` is the mechanism that closes this specific follow-on problem: a short,
+append-only list of limits the app has since fixed, each a stable id, the version that fixed it,
+and one plain sentence describing what the app does now [@retired-limits-js]. `takeRetiredLimitsNote`
+shows each entry exactly once, as a plain app note riding the next live ward turn's own context (no
+new request), and leaves the decision of whether to drop the corresponding self-made rule entirely
+to the Familiar — the app never edits a Familiar's own rules, it only reports that its cause is
+gone [@retired-limits-js]. A fresh install, with no conversation older than a day, marks every
+existing entry seen at once, since a fresh install never accumulated a rule about any of them.
+
+The convention this establishes: when a commit fixes a limit a Familiar might plausibly have
+written a standing rule about, it adds a `RETIRED_LIMITS` entry in the *same* commit, in the same
+plain-fact voice this decision already requires. As of this writing the list records the schedule-
+provenance fix, the model-signal block, text-tool-call detection, [pantry use-up](../architecture/trackers),
+honest identity-file reads and edits, write results that say what they did, [recall excerpts that
+show a real ending](../reference/engineering-conventions), [tome entry edits](../architecture/tomes-and-lore),
+claimed-but-unrun actions being named back to the Familiar, and the
+[noticing reliability](../architecture/noticing) retry/fallback/hold mechanism — each one a
+previously-open gap this same identity-review thread found [@retired-limits-js].
+
 ## Related
 
 - [Armature](../concepts/armature) — the opposite-direction pull (passive compliance) that this
@@ -117,3 +145,7 @@ fixing the gap in code over adding a new self-referential rule for the Familiar 
 - [Proactivity over caution](proactivity-over-caution) — a different recorded prompt-engineering
   lesson from the same CLAUDE.md catalog, about biasing a decision prompt rather than about the
   voice of a failure report.
+- [Trackers](../architecture/trackers) — the pantry use-up fix that is one of the retired limits.
+- [Tomes and keyword lore](../architecture/tomes-and-lore) — the tome-edit fix that is another.
+- [Noticing](../architecture/noticing) — the reliability/retry/fallback fix that is the most
+  recent retired limit as of this writing.

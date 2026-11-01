@@ -125,6 +125,12 @@ sources:
   - id: dsml-tool-calls-test
     type: file
     path: tests/dsml-tool-calls.test.mjs
+  - id: excerpt-py
+    type: file
+    path: phylactery/src/phylactery/excerpt.py
+  - id: excerpt-cases-fixture
+    type: file
+    path: tests/fixtures/excerpt-cases.json
 ---
 
 # Engineering Conventions
@@ -450,7 +456,11 @@ one end would have left the other blind spot open. See
 [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) for the
 0.14.83-alpha pass that reworded `lastTurnRecord`'s output (and see the section below, "A gap is
 reported as a plain fact, never a verdict," for its current wording); this section is about why
-the mechanism exists at all, not its voice.
+the mechanism exists at all, not its voice. See [Turn record](../architecture/turn-record) for the
+later (0.14.106) fix that made each surface write a turn's rounds and reply into its session log
+as they happen rather than only once the whole turn finishes — the two mechanisms read the same
+stored history from opposite ends, but turn-record's incremental write is what stops a cut-off
+turn's tool rounds from going unrecorded at all on some surfaces.
 
 **Generalization:** this is the same family as the `stripLlmTimestamps` rule in
 [Exact values are code's job](../decisions/exact-values-in-code) — clean contaminated content
@@ -682,13 +692,22 @@ with its real ending), legacy entries stored before the fix (which still end in 
 with the marker appended until they age out of retention), the noticing/reach-out formatter, and
 triage's newest-whole/older-capped split [@excerpt-test].
 
-**The same clipping shape is still open on a surface this fix did not reach.** Phylactery's
-`recall` tool builds its result excerpts as a bare `content[:300]` in four places in `memory.py`,
-with no cut marker at all [@memory-module]. A ward-facing identity review hit exactly the
-predicted failure: the Familiar read a cut-off recall as "this fact isn't saved yet," saved a
-near-duplicate, then found the full text with `read_memory_by_id` and deleted its own duplicate.
-Phylactery needs the same start-and-real-end excerpting `src/util/excerpt.js` already gives the
-Node side; until then, treat any `memory.py` excerpt as unmarked and possibly cut mid-word.
+**The same clipping shape was later closed on the one surface this fix did not originally reach
+(A3, 0.14.114).** Phylactery's `recall` tool built its result excerpts as a bare `content[:300]`
+in four places in `memory.py`, with no cut marker at all [@memory-module]. A ward-facing identity
+review hit exactly the predicted failure: the Familiar read a cut-off recall as "this fact isn't
+saved yet," saved a near-duplicate, then found the full text with `read_memory_by_id` and deleted
+its own duplicate. `phylactery/src/phylactery/excerpt.py`'s `excerpt`/`excerpt_fields` now mirror
+`src/util/excerpt.js` on the Python side, called from every `content[:300]` site `memory.py` used
+to own directly [@excerpt-py] [@memory-module]. The two implementations are pinned against drift
+by one shared fixture, `tests/fixtures/excerpt-cases.json`, run by both the JS and Python test
+suites [@excerpt-cases-fixture]. The fixture caught a real cross-language difference during the
+port: Python's `$` in a regex also matches just before a trailing newline, where JavaScript's `$`
+only matches at the true end of the string, so a cut landing on a newline picked a different word
+boundary on each side; the Python word-boundary regex uses `\Z` instead of `$` to match
+JavaScript's behavior exactly [@excerpt-py]. A caller now also learns from `excerpt_fields`
+whether a result was actually truncated (`truncated: True` plus the real `chars` count) rather
+than having to infer it from length alone [@excerpt-py].
 
 ## Safety-critical sign-off
 
@@ -938,18 +957,23 @@ would otherwise create an import cycle) [@settings-store-js]. The second audit f
 extraction reached thalamus and its downstream callers, but not every direct reader: as of this
 writing, `contact-baselines.js` and `wait-streak.js` each still define their own local
 `SETTINGS_FILE` constant and read the file independently rather than importing the shared reader
-[@contact-baselines-js] [@wait-streak-js]. On the write side, `writeSettingsPatch` in
-`cerebellum.js` is the one function that performs the locked, atomic tmp-write-then-rename against
-`settings.json`, but `discord-gateway.js`'s ward-console settings path (`patchWardSettings`)
-re-implements the same lock-plus-atomic-rename sequence against its own local
-`WARD_SETTINGS_FILE` constant instead of calling it [@discord-gateway-js]. Neither duplication is
-a correctness bug on its own — both copies read and write the same file correctly — but every
-module that keeps its own `SETTINGS_FILE` constant or its own write sequence is a copy that can
-silently diverge from the canonical one the next time the write contract changes. This is the
-"no copy-paste of substantial logic" rule above, caught by audit rather than by the original
-build: the fix proposed is to make `settings-store.js` the single home for the path, the read, and
-the write, with every remaining direct reader and the Discord write path importing it rather than
-re-declaring it.
+[@contact-baselines-js] [@wait-streak-js]. Neither duplication is a correctness bug on its own —
+both copies read the same file correctly — but every module that keeps its own `SETTINGS_FILE`
+constant is a copy that can silently diverge from the canonical one the next time the read
+contract changes. This half of the finding is still open as of this writing; the proposed fix is
+to make `settings-store.js` the single home for the path and the read, with every remaining
+direct reader importing it rather than re-declaring it.
+
+The write side of the same finding has since been closed by a different, larger fix:
+`discord-gateway.js`'s ward-console settings path (`patchWardSettings`) used to re-implement its
+own lock-plus-atomic-rename sequence against a local `WARD_SETTINGS_FILE` constant rather than
+calling the shared writer. [Settings sync](../architecture/settings-sync) replaced every settings
+writer — the web PUT route, the Familiar's own settings tools, the voice connection picker, and
+`patchWardSettings` itself — with one shared, locked `writeSettings` function in
+`settings-write.js`, built to fix a sharper, data-losing bug (a stale page's whole-settings PUT
+silently wiping saved connections) rather than only to deduplicate this audit finding
+[@discord-gateway-js]. See that page for the per-key revision scheme and conflict/rebase loop the
+fix added on top of the shared writer.
 
 The audit's other action was a routine dead-code and stale-documentation sweep rather than new
 findings: a batch of confirmed-zero-caller symbols (an unused re-exported constant, a shadowed

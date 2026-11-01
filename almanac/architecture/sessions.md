@@ -11,6 +11,9 @@ sources:
   - id: session-search-js
     type: file
     path: src/sessions/session-search.js
+  - id: turn-record-js
+    type: file
+    path: src/sessions/turn-record.js
 ---
 
 # Sessions
@@ -25,8 +28,11 @@ its audience tag is what decides who may later read it. This page is the map of
 the session cluster — start here, then follow the link that matches what you need
 to know.
 
-## The five pages
+## The six pages
 
+- **[Turn record](turn-record)** — how one turn (the ward's message, any tool rounds,
+  the reply) is written into the session log incrementally, as it happens, on every
+  surface, and the guarantee that a turn whose tools ran is never run twice [@turn-record-js].
 - **[Session lifecycle](session-lifecycle)** — when a session begins, how it ends,
   the one-active-session-per-surface rule, and the manual close-out for a session
   that never got an `endedAt` [@session-log-js].
@@ -45,10 +51,11 @@ to know.
 
 ## How they relate
 
-Lifecycle and unification decide **what a session is**; memorization and extraction
-decide **what durable knowledge it leaves behind**; search decides **how a past
-session is read again**. The throughline is the session *log* — every one of these
-reads or writes it, and the log's `audienceTag` + `location` (classified by
-`sessionLogKind`) is what keeps a villager's room, a villager's private DM, and the
-ward's own chat from ever being confused for one another. For where the knowledge a
-session produces ultimately lives, see [Memory and Knowledge](memory-and-knowledge).
+Turn record decides **how a session's log gets written in the first place**, one turn
+at a time, on every surface; lifecycle and unification decide **what a session is**;
+memorization and extraction decide **what durable knowledge it leaves behind**; search
+decides **how a past session is read again**. The throughline is the session *log* —
+every one of these reads or writes it, and the log's `audienceTag` + `location`
+(classified by `sessionLogKind`) is what keeps a villager's room, a villager's private
+DM, and the ward's own chat from ever being confused for one another. For where the
+knowledge a session produces ultimately lives, see [Memory and Knowledge](memory-and-knowledge).

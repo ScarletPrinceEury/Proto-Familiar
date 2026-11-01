@@ -65,6 +65,9 @@ sources:
     offset: 2405
     limit: 30
     note: "[Tracker cues] wiring — staleness-based ledger nudge, §5.3"
+  - id: retired-limits-js
+    type: file
+    path: src/self/retired-limits.js
 ---
 
 # Trackers
@@ -127,6 +130,29 @@ Inventory-type trackers (the pantry archetype) can track expiry dates for each i
 The query is a pure derivation: code owns the date math, the model never computes days-left. Unruh exposes this via `tracker_expiring` MCP call, wrapped in thalamus as `trackerExpiring()`. The server injects the result into ward-only enrich contexts as a `[Pantry — use first]` block via `buildEatFirstBlock` in `src/tracker/tracker-projections.js` — rendering the item names with their days-left (e.g., "milk (2d) · cheese (today) · yogurt (expired)") up to a cap of 4 items, with a "+N more" tail if the pantry has overflow [@tracker-projections].
 
 The lead window (3 days by default) is tunable via `EXPIRY_LEAD_DAYS` in the Python tracker layer. The projection is pure code: no LLM, no storage, no background loop — it rides the same context-building path every ward turn uses.
+
+## Pantry use-up: taking an item off, not just adding it (0.14.108)
+
+Inventory trackers could only add or set an item, never remove one, so food the ward had actually
+eaten stayed listed and the Familiar could keep offering food that was no longer there — a
+concrete problem for a ward managing eating, where the pantry read is meant to be trustworthy.
+`tracker_remove_item` (amount and unit are both optional — omit amount to take the whole item off
+at once) closes the gap. Unruh stores an `op` field per inventory entry (migration 0009, default
+`'set'` for entries written before the migration), and `current_items(conn, tracker_id)` replays
+every entry for a tracker in order — by timestamp, then by row id as a tiebreak — to derive what
+is actually on hand, rather than trusting any single entry to be the current state [@tracker-py].
+Only `'set'`-kind entries count toward the tracker's per-day entry cap (100), so a stream of
+small `tracker_remove_item` calls over a day cannot itself exhaust the cap the way a stream of
+`'set'` writes would [@tracker-py].
+
+Two surfaces write a removal: session memorization records a `used` observation straight from
+chat and takes the item off live, and a "Used up" button in the tracker UI (`POST
+/api/trackers/:id/items/use`) does the same thing a ward can do by hand — the usual
+console/UI-parity shape this codebase keeps for a capability with two authors. The pantry read
+itself now states how long ago each item was last noted, so "is this still accurate" has an
+answer without the ward having to re-derive it. `retired-limits.js` lists this fix
+(`pantry-use-up`, 0.14.108) so a Familiar still carrying an old rule about not trusting stale
+pantry listings is told, once, that the app now tracks removal [@retired-limits-js].
 
 ## Persistent projection nodes: pantry reminders and menses holds (T-C.3a, 0.14.11)
 
@@ -197,3 +223,4 @@ The Tracker tab in the Knowledge editor now presents three linked ward-facing UI
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general discipline T-C.3a's "never in the Familiar's toolset" posture extends.
 - [Engineering conventions](../reference/engineering-conventions) — the exact-values discipline and graceful-degradation rules that trackers follow.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the behavioral-change sign-off requirement mentioned in the ward-only access guarantee.
+- [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the voice rule `retired-limits.js` follows when telling the Familiar the pantry use-up gap is closed.

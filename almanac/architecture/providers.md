@@ -42,6 +42,9 @@ sources:
     type: commit
     ref: "5291688"
     note: "feat: local + custom OpenAI-compatible providers, key optional (0.11.91-alpha) — the commit that introduced providers.js's resolveProviderUrl/connectionReady/authHeader and threaded them through every LLM call site."
+  - id: connection-chain-js
+    type: file
+    path: src/util/connection-chain.js
 ---
 
 # Providers and Connection Readiness
@@ -157,6 +160,38 @@ specifically (`providerNeedsBaseUrl`), which `connectionReady` itself does not c
 URL-resolvability to the call site (see above). A future change to either side's readiness logic
 should preserve that difference rather than "fixing" it into parity.
 
+## Falling back across a chain of saved connections (0.14.121)
+
+A saved connection can name `fallbackConnectionIds`, an ordered list of other saved connections
+to try if the primary one fails. Before 0.14.121, the only code that ever walked that list was
+the web chat, and only in the browser — a server-side caller (a background loop, a Discord turn)
+that hit a dead or rate-limited connection had no fallback at all. `src/util/connection-chain.js`'s
+`chainCaller` is the first server-side consumer: it wraps a call so that a failure moves to the
+next connection in the chain, but only when the failure is one another connection could plausibly
+get past. `fallbackWorthy` admits a usage-limit error, a 429, a 5xx, a timeout, or a network
+error, and specifically excludes a 400/401/403-other (a bad request or bad key will fail
+identically on every connection in the chain) and excludes a failure caused by the caller's own
+deliberation deadline already having aborted the call [@connection-chain-js].
+
+The chain is **sticky** — a later round of the same deliberation starts at whichever connection
+last answered, rather than resetting to the primary every round — and it operates **per provider
+call**, not per turn, so a tool round that already ran against one connection is never re-run
+against the next [@connection-chain-js]. This is the opposite shape from the web chat's own
+fallback, which re-runs a whole turn on the next connection in the chain and therefore only works
+cleanly before any tool call has happened; `chainCaller`'s per-call scope is what makes it safe to
+use mid-turn, after tool rounds are already in flight. NanoGPT and z.ai both accept another
+model's prior tool rounds, including `reasoning_content`, when they appear in history, which is
+what makes switching providers mid-deliberation viable at all.
+
+`isUsageLimitError`/`providerErrorStatus` in `llm-call.js` are the shared classifiers
+`fallbackWorthy` and Discord's own `providerFailureNote` both read, matched against real provider
+wording (z.ai's "Weekly/Monthly Limit Exhausted", NanoGPT's "Weekly included input token limit
+exceeded", a pay-as-you-go 403) rather than a generic "rate limit" or "temporarily overloaded"
+string, which is not treated as a usage limit [@llm-call-js]. See [Noticing](noticing)'s
+reliability section for the first feature built on this chain — `noticingFallbacksEnabled`,
+on by default — including the hold-at-once rule for the case where every connection in the chain
+reports the same usage limit.
+
 ## Safety implication: triage can run on a keyless local model
 
 `cerebellum.decideTriageViaLLM` — the silence-triage deliberation that decides whether the
@@ -187,3 +222,5 @@ of the provider work [@readiness-commit].
 - [Engineering conventions](../reference/engineering-conventions) — RULE A (every LLM call site
   goes through `callProviderChat` or replicates its guarantees) and the safety-critical sign-off
   rule this page's triage change was flagged under.
+- [Noticing](noticing) — the reliability pass (0.14.121) that is `connection-chain.js`'s first
+  server-side caller, including the retry ladder and held-intention note built on top of it.
