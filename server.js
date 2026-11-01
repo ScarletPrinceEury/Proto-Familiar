@@ -73,6 +73,8 @@ import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, c
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, noticingMessages, runNoticingToolLoop, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
 import { readAskedMap, writeAskedMap, filterRecentlyAsked, stampAsked, pruneAsked } from './src/safety/noticing-outcomes.js';
+import { holdForChat, releaseHeld } from './src/safety/noticing-held.js';
+import { connectionChain } from './src/util/connection-chain.js';
 import { getContactBaseline, weekdayClass } from './src/safety/contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './src/safety/wait-streak.js';
 import {
@@ -7975,9 +7977,12 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
   // Bounded per call and as a whole (ward-signed 0.14.64). A deadline ends the
   // turn where it is; what already ran (effectiveNames) still counts. Any other
   // whole-loop failure throws → deliberation_failed upstream.
+  // My human's fallback connections, when the noticing one fails in a way
+  // another could get past (ward-signed 0.14.121, on unless they switch it off).
+  const fallbacks = s.noticingFallbacksEnabled === false ? [] : connectionChain(s, conn).slice(1);
   const loop = await runNoticingToolLoop({
     runLoop: runToolCallLoop, callRaw: callChatRaw,
-    conn, settings: s, messages, tools, executeTool, toolCtx, getTools,
+    conn, fallbacks, settings: s, messages, tools, executeTool, toolCtx, getTools,
     // The same round budget as my live turns (ward decision 0.14.82): a sweep
     // needs more than the old 5, and a cut-off still gets the closing note.
     maxRounds: toolRoundsPerTurn(s),
@@ -8005,7 +8010,7 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
     }
   }
 
-  return { toolNamesCalled: effectiveNames, nextCheckInMs, ...(loop.timedOut ? { timedOut: true, error: loop.error } : {}) };
+  return { toolNamesCalled: effectiveNames, nextCheckInMs, calls: loop.calls, ...(loop.timedOut ? { timedOut: true, error: loop.error } : {}) };
 }
 
 function startNoticing() {
@@ -8027,6 +8032,11 @@ function startNoticing() {
       const r = await getDueIntentions({ now: wardLocalNowISO(readSettingsSync().wardTimeZone) });
       return (Array.isArray(r?.due) ? r.due : []).map(i => i?.id).filter(Boolean);
     },
+    // A failed look at something due that ran out of retries is held for my
+    // next live turn with my human; a look that later runs takes it back out
+    // (ward-signed 0.14.121, noticing-held.js).
+    onHeld:     (entries) => holdForChat(entries, { timeZone: readSettingsSync().wardTimeZone || null }),
+    onReleased: (ids) => releaseHeld(ids),
     // Quiet hours gate only KNOCKING (reach_out), passed through to the
     // deliberation — the turn itself still runs so intentions/reads work.
     isQuietHours: async () => isWarmthQuietHours(),
@@ -8050,10 +8060,25 @@ function startNoticing() {
         dueWake:          r.dueWake ?? false,
         error:            r.error ?? null,
         timedOut:         r.timedOut ?? false,
+        // D1 (0.14.121): how long the tick took, each provider call (connection,
+        // ms, outcome), and what a failed look at something due does next.
+        tookMs:           r.tookMs ?? null,
+        calls:            Array.isArray(r.calls) ? r.calls : [],
+        usageLimited:     r.usageLimited ?? false,
+        retryAt:          Number.isFinite(r.retryAt) ? new Date(r.retryAt).toISOString() : null,
+        heldForChat:      r.heldForChat ?? [],
       }).catch(() => {});
-      if (r.reason === 'acted')      console.log(`[noticing] acted (${(r.toolNamesCalled || []).join(', ')})${r.timedOut ? ` before ${r.error}` : ''}`);
-      else if (r.reason === 'stood_down') console.log(`[noticing] looked (${(r.conditions || []).map(c => c.kind).join(', ')}), stood down`);
-      else if (r.reason === 'deliberation_failed') console.warn(`[noticing] deliberation failed — ${r.error ?? 'unknown error'}; the next tick looks again`);
+      // Name the fallback when one answered instead of the noticing connection.
+      const answered = (r.calls || []).filter(c => c.ok).at(-1);
+      const via = answered && answered.connection !== r.calls[0].connection ? ` via fallback ${answered.connection}` : '';
+      if (r.reason === 'acted')      console.log(`[noticing] acted (${(r.toolNamesCalled || []).join(', ')})${via}${r.timedOut ? ` before ${r.error}` : ''}`);
+      else if (r.reason === 'stood_down') console.log(`[noticing] looked (${(r.conditions || []).map(c => c.kind).join(', ')})${via}, stood down`);
+      else if (r.reason === 'deliberation_failed') {
+        const next = r.heldForChat?.length ? `holding ${r.heldForChat.join(', ')} for my next chat`
+          : Number.isFinite(r.retryAt) ? `trying again in ${Math.round((r.retryAt - Date.now()) / 60_000)} min`
+          : 'the next tick looks again';
+        console.warn(`[noticing] deliberation failed — ${r.error ?? 'unknown error'}; ${next}`);
+      }
     },
     onError: (err) => console.error('[noticing]', err?.message ?? err),
   });

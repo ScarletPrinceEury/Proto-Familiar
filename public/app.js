@@ -320,6 +320,9 @@ const state = {
   // wake-condition-gated turns to notice and act. Off via this toggle or
   // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
   noticingEnabled:         true,
+  // When noticing's own connection fails (down, out of allowance), try the chat
+  // fallbacks in order (known-issues D1, ward-signed default ON).
+  noticingFallbacksEnabled: true,
   // Fuzzy-attribution re-sweep: a noticing wake condition that resurfaces
   // memories saved unsure who did what, for the Familiar to re-resolve. Rides
   // the noticing loop (only active when noticing is on). Default-ON; off via
@@ -634,7 +637,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale', 'ponderThreadChance', 'followupsEnabled',
   'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'noticingAttributionResweepEnabled', 'weatherEnabled', 'weatherUnit',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'noticingFallbacksEnabled', 'noticingAttributionResweepEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'villagePresenceEnabled', 'villagerContextEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
@@ -1295,6 +1298,7 @@ function loadPersisted() {
   if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
   if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
   if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
+  if (typeof state.noticingFallbacksEnabled !== 'boolean') state.noticingFallbacksEnabled = true;
   if (typeof state.followupsEnabled !== 'boolean') state.followupsEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (typeof state.villagePresenceEnabled !== 'boolean') state.villagePresenceEnabled = true;
@@ -5090,6 +5094,7 @@ function readSettingsFromUI() {
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
+  if ($('noticing-fallbacks-toggle')) state.noticingFallbacksEnabled = $('noticing-fallbacks-toggle').checked;
   if ($('followups-toggle')) state.followupsEnabled = $('followups-toggle').checked;
   if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
   if ($('page-watch-toggle')) state.pageWatchEnabled = $('page-watch-toggle').checked;
@@ -5316,6 +5321,7 @@ function writeSettingsToUI() {
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
+  if ($('noticing-fallbacks-toggle')) setIfNotFocused($('noticing-fallbacks-toggle'), 'checked', state.noticingFallbacksEnabled !== false);
   if ($('followups-toggle'))   setIfNotFocused($('followups-toggle'),   'checked', state.followupsEnabled !== false);
   if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
   if ($('page-watch-toggle'))  setIfNotFocused($('page-watch-toggle'),  'checked', state.pageWatchEnabled !== false);
@@ -6830,7 +6836,7 @@ function init() {
     'pondering-toggle', 'pondering-scale', 'pondering-thread-chance', 'ponder-web-toggle', 'ponder-web-reads',
     'ponder-consolidation-toggle',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
-    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'followups-toggle', 'browse-toggle', 'page-watch-toggle',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'noticing-fallbacks-toggle', 'followups-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'organ-status-block',
     'memory-sweep-toggle',

@@ -1795,6 +1795,7 @@ import { formatCleanupProposalsBlock } from './src/memory/cleanup-proposals.js';
 import { checkCanaries, formatCanaryBlock, recordCanaryStates } from './src/memory/identity-canaries.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 import { takeRetiredLimitsNote } from './src/self/retired-limits.js';
+import { takeHeldNote } from './src/safety/noticing-held.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -2855,6 +2856,15 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       retiredLimitsBlock = await takeRetiredLimitsNote();
     }
 
+    // ── Came due while the model wasn't answering (known-issues D1) ────────
+    // Something I meant to do came due, and the noticing loop couldn't get a
+    // look at it through its retries and my human's fallbacks. Told once, as a
+    // plain fact, on my next live turn in my own room (ward-signed 0.14.121).
+    let heldNoticingBlock = '';
+    if (liveTurn && !staticOnly && !gated) {
+      heldNoticingBlock = await takeHeldNote({ timeZone: wardTimeZoneSetting() });
+    }
+
     // Organ-status readout: which context organs delivered this turn. Gated by
     // organStatusBlock ('degraded' default → shown only when one is down;
     // 'always'; 'off'). Ward-private, non-static turns only. Phylactery/Unruh
@@ -2908,6 +2918,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (cleanupBlock)           dynamicSections.push(cleanupBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);
     if (retiredLimitsBlock)     dynamicSections.push(retiredLimitsBlock);
+    if (heldNoticingBlock)      dynamicSections.push(heldNoticingBlock);
     if (careFactsBlock)         dynamicSections.push(careFactsBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);
