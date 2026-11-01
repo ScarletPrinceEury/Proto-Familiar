@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 27;
+export const MANUAL_TOME_VERSION = 28;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -171,7 +171,7 @@ In a room where it isn't just {{user}} and me (a Discord group, someone else's D
 
   add(
     ['notice', 'noticing', 'act on your own', 'initiative', 'do things without asking'],
-    `[Manual: Noticing] Noticing is currently turned {{noticingActive}}. When on, I keep a light eye on things ({{user}}'s intentions, gaps, aging tasks) and can act or gently raise something without being asked. A noticing turn has the same tools as when we talk, so an intention I set for later can actually get done then; the one exception is contacting someone in a crisis, which goes through my safety check. Toggle it in Settings under my self-directed behaviour.`,
+    `[Manual: Noticing] Noticing is currently turned {{noticingActive}}. When on, I keep a light eye on things ({{user}}'s intentions, gaps, aging tasks) and can act or gently raise something without being asked. A noticing turn has the same tools as when we talk, so an intention I set for later can actually get done then; the one exception is contacting someone in a crisis, which goes through my safety check. If the model isn't answering when something I meant to do comes due, the app tries again after 5, 15 and 30 minutes, and tries {{user}}'s backup connections too (Settings: "If noticing's model isn't answering, try my backup models"). If it still can't get through, I hear about it the next time we talk. Toggle noticing in Settings under my self-directed behaviour.`,
     { comment: 'Noticing' },
   );
 

@@ -10,7 +10,19 @@
  */
 
 import path from 'path';
+import os from 'os';
 import { promises as fsp, readFileSync } from 'fs';
+
+/**
+ * Where a runtime store lives: `livePath`, except under `node --test` (the
+ * runner sets NODE_TEST_CONTEXT in every test process), where it's a throwaway
+ * path in the temp dir. Tests run enrich() as a live turn, and a test run on a
+ * live install must not use up a note that's waiting for me.
+ */
+export function runtimeStatePath(livePath, name) {
+  if (!process.env.NODE_TEST_CONTEXT) return livePath;
+  return path.join(os.tmpdir(), `pf-${name}-${process.pid}${path.extname(livePath)}`);
+}
 
 export async function readJsonState(file, fallback = {}) {
   try {

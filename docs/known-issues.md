@@ -24,7 +24,15 @@ there's something to look at, no fixed checklist cadence (see CLAUDE.md,
 backstop on top of the wake conditions, or better wake conditions. Noticing is
 a ward-sign-off path: any change to when or whether it acts needs the ward.
 
-**Two concrete misses found and fixed so far.**
+**Three concrete misses found and fixed so far.**
+- About a third of due-intention looks failed on provider trouble (timeouts,
+  weekly limits, a dropped connection), and a failed look counted as seen, so a
+  cool-down of up to six hours sat on it. Fixed 0.14.121 (ward-signed, D1 in
+  `known-issues-fix-plans.md`): a failed look isn't a look; it's retried 5, 15
+  and 30 minutes on, through the ward's fallback connections too; if it still
+  can't get a look, the Familiar's next live turn with the ward says so. Each
+  provider call's connection and time is now in `logs/noticing-events.jsonl`
+  (`calls`), so whether 180 s per call is too tight can be read from the log.
 - A self-set cool-down of up to six hours blocked the due-intention check, so an
   intention could come due and wait. Fixed 0.14.99: a newly due intention ends
   the cool-down. It fired live (`dueWake: true` in the noticing log).

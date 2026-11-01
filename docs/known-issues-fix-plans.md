@@ -810,6 +810,28 @@ And the loop has a bug that turns a failed look into a long miss
   there. Immersion holds: the Familiar learns of the intention plainly, as an
   app fact.
 
+**Shipped 0.14.121 (ward sign-off 2026-11-01: plan as above, fallbacks ON by
+default, note wording below).**
+- The note: "[Came due while the model wasn't answering, so I haven't acted on
+  it yet: <intention> (due 15:00, id <id>).]" The id rides along so the
+  Familiar can mark it without looking it up.
+- Retries are per due intention, timed from its first failure, and an owed
+  retry runs through a cool-down. A weekly or 5-hour limit holds at once only
+  when every connection in the chain reported one; a connection that merely
+  timed out may answer in five minutes.
+- An intention an earlier look already had in front of it (the Familiar chose
+  to wait) gets no tries and no note when a later look fails: it isn't news.
+- A phase round whose window passes during its retries is held: it never got
+  its look.
+- Fallbacks are tried per provider call, sticky for the rest of the turn, so
+  tool rounds that already ran are never re-run.
+- Found on the way: noticing's closing round (round cap reached) dropped
+  `forceText` and sent the tools again; it now asks for words only, as RULE B
+  says. Discord's usage note also missed "Limit Exhausted" / "limit exceeded";
+  both now share `isUsageLimitError`.
+- Still deferred, as planned: whether 180 s per call is too tight. The log's
+  `calls` now has the numbers.
+
 ### D2. Presence: the Familiar's own interests and plans
 
 The entry asks for a design pass, not a fix, and D1 is part of the answer: a

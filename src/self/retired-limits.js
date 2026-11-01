@@ -25,10 +25,9 @@
  */
 
 import path from 'path';
-import os from 'os';
 import { promises as fsp } from 'fs';
 import { REPO_ROOT } from '../../repo-root.js';
-import { readJsonState, writeJsonState } from '../util/json-state.js';
+import { readJsonState, writeJsonState, runtimeStatePath } from '../util/json-state.js';
 
 export const RETIRED_LIMITS = Object.freeze([
   { id: 'schedule-provenance', version: '0.14.84', text: 'Calendar-synced items show 📅, and the app won\'t let me delete one (the next sync would only bring it back).' },
@@ -40,16 +39,12 @@ export const RETIRED_LIMITS = Object.freeze([
   { id: 'recall-excerpts', version: '0.14.114', text: 'A long memory in recall shows its start and its real end with [… cut for length …] between. A cut memory isn\'t a missing one; read_memory_by_id shows all of it.' },
   { id: 'tome-edits', version: '0.14.116', text: 'I can fix or take out my own tome entries (edit_tome_entry, delete_tome_entry).' },
   { id: 'claimed-actions', version: '0.14.118', text: 'If my reply says I filed or saved something and no tool ran, the app tells me in the same turn and I get one more go.' },
+  { id: 'noticing-retries', version: '0.14.121', text: 'When something I meant to do comes due and the model isn\'t answering, the app tries again (and tries my human\'s backup models), and if it still can\'t, it tells me in our next chat.' },
 ]);
 
-// Under `node --test` (the runner sets NODE_TEST_CONTEXT in every test
-// process), the store is a throwaway file: tests run enrich() as a live turn,
-// and a test run on a live install must not use up my notes before I see them.
-const UNDER_TEST = Boolean(process.env.NODE_TEST_CONTEXT);
-const DEFAULT_FILE = UNDER_TEST
-  ? path.join(os.tmpdir(), `pf-retired-limits-${process.pid}.json`)
-  : path.join(REPO_ROOT, 'tomes', '.retired-limits-seen.json');
-const DEFAULT_LOGS = UNDER_TEST ? path.join(os.tmpdir(), `pf-retired-limits-logs-${process.pid}`) : path.join(REPO_ROOT, 'logs');
+// Under `node --test` both are throwaway paths (runtimeStatePath).
+const DEFAULT_FILE = runtimeStatePath(path.join(REPO_ROOT, 'tomes', '.retired-limits-seen.json'), 'retired-limits');
+const DEFAULT_LOGS = runtimeStatePath(path.join(REPO_ROOT, 'logs'), 'retired-limits-logs');
 const DAY_MS = 24 * 3600_000;
 
 let _paths = { file: DEFAULT_FILE, logsDir: DEFAULT_LOGS };

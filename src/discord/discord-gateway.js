@@ -50,7 +50,7 @@ import { materializeAttachments, resolveVisionCapable, ensureDescribed, describe
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
 import { parseGifEmbeds, labelFromGifPage, mediaFilename, gifEmbedsDisabled } from './discord-gif-embeds.js';
 import { hearVoiceNotes } from '../voice/voice-transcribe.js';
-import { extractTurnReply, deadlineSignal, isTimeoutError } from '../../llm-call.js';
+import { extractTurnReply, deadlineSignal, isTimeoutError, isUsageLimitError } from '../../llm-call.js';
 import { sendWithNames } from '../../name-field.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from '../memory/memorization.js';
@@ -1289,10 +1289,7 @@ export { isTimeoutError };
 // `err` is null when the reply was simply empty (no throw).
 export function providerFailureNote(err) {
   if (isTimeoutError(err)) return LLM_TIMEOUT_NOTE;
-  const msg = String(err?.message ?? err ?? '').toLowerCase();
-  if (/\b402\b|quota|insufficient|\bbalance\b|billing|payment required|\bcredits?\b|out of (credits|tokens)|usage limit/.test(msg)) {
-    return LLM_USAGE_NOTE;
-  }
+  if (isUsageLimitError(err)) return LLM_USAGE_NOTE;
   return LLM_EMPTY_NOTE;
 }
 
@@ -1349,7 +1346,7 @@ export async function callChatRaw({ conn, messages, settings, tools, signal, tim
       }
       throw err;
     }
-    if (!resp.ok) throw new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`);
+    if (!resp.ok) throw Object.assign(new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`), { status: resp.status });
     const data = JSON.parse(text);
     if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
     return data;

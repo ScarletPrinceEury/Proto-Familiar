@@ -57,6 +57,28 @@ export function isTimeoutError(err) {
   return err?.name === 'TimeoutError';
 }
 
+// A provider saying the account's allowance is used up (a weekly or 5-hour
+// limit, no balance, paid usage switched off). Asking the same connection
+// again soon can't work. Matched on the provider's own words, taken from real
+// failures: "Weekly/Monthly Limit Exhausted", "Weekly included input token
+// limit exceeded", "Usage limit reached for 5 hour", "Provider selection is
+// pay-as-you-go, and paid API usage is disabled". A plain "Rate limit reached
+// for requests" or "temporarily overloaded" is NOT one: those pass.
+const USAGE_LIMIT_RE = /\b402\b|quota|insufficient|\bbalance\b|billing|payment required|\bcredits?\b|out of (credits|tokens)|usage limit|limit (exhausted|exceeded)|pay-as-you-go/i;
+
+export function isUsageLimitError(err) {
+  if (err?.status === 402) return true;
+  return USAGE_LIMIT_RE.test(String(err?.message ?? err ?? ''));
+}
+
+/** The HTTP status a provider error carries: `err.status`, or the "returned
+ *  NNN" every provider-call error message here is built with. null when none. */
+export function providerErrorStatus(err) {
+  if (Number.isFinite(err?.status)) return err.status;
+  const m = String(err?.message ?? '').match(/returned (\d{3})\b/);
+  return m ? Number(m[1]) : null;
+}
+
 /**
  * The signal one fetch should carry: a fresh `timeoutMs` deadline, combined with
  * the caller's own `signal` (an outer turn deadline, a client disconnect) when

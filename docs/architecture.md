@@ -60,7 +60,9 @@ server.js  (Express, Node 22+, ESM)
     ├── wait-streak.js      ── wait-streak experiment: counts deliberated waits since last proactive act
     ├── contact-baselines.js ─ derives normal contact rhythm (median/p90 gaps) from session logs
     ├── noticing.js         ── the Familiar's own turn: wake conditions + situation report + prompt + tick
-    ├── noticing-loop.js    ── autonomous: drives the noticing tick, self-paced (Initiative Pass 4)
+    ├── noticing-loop.js    ── autonomous: drives the noticing tick, self-paced (Initiative Pass 4); retries a failed look at something due (D1)
+    ├── noticing-held.js    ── what came due while the model wasn't answering: held for my next live ward turn (D1)
+    ├── util/connection-chain.js ── server-side fallback chain: my connection, then my human's fallbacks (D1, noticing first)
     │
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
@@ -1393,7 +1395,28 @@ the whole deliberation — every round and every tool call — at
 and keeps what already ran: a reach-out that went out makes the tick `acted`
 (flagged `timedOut`); a cut-short turn with nothing proactive is
 `deliberation_failed` (no streak change, next tick looks again). Both land in
-`logs/noticing-events.jsonl` with `error` + `timedOut`. It assembles the same recent context a live
+`logs/noticing-events.jsonl` with `error` + `timedOut`. **A failed look isn't a
+look (ward-signed 0.14.121, known-issues D1):** only a tick whose look ran (acted /
+stood down) or found nothing ready adds due ids to `_seenDue`; a
+`deliberation_failed` leaves them unseen. A failed look at a due intention gets
+retries 5, 15 and 30 minutes after its first failure (`settleDueLooks`, per
+intention; an owed retry runs through a cool-down, armed by a one-off timer);
+out of tries, or when every connection said its allowance is used up
+(`isUsageLimitError` in llm-call.js → `err.usageLimited`), it's held in
+`tomes/.noticing-held.json` (`noticing-held.js`), and my next live ward turn's
+`enrich()` carries one plain line, once ("[Came due while the model wasn't
+answering, so I haven't acted on it yet: … (due 15:00, id …).]"). A later look
+that ran takes its held note back out. An intention an earlier look already had
+in front of it gets no tries and no note. Failed looks at anything else keep the
+loop's usual pacing. **Fallback connections:** `runNoticingToolLoop` calls through
+`chainCaller` (`src/util/connection-chain.js`): noticing's connection, then my
+human's `fallbackConnectionIds` in order (`connectionChain`), moving on only on a
+usage limit, 5xx/429, timeout or network failure (`fallbackWorthy`), sticky for the
+rest of the turn, never once the deadline has passed. Setting
+`noticingFallbacksEnabled` (default ON). Every provider call lands in the tick's
+`calls` (connection name/provider/model, `ms`, ok, error — never a key), with
+`tookMs`, `usageLimited`, `retryAt` and `heldForChat`, in noticing-events.
+It assembles the same recent context a live
 chat turn / warm reach-out gets — identity (static block), the time anchor,
 recent conversation and recent memories (`getRecentMemoryLines`, today+yesterday)
 — so it doesn't decide blind to what was just said. **When an outcome is open,

@@ -40,6 +40,7 @@
 
 import { naiveLabel } from '../schedule/promise-time.js';
 import { PROMISE_SOURCE } from '../schedule/promise-source.js';
+import { chainCaller } from '../util/connection-chain.js';
 
 // ── Wake conditions (pure) ───────────────────────────────────────────
 
@@ -377,14 +378,22 @@ const isTimeout = (err) => err?.name === 'TimeoutError';
 
 /**
  * Run the noticing tool loop under both deadlines. `runLoop` (cerebellum's
- * runToolCallLoop) and `callRaw` (the shared provider call) are injected so this
- * module stays import-free. Resolves { timedOut: false } on a normal finish, or
- * { timedOut: true, error } when a deadline cut it short — the caller keeps the
- * tools that already ran (its own executeTool tally). Any other failure throws,
- * exactly as before (deliberation_failed upstream).
+ * runToolCallLoop) and `callRaw` (the shared provider call) are injected; the
+ * only import is the connection chain. Resolves { timedOut: false, calls } on a
+ * normal finish, or { timedOut: true, error, calls } when a deadline cut it
+ * short — the caller keeps the tools that already ran (its own executeTool
+ * tally). Any other failure throws, exactly as before (deliberation_failed
+ * upstream), carrying `calls` and, when every connection was out of allowance,
+ * `usageLimited`.
+ *
+ * `fallbacks` (ward-signed 0.14.121, on by default): my human's fallback
+ * connections, tried in order when a call fails in a way another connection
+ * could get past (connection-chain.js). `calls` is every provider call with its
+ * connection, time taken and outcome, for the noticing log.
  */
 export async function runNoticingToolLoop({
   runLoop, callRaw, conn, settings, messages, tools, executeTool, toolCtx,
+  fallbacks = [],
   // request_tools growth (0.14.82): recomposes the set for the next round;
   // defaults to the fixed set. maxRounds omitted = the loop's own default.
   getTools = null,
@@ -393,6 +402,17 @@ export async function runNoticingToolLoop({
   totalTimeoutMs = NOTICING_DELIBERATION_TIMEOUT_MS,
 }) {
   const overall = AbortSignal.timeout(totalTimeoutMs);
+  const calls = [];
+  // The closing round of a cut-off loop asks for words only (forceText): no tools.
+  const callVia = chainCaller({
+    chain: [conn, ...(Array.isArray(fallbacks) ? fallbacks : [])],
+    signal: overall,
+    onCall: (entry) => calls.push(entry),
+    call: (c, { msgs, roundTools, opts }) => callRaw({
+      conn: c, messages: msgs, settings, tools: opts?.forceText ? undefined : (roundTools ?? tools),
+      signal: overall, timeoutMs: callTimeoutMs, surface: 'noticing',
+    }),
+  });
   // The signal stops the loop between rounds and aborts an in-flight provider
   // call; the race also covers a tool call that never returns. A turn left
   // running past the race only finishes the tool it is in — its next provider
@@ -405,10 +425,7 @@ export async function runNoticingToolLoop({
   try {
     await Promise.race([
       runLoop({
-        callUpstream: (msgs, roundTools) => callRaw({
-          conn, messages: msgs, settings, tools: roundTools ?? tools,
-          signal: overall, timeoutMs: callTimeoutMs, surface: 'noticing',
-        }),
+        callUpstream: (msgs, roundTools, opts) => callVia({ msgs, roundTools, opts }),
         baseMessages: messages,
         getTools:     getTools ?? (() => tools),
         ...(Number.isFinite(maxRounds) ? { maxRounds } : {}),
@@ -419,14 +436,15 @@ export async function runNoticingToolLoop({
       expired,
     ]);
   } catch (err) {
-    if (overall.aborted) return { timedOut: true, error: `the deliberation reached its ${secs(totalTimeoutMs)} deadline` };
-    if (isTimeout(err))  return { timedOut: true, error: `a provider call gave no answer within ${secs(callTimeoutMs)}` };
+    if (overall.aborted) return { timedOut: true, error: `the deliberation reached its ${secs(totalTimeoutMs)} deadline`, calls };
+    if (isTimeout(err))  return { timedOut: true, error: `a provider call gave no answer within ${secs(callTimeoutMs)}`, calls };
+    if (err && typeof err === 'object') { try { err.calls = calls; } catch { /* frozen: no calls on it */ } }
     throw err;
   }
   // Ended between rounds because the deadline passed (the loop breaks, it
   // doesn't throw) — still a cut-short turn.
-  if (overall.aborted) return { timedOut: true, error: `the deliberation reached its ${secs(totalTimeoutMs)} deadline` };
-  return { timedOut: false };
+  if (overall.aborted) return { timedOut: true, error: `the deliberation reached its ${secs(totalTimeoutMs)} deadline`, calls };
+  return { timedOut: false, calls };
 }
 
 // ── The tick (injectable; all I/O passed in) ─────────────────────────
@@ -456,7 +474,7 @@ export async function runOneNoticingTick({
   getThreat,          // async () => { tier, disabled }
   getWakeInputs,      // async () => { dueIntentions, signals, baseline, contactGapMs, readiness, agingIntents, weekdayClass }
   isQuietHours,       // async () => boolean (passed through to deliberate; gates only knocking)
-  deliberate,         // async ({ situationReport, threatTier, quietHours, conditions }) => { toolNamesCalled, nextCheckInMs? }
+  deliberate,         // async ({ situationReport, threatTier, quietHours, conditions }) => { toolNamesCalled, nextCheckInMs?, calls? }
   relInterval,        // (ms) => string, for the report
   getWaitStreakFn   = () => null,
   recordWaitFn      = async () => {},
@@ -500,8 +518,16 @@ export async function runOneNoticingTick({
   try {
     out = await deliberate({ situationReport, threatTier: tier, quietHours, conditions: gather.conditions });
   } catch (err) {
-    return { acted: false, reason: 'deliberation_failed', conditions: gather.conditions, error: err?.message ?? String(err), threat, at: nowMs };
+    // `usageLimited`: every connection said its allowance is used up, so the
+    // loop doesn't retry soon. `calls`: each provider call, for the log.
+    return {
+      acted: false, reason: 'deliberation_failed', conditions: gather.conditions, error: err?.message ?? String(err),
+      ...(err?.usageLimited === true ? { usageLimited: true } : {}),
+      ...(Array.isArray(err?.calls) ? { calls: err.calls } : {}),
+      threat, at: nowMs,
+    };
   }
+  const calls = Array.isArray(out?.calls) ? { calls: out.calls } : {};
 
   const { acted } = classifyNoticingOutcome(out?.toolNamesCalled);
   // A deadline cut the turn short (runNoticingToolLoop). If a proactive tool
@@ -512,7 +538,7 @@ export async function runOneNoticingTick({
     return {
       acted: false, reason: 'deliberation_failed', conditions: gather.conditions,
       toolNamesCalled: out.toolNamesCalled ?? [], timedOut: true, error: out.error ?? 'timed out',
-      threat, at: nowMs,
+      ...calls, threat, at: nowMs,
     };
   }
   // Ward decision: a noticing 'nothing' counts as a wait (source 'noticing');
@@ -529,6 +555,7 @@ export async function runOneNoticingTick({
     conditions: gather.conditions,
     toolNamesCalled: out?.toolNamesCalled ?? [],
     ...(out?.timedOut ? { timedOut: true, error: out.error ?? 'timed out' } : {}),
+    ...calls,
     streakAtDecision,
     nextCheckInMs,
     threat,
