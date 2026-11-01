@@ -35,6 +35,9 @@ sources:
     type: file
     path: thalamus.js
     note: "contains setIdentityFile and deleteIdentitySection wrappers"
+  - id: identity-results-js
+    type: file
+    path: src/memory/identity-results.js
 ---
 
 # Phylactery
@@ -211,6 +214,31 @@ registry checks every identity edit for exact passages that must survive unchang
 See [Identity cleanup only proposes; the Familiar decides](../decisions/identity-cleanup-propose-only)
 for the incident and both fixes.
 
+## Honest reads and edits of the Familiar's own identity files (A1–A2, 0.14.112–0.14.113)
+
+The identity-editing tools above answered every edit with a bare `"ok"` and gave the Familiar no
+way to see a file as it stood after changing it — the copy it reasoned from was whatever was
+loaded at the start of the turn. In practice this meant the Familiar sometimes re-cut the same
+passage worded slightly differently, or rewrote a section while leaving the next heading
+duplicated underneath it, without any way to notice either mistake in the same turn.
+
+`read_identity_file` and `src/memory/identity-results.js` close this by giving every identity
+tool one shared view of a file's structure. `_sections` — one heading parser, matching `^#{1,6}\s`
+flat sections — backs read, rewrite, and delete alike, so a file never looks different depending
+on which tool is reasoning about it [@identity-results-js]. `formatIdentityRead` renders a file's
+exact size, its share of the category's token budget, and a heading outline with repeated
+headings numbered (`occurrence`/`of`) so a rewrite or delete can name which one it means
+[@identity-results-js]. A rewrite whose new text itself contains the next heading is refused with
+the `includes_heading` code rather than silently applied, because writing it would duplicate that
+heading in the file [@identity-results-js]. `appendedText` (A2, 0.14.113) gives `append_file` the
+same honesty: its result now states what actually happened — where the text landed, under which
+heading, and the file's new size — instead of the bare `"ok"` that used to read identically
+whether an append created a new file, landed under a heading, or silently did nothing
+[@identity-results-js]. This is the same "report a plain fact about what happened" register
+[Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) describes for
+failure and gap reports, applied here to a *successful* write whose prior terse "ok" was
+functionally indistinguishable from a quiet no-op.
+
 ## Audience-native records
 
 Every record in Phylactery — identity, graph node, or memory — carries an `audience` field:
@@ -320,3 +348,11 @@ toggle [@phylactery-design].
 - [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) —
   the full three-layer decision behind the attribution-weighted ranking described above, spanning
   extraction, this recall path, and [Noticing](noticing)'s re-resolution sweep.
+- [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the voice
+  rule `identity-results.js`'s honest write results follow.
+- [Identity cleanup only proposes; the Familiar decides](../decisions/identity-cleanup-propose-only)
+  — the other identity-honesty fix from the same review thread, about the automated graduation
+  audit rather than the Familiar's own read/write tools described above.
+- [Engineering conventions](../reference/engineering-conventions) — the Phylactery `recall`
+  excerpt fix (A3) from the same identity-review thread, closing the equivalent silent-truncation
+  gap on the memory-recall path rather than the identity-file path described above.

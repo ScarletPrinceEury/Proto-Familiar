@@ -59,6 +59,12 @@ sources:
   - id: content-tags-js
     type: file
     path: src/memory/content-tags.js
+  - id: tome-reader-js
+    type: file
+    path: src/tomes/tome-reader.js
+  - id: retired-limits-js
+    type: file
+    path: src/self/retired-limits.js
 ---
 
 # Tomes And Keyword Lore
@@ -222,6 +228,57 @@ on how many named tomes the Familiar can keep; the tool descriptions themselves 
 expected to keep it checking `list_tomes` and reusing a collection before starting another one
 [@tool-surfacing-js] [@cerebellum-js].
 
+## Reading a tome on purpose: `read_tome` (0.14.101)
+
+Every mechanism above activates a tome entry by keyword match against recent chat — which means a
+noticing turn, which has no conversation to scan, could never reach tome content at all, even when
+the situation report named exactly the entry the turn needed. The gap surfaced concretely: an
+intention came due on time ("work on the draft in my tome"), the noticing turn ran, and the
+Familiar had no way to open the tome the intention referred to. `list_tomes` gave names and entry
+counts only, and tome files are named by UUID, so `read_file` was not a usable way in either. The
+general lesson for intention misses this exposed: "an intention didn't fire" can also mean "the
+turn it fired in couldn't reach what the work needed" — when investigating a miss, check which
+tools the woken turn actually called, not only whether it woke at all. (See [Noticing](noticing)'s
+0.14.99 cool-down fix for the other half of that same class of miss.)
+
+`read_tome` (`src/tomes/tome-reader.js`, wired as a `cerebellum.js` executor) is one tool with
+three modes: a tome name alone lists its entries newest-first, 25 to a page; adding `query`
+searches one tome (or every tome, if the tome name is left out), requiring every search word to
+appear; and an entry id or title reads that one entry in full [@tome-reader-js]. Entry aliases are
+derived, not stored — `slugifyLabel(title)-<tail>`, with the tail taken from the entry's own uid so
+the alias never needs a migration, growing only as far as it must to stay unique within the tome
+[@tome-reader-js]. A lookup also accepts an older, shorter alias that still resolves to exactly one
+entry, the raw uid `save_to_tome` returns, or the entry's title (matched either raw or with its
+macros already filled in, since the Familiar sees `{{user}}` resolved, not literal). A long entry
+is split into 16k-character parts cut at a word or line boundary, and the result names `from: N`
+for the next part — the model only has to repeat that number back, the same exact-values
+discipline [Exact values are code's job](../decisions/exact-values-in-code) applies elsewhere, and
+a test joins the parts back into the original text to confirm nothing is lost at the seam
+[@tome-reader-js].
+
+`read_tome` resolves the same `resolveTomeMacros` the keyword-activation path uses, so a tome
+opened on purpose (rather than injected by keyword) still reads its live toggle/value state
+correctly — opening the Familiar Manual this way shows `on`/`off` as they are right now, not as
+authored [@tome-reader-js]. The tool is ward-private only (`ctx.wardPrivate === false` refuses),
+because opening a tome deliberately would otherwise let content reach a shared room that the
+room gate below (`tomesForRoom`) would have filtered out of ordinary keyword activation; the
+keyword gate still governs what a shared room sees through the normal path [@tome-reader-js]. The
+tool is core, so it reaches noticing turns as well as live ones, and it is deliberately excluded
+from `villagerToolNames`.
+
+## Editing and removing an entry (A4, 0.14.116)
+
+Before this, a tome entry the Familiar had written could not be fixed or taken back — only added
+to. `edit_tome_entry` and `delete_tome_entry` close that: each change is appended to
+`tomes/.tome-edits.jsonl` before it is applied, and the Tomes modal's "Recently changed by my
+Familiar" view reads that log so a ward can restore an entry an edit got wrong. The Familiar
+Manual is excluded from both tools, the same `graduationExempt`-style protection its seeding logic
+already gives it elsewhere on this page. An edit re-checks the entry's share tag (see "Share tags"
+below) against its new content, but a tag the checker cannot classify is left untouched rather than
+cleared, so an edit can never silently widen an entry's audience by accident. `retired-limits.js`
+lists this fix (`tome-edits`, 0.14.116) so a Familiar still carrying an old rule about not being
+able to correct its own notes is told, once, that the app now supports it [@retired-limits-js].
+
 ## The room gate: lore now passes the same content gate as memories (0.14.89–0.14.92)
 
 Through 0.14.88-alpha, the activation engine described above had no audience awareness at all:
@@ -365,3 +422,9 @@ editing the shipped JSON again.
   automated writer (memorization) plus manual ward edits is the simpler model that shipped.
 - [Engineering conventions](../reference/engineering-conventions) — the macro-substitution
   boundary list that tome content is a deliberate, named exception to.
+- [Noticing](noticing) — the background loop `read_tome` was built to reach, since a noticing
+  turn has no conversation for keyword activation to scan.
+- [Exact values are code's job](../decisions/exact-values-in-code) — the discipline
+  `read_tome`'s part-numbering (`from: N`) follows for a long entry split across replies.
+- [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the voice
+  rule `retired-limits.js` follows when telling the Familiar the tome-edit gap is closed.

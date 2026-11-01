@@ -164,6 +164,12 @@ component menus in the ward's own DM only: `!queue` and `!connection` — see
 [Ward Discord console](ward-console) for the pending memory-consent queue, connection routing,
 and reasoning-effort controls they expose.
 
+A separate check runs the other direction on the same escalation/no-covert-contact surface: the
+[outgoing tripwire](outgoing-tripwire) scans text about to leave the ward's own room — a relay, a
+room reply, or a warm reach-out — for the ward's own private material (a kept-private identifier,
+or something merely shaped like a name-turned-handle, a code, or contact info), holding a relay
+that matches for the ward's own release rather than the Familiar's.
+
 A separate, narrower naming gate governs who may type in the ward's own *web* chat box rather
 than who the Familiar may be present with elsewhere: `web-speakers.js` lets the ward list other
 people (and, as its first consumer, the Claude Code coding agent) who may speak there without
@@ -206,6 +212,9 @@ If you're asking yourself... go to:
 - **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
 - **How does a ward back up or restore the whole Familiar, not just Phylactery?** → [Holistic backup](holistic-backup)
 - **What stops one stalled provider response from silently wedging a Discord room, a background loop, or the server?** → [Stall resilience](stall-resilience)
+- **What stops two settings writers from racing and losing an update (like a saved connection)?** → [Settings sync](settings-sync)
+- **What stops the ward's own private material from leaving a room through a relay?** → [Outgoing tripwire](outgoing-tripwire)
+- **How does a tool call that already ran avoid being run twice by a retry?** → [Turn record](turn-record)
 
 ## Where to go next
 
@@ -229,6 +238,8 @@ If you're asking yourself... go to:
 - [Memory integrity: the memorization-to-Phylactery gate](memory-integrity) — the scan and
   reversible quarantine that screens every extracted fact for corruption or adversarial
   phrasing before it reaches Phylactery.
+- [Turn record](turn-record) — how one turn is written into its session log incrementally, as
+  it happens, on every surface, and why a turn whose tools ran can never be run a second time.
 - [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
   manual close-out mechanism for sessions that never received an `endedAt` timestamp.
 - [Data ingestion](data-ingestion) — importing conversation logs from other platforms and
@@ -266,6 +277,9 @@ If you're asking yourself... go to:
   human trusted contact works.
 - [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner's
   wiring history and current boundaries, and the incident that produced it.
+- [Outgoing tripwire: catching private material on the way out](outgoing-tripwire) — the
+  outbound privacy scan on relays, room replies, and warm reach-out, and why only the ward (never
+  the Familiar) can release a held relay.
 - [Ward Discord console](ward-console) — the ward-only `!queue` and `!connection` Discord
   menus: the pending memory-consent queue, active-connection and per-feature routing, and
   per-connection reasoning-effort control.
@@ -281,6 +295,8 @@ If you're asking yourself... go to:
 - [Stall resilience](stall-resilience) — Discord turn deadlines, the default provider-call
   timeout, the shared stuck-tick watchdog, client-disconnect handling, and why a throwing route
   can no longer take the whole server down.
+- [Settings sync](settings-sync) — per-key revisions, the conflict/rebase loop that merges
+  connections by id, and the one locked writer every settings-writing surface now shares.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
 - [Update](update) — the self-update mechanism, detection, and the design choice to never

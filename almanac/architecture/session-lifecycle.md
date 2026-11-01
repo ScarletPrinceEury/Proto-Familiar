@@ -67,3 +67,5 @@ The `endedAt` field is more than just metadata. It drives:
 - [Unified Ward Sessions](session-unification) — how the ward's web chat and Discord DM can be one continuous session when unification is enabled.
 - [Session memorization](session-memorization) — the pipeline that turns a session into Tome entries once it ends.
 - [Memory and Knowledge](memory-and-knowledge) — the broader memory architecture and how sessions feed into it.
+- [Turn record](turn-record) — how each turn inside a session is written to the log as it
+  happens, rather than only when the whole session later ends.
