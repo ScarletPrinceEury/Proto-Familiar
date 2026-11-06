@@ -532,6 +532,9 @@ const state = {
   // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
   // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
   visionThreatScoring: true,
+  // When the connection that describes pictures can't, my other image-capable
+  // connections get a try (0.14.123).
+  visionDescribeFallbacks: true,
   // Listening (voice notes, and later live calls). Default OFF and NOT implied
   // by anything else: a microphone is opt-in in a way a pasted photo is not.
   // Read-aloud deliberately does not depend on this — it is an accessibility
@@ -653,7 +656,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordEmotesEnabled', 'discordGifEmbedsEnabled', 'discordBotToken', 'discordWardUserId',
   'villageAutoRegisterLocations',
   'featureConnections',
-  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
+  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'visionDescribeFallbacks', 'gifAsVideoEnabled',
   'trackersEnabled', 'moodSendEnabled', 'moodSendOnboardedAt', 'moodVisibleToFamiliar',
   'crisisClassifierEnabled', 'crisisNormalizationEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs', 'voiceCallToolsEnabled', 'voiceCallSoundEffects', 'voiceCallSoundEffectPath',
@@ -5197,6 +5200,7 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('vision-fallbacks-toggle')) state.visionDescribeFallbacks = $('vision-fallbacks-toggle').checked;
   if ($('crisis-classifier-toggle')) state.crisisClassifierEnabled = $('crisis-classifier-toggle').checked;
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
@@ -5424,6 +5428,7 @@ function writeSettingsToUI() {
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
   if ($('read-aloud-default-toggle')) setIfNotFocused($('read-aloud-default-toggle'), 'checked', state.readAloudByDefault === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
+  if ($('vision-fallbacks-toggle')) setIfNotFocused($('vision-fallbacks-toggle'), 'checked', state.visionDescribeFallbacks !== false);
   if ($('crisis-classifier-toggle')) setIfNotFocused($('crisis-classifier-toggle'), 'checked', state.crisisClassifierEnabled !== false);
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
@@ -6903,7 +6908,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
-    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle', 'crisis-classifier-toggle',
+    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle', 'vision-fallbacks-toggle', 'crisis-classifier-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode', 'voice-offline-asr-model',
     'voice-call-offline-toggle', 'voice-call-tools-toggle', 'voice-call-sfx-toggle', 'voice-call-sfx-path', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
@@ -7334,6 +7339,7 @@ function init() {
   $('loops-search-pagewatch')?.addEventListener('input', () => renderLoopsLog('pagewatch'));
   $('loops-search-discord')?.addEventListener('input',   () => renderLoopsLog('discord'));
   $('loops-search-turns')?.addEventListener('input',     () => renderLoopsLog('turns'));
+  $('loops-search-vision')?.addEventListener('input',    () => renderLoopsLog('vision'));
 
   // Trigger tracer (regex/keyword diagnostic)
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
@@ -14363,7 +14369,7 @@ async function teLoadRounds() {
 // and a stuck one don't look the same from here. Each log's raw fetch is
 // cached so a per-log filter box re-renders instantly on every keystroke
 // instead of re-fetching (the shared list-search pattern).
-const LOOPS_TABS = ['noticing', 'reachout', 'triage', 'pagewatch', 'discord', 'turns'];
+const LOOPS_TABS = ['noticing', 'reachout', 'triage', 'pagewatch', 'discord', 'turns', 'vision'];
 const LOOPS_LOG_ENDPOINTS = {
   noticing:  '/api/noticing-events',
   reachout:  '/api/reachout-events',
@@ -14371,6 +14377,7 @@ const LOOPS_LOG_ENDPOINTS = {
   pagewatch: '/api/page-watch-events',
   discord:   '/api/discord-writes',
   turns:     '/api/turn-diagnostics',
+  vision:    '/api/vision-events',
 };
 // kind -> array (loaded) | null (failed — distinct from "loaded, empty") | undefined (not yet loaded)
 let _loopsLogCache = {};
@@ -14662,6 +14669,14 @@ function loopsRowSummary(kind, e) {
   }
   if (kind === 'discord') {
     return { at, label: `${e.villager || 'someone'} → ${e.tool || 'a tool'}`, meta: e.locationKey || '', reason: e.args || '' };
+  }
+  if (kind === 'vision') {
+    if (e.event === 'late-look') {
+      const n = Array.isArray(e.assets) ? e.assets.length : 0;
+      return { at, label: e.queued ? `came back to ${n === 1 ? 'a picture' : `${n} pictures`}` : 'didn\'t come back to a picture', meta: e.where || '', reason: e.reason || '' };
+    }
+    const bits = [e.connection, Number.isFinite(e.ms) ? `${(e.ms / 1000).toFixed(1)}s` : '', e.converted ? `converted from ${e.converted}` : ''].filter(Boolean);
+    return { at, label: e.ok ? `looked at ${e.asset || 'a picture'}` : `didn't see ${e.asset || 'a picture'}`, meta: bits.join(' · '), reason: e.ok ? '' : (e.reason || '') };
   }
   if (kind === 'turns') {
     // One live turn's tool loop (turn-log.js): what ran, what was DROPPED (calls

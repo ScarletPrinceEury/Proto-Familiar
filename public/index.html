@@ -732,6 +732,12 @@
           <input type="checkbox" id="vision-threat-toggle" checked>
         </div>
         <p class="field-hint">When on, an image you share that reads as distress can raise your Familiar's concern for you — the same as if you'd typed it. It only ever raises concern, never lowers it, and only your own images count. Turn this off if you share intense imagery (horror, art) that you'd rather it not read as alarm.</p>
+
+        <div class="field-row" style="margin-top:8px">
+          <label for="vision-fallbacks-toggle">If describing a picture fails, try my other connections</label>
+          <input type="checkbox" id="vision-fallbacks-toggle" checked>
+        </div>
+        <p class="field-hint">When the connection that describes images can't (it's down, or doesn't take that kind of file), your backup connections that can see images get a try, in your backup order. Each try is in Loops &amp; logs → Pictures.</p>
       </div>
     </div>
   </div>
@@ -1041,6 +1047,7 @@
           <button class="ke-tab"               data-loops-tab="pagewatch" role="tab">Page watch</button>
           <button class="ke-tab"               data-loops-tab="discord"  role="tab">Discord writes</button>
           <button class="ke-tab"               data-loops-tab="turns"    role="tab">Tool turns</button>
+          <button class="ke-tab"               data-loops-tab="vision"   role="tab">Pictures</button>
         </div>
 
         <div class="ke-pane ke-pane-active" id="loops-pane-noticing">
@@ -1067,6 +1074,11 @@
           <input type="search" id="loops-search-turns" class="vl-search" placeholder="Filter tool turns…" aria-label="Filter tool turns log" autocomplete="off">
           <p class="field-hint">What each live turn's tools actually did: which calls ran, and any that were dropped. Useful when your Familiar says it did something that didn't happen.</p>
           <div id="loops-list-turns" class="loops-log-list"></div>
+        </div>
+        <div class="ke-pane" id="loops-pane-vision">
+          <input type="search" id="loops-search-vision" class="vl-search" placeholder="Filter pictures log…" aria-label="Filter pictures log" autocomplete="off">
+          <p class="field-hint">Each time your Familiar tried to look at a picture: which connection, how long it took, and why it didn't come through when it didn't. Also when it came back to a picture it answered before seeing.</p>
+          <div id="loops-list-vision" class="loops-log-list"></div>
         </div>
       </div>
       <div class="modal-footer">

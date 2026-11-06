@@ -147,7 +147,7 @@ import {
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
   appendNoticingEventLog, readNoticingEvents, composeNoticingTools,
-  appendPageWatchEventLog, readPageWatchEvents,
+  appendPageWatchEventLog, readPageWatchEvents, readVisionEvents,
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
@@ -3252,6 +3252,13 @@ app.get('/api/noticing-events', async (_req, res) => {
 // page changed" is auditable, not a black box.
 app.get('/api/page-watch-events', async (_req, res) => {
   try { res.json(await readPageWatchEvents()); }
+  catch { res.json([]); }
+});
+
+// Pictures log (0.14.123): every describe attempt and every late look, so "he
+// said he couldn't see it" reads as a refused file, a slow describer, or none.
+app.get('/api/vision-events', async (_req, res) => {
+  try { res.json(await readVisionEvents()); }
   catch { res.json([]); }
 });
 

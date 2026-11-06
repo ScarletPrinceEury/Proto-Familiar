@@ -16,13 +16,23 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE = /\.(?:m?js|py|sql|html|css)$/;
 const NOT_OURS = /(?:^|\/)(?:node_modules|\.venv|__pycache__|\.pytest_cache|dist|build)\//;
 
-function git(args) {
-  try { return execFileSync('git', args, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
-  catch { return null; }
+// The ignored listing includes all of node_modules, which passed execFileSync's
+// default 1 MB buffer once sharp was installed (0.14.123): the overflow read as
+// "git not available" and the check skipped itself on every dev checkout. So
+// the buffer is roomy, and only a missing git skips; any other failure fails.
+const MAX_LISTING = 256 * 1024 * 1024;
+
+function git(args, { strict = false } = {}) {
+  try { return execFileSync('git', args, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: MAX_LISTING }); }
+  catch (err) {
+    if (err?.code === 'ENOENT') return null;   // no git on this machine
+    if (strict) throw err;
+    return null;                               // check-ignore exits 1 for "not ignored"
+  }
 }
 
 test('no source file in the repo is git-ignored', (t) => {
-  const out = git(['ls-files', '--others', '--ignored', '--exclude-standard']);
+  const out = git(['ls-files', '--others', '--ignored', '--exclude-standard'], { strict: true });
   if (out == null) return t.skip('git not available');
   const ignored = out.split(/\r?\n/).filter(f => f && SOURCE.test(f) && !NOT_OURS.test(f));
   assert.deepEqual(ignored, [], `ignored by .gitignore, so they would never be committed:\n${ignored.join('\n')}`);

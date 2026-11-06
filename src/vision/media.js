@@ -391,6 +391,7 @@ export async function setAssetDescription(idOrSlug, description, { regraduate = 
   if (!meta) return { ok: false, error: 'asset meta not found' };
 
   meta.description = description && typeof description === 'object' ? description : { text: String(description ?? '') };
+  delete meta.describeFailure;   // a look that came through settles any earlier failed one
 
   // Upgrade the model-facing slug from the description's key words, unless the
   // arrival slug was already meaning-bearing (a caption/filename gave it real
@@ -418,6 +419,28 @@ export async function setAssetDescription(idOrSlug, description, { regraduate = 
     await indexSlugs(meta.slugs, id);
   } catch (err) {
     return { ok: false, error: `description write failed: ${err?.message ?? err}` };
+  }
+  return meta;
+}
+
+/**
+ * Record why a describe didn't come through (0.14.123): `{reason, kind,
+ * permanent, setup, at, tried}`. The stand-in reads it so a picture that failed
+ * doesn't say "I haven't looked at this one yet", and a permanent failure isn't
+ * retried until the describe setup changes. Never written over a description
+ * that landed meanwhile; cleared by setAssetDescription.
+ */
+export async function setAssetDescribeFailure(idOrSlug, failure) {
+  const id = await resolveAssetId(idOrSlug);
+  if (!id) return { ok: false, error: 'asset not found' };
+  const meta = await readJson(metaPath(id), null);
+  if (!meta) return { ok: false, error: 'asset meta not found' };
+  if (meta.description) return meta;
+  meta.describeFailure = failure && typeof failure === 'object' ? failure : { reason: String(failure ?? '') };
+  try {
+    await atomicWrite(metaPath(id), JSON.stringify(meta, null, 2));
+  } catch (err) {
+    return { ok: false, error: `describe-failure write failed: ${err?.message ?? err}` };
   }
   return meta;
 }
@@ -582,6 +605,13 @@ export function clipLength(durationSec) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
+// Why a picture can't be looked at with what I have, plainly.
+function couldntLookWords(meta) {
+  if (meta?.describeFailure?.kind === 'too-big') return "it's too big for my image reader";
+  const type = { 'image/webp': 'WebP', 'image/gif': 'GIF' }[meta?.mime];
+  return `my image reader doesn't take ${type ? `${type} files` : 'this kind of file'}`;
+}
+
 function sharedByPhrase(meta) {
   const sp = meta?.origin?.speaker;
   if (sp && String(sp).trim()) return `shared by ${String(sp).trim()}`;
@@ -597,9 +627,11 @@ function sharedByPhrase(meta) {
  * an inaccessible file. Without that framing the model reads the note as
  * proof it CAN'T see and disclaims — the reported "still can't see the image"
  * failure, with the description sitting right there in context. The
- * undescribed forms stay honest ("I haven't looked at this one yet").
+ * undescribed forms stay honest, and say which of these it is (0.14.123): a
+ * look still running (`looking`), one that can't work with the reader I have,
+ * one that didn't come through and will be tried again, or none yet.
  */
-export function buildStandin(meta, { now = Date.now() } = {}) {
+export function buildStandin(meta, { now = Date.now(), looking = false } = {}) {
   if (!meta || !meta.id) return '';
   if (meta.kind === 'audio') return buildVoiceNoteStandin(meta, { now });
   const isVideo = meta.kind === 'video';
@@ -608,7 +640,11 @@ export function buildStandin(meta, { now = Date.now() } = {}) {
   if (meta.description && typeof meta.description.text === 'string' && meta.description.text.trim()) {
     body = `${isVideo ? 'what I saw when I watched' : 'what I saw when I looked'}: ${meta.description.text.trim()}`;
   } else if (meta.description === null) {
-    body = isVideo ? "I haven't watched this one yet" : "I haven't looked at this one yet";
+    if (isVideo) body = "I haven't watched this one yet";
+    else if (looking) body = "I'm still looking at this one";
+    else if (meta.describeFailure?.permanent) body = `I couldn't get a look at this one — ${couldntLookWords(meta)}`;
+    else if (meta.describeFailure) body = "I tried to look at this one and it didn't come through";
+    else body = "I haven't looked at this one yet";
   } else {
     body = isVideo ? 'I have no way to watch videos right now' : 'I have no way to look at images right now';
   }

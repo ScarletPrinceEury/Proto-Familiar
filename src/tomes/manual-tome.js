@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 29;
+export const MANUAL_TOME_VERSION = 30;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -73,7 +73,7 @@ export function buildManualTome() {
 
   add(
     ['send you pictures', 'send pictures', 'send images', 'send a photo', 'screenshot', 'show you an image', 'can you see', 'vision', 'look at this'],
-    `[Manual: Images] Vision is currently turned {{visionActive}}. When it's on, {{user}} can show me pictures and I actually see them. On the web chat: attach with the paperclip, paste, or drag-and-drop into the composer. On Discord: just attach the image to the message. Per-connection control lives in the Connections modal ("Can see images?" on each connection); the overall vision feature toggles in Settings. If a connection can't see images I fall back to a text description of them.`,
+    `[Manual: Images] Vision is currently turned {{visionActive}}. When it's on, {{user}} can show me pictures and I actually see them. On the web chat: attach with the paperclip, paste, or drag-and-drop into the composer. On Discord: just attach the image to the message. Per-connection control lives in the Connections modal ("Can see images?" on each connection); the overall vision feature toggles in Settings. If a connection can't see images I fall back to a text description of them. Each picture's note says where it stands: what I saw, that I'm still looking, or why I couldn't get a look. The thing that describes pictures for me gets a small JPG copy (some, like z.ai's, take only JPG/PNG), and if it still doesn't come through, {{user}}'s other image-capable connections get a try (Settings: "If describing a picture fails, try my other connections"). A big picture can take a while, so sometimes I answer before I've seen it; in a Discord room I get one more turn once the look comes through. Pictures from people who aren't in my village aren't kept, but I'm told one was posted. Every look is listed in Loops & logs → Pictures.`,
     { comment: 'Images / vision' },
   );
 

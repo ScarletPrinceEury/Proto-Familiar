@@ -242,6 +242,7 @@ const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
 const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
 const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
 const PAGE_WATCH_LOG_FILE = path.join(LOGS_DIR, 'page-watch-events.jsonl');
+const VISION_LOG_FILE = path.join(LOGS_DIR, 'vision-events.jsonl');
 
 // Shared JSONL event-log primitives — triage and warm reach-out both use
 // them, so decisions from either loop are auditable the same way.
@@ -292,6 +293,12 @@ export const readNoticingEvents     = ()      => readEventLog(NOTICING_LOG_FILE)
 // stay unlogged.
 export const appendPageWatchEventLog = (entry) => appendEventLog(PAGE_WATCH_LOG_FILE, entry);
 export const readPageWatchEvents     = ()      => readEventLog(PAGE_WATCH_LOG_FILE);
+// Pictures (0.14.123): every describe attempt, on whichever connection, and
+// every late look queued — so "he said he couldn't see it" can be traced to a
+// refused file, a slow describer, or no describer at all. Connection labels
+// only, never a key.
+export const appendVisionEventLog = (entry) => appendEventLog(VISION_LOG_FILE, entry);
+export const readVisionEvents     = ()      => readEventLog(VISION_LOG_FILE);
 
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage
