@@ -40,6 +40,7 @@ export const RETIRED_LIMITS = Object.freeze([
   { id: 'tome-edits', version: '0.14.116', text: 'I can fix or take out my own tome entries (edit_tome_entry, delete_tome_entry).' },
   { id: 'claimed-actions', version: '0.14.118', text: 'If my reply says I filed or saved something and no tool ran, the app tells me in the same turn and I get one more go.' },
   { id: 'noticing-retries', version: '0.14.121', text: 'When something I meant to do comes due and the model isn\'t answering, the app tries again (and tries my human\'s backup models), and if it still can\'t, it tells me in our next chat.' },
+  { id: 'picture-looks', version: '0.14.123', text: 'WebP pictures and big screenshots get looked at now (the app hands my image reader a small JPG copy, and tries my human\'s other image-capable connections if it fails). A picture\'s note says if I\'m still looking or why I couldn\'t, and in a Discord room I get one more turn when a slow look comes through.' },
 ]);
 
 // Under `node --test` both are throwaway paths (runtimeStatePath).

@@ -6,6 +6,21 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### A slow picture in a Discord DM or the web chat gets no late look
+
+0.14.123 gives a Discord guild room one more turn when a picture's description
+lands after the turn answered "still looking" (`late-look.js`, revisit queue).
+Discord DMs and the web chat don't have that yet: revisits run only for
+registered rooms, and the web turn path has no turn without a human message.
+Meanwhile the note says "I'm still looking at this one" and the next turn sees
+the description, and the JPEG copy (`describe-input.js`) should keep most
+describes inside the 25 s wait. What each needs: a DM revisit (derive ward-DM
+vs villager-DM from the key, the unified ward session for the ward's DM) and
+a self-started web turn (no human message: no threat scoring, no activity
+stamp, no triage ack, a system cue in place of the user line). Both are new
+turn shapes on chat paths. Check `logs/vision-events.jsonl` for how often a
+look still runs past 25 s before deciding how soon.
+
 ### With others present, a failed village read treats the room as my human's own (privacy; needs the ward)
 
 `/api/chat` resolves the room from `sessionAudience` and the village registry.

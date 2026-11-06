@@ -24,11 +24,13 @@
 import path from 'path';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { getAsset, getAssetMeta, setAssetDescription, buildStandin, VIDEO_MAX_BYTES } from './media.js';
+import { getAsset, getAssetMeta, setAssetDescription, setAssetDescribeFailure, buildStandin, VIDEO_MAX_BYTES } from './media.js';
 import { shortSlug } from '../../slug-ids.js';
 import { callProviderChat } from '../../llm-call.js';
 import { resolveReasoningEffort } from '../../providers.js';
-import { connectionForFeature, primaryConnectionFrom } from '../../cerebellum.js';
+import { connectionForFeature, primaryConnectionFrom, appendVisionEventLog } from '../../cerebellum.js';
+import { connectionChain, connectionLabel } from '../util/connection-chain.js';
+import { prepareDescribeInput, zaiRefusal, isImageFileRefusal, loadSharp } from './describe-input.js';
 import { substituteMacros } from '../../macros.js';
 import { sanitizeExternal } from '../../injection-guard.js';
 import { scoreMessage } from '../safety/crisis-signals.js';
@@ -355,7 +357,7 @@ export async function materializeAttachments(apiMessages, {
         }
         // Bytes vanished under us — degrade to a stand-in, never an error.
       }
-      const standin = ref.meta ? buildStandin(ref.meta, { now })
+      const standin = ref.meta ? buildStandin(ref.meta, { now, looking: _describing.has(ref.meta.id) })
         : `[${isVideo ? 'video' : 'image'} ${ref.id ?? '?'}: no longer available]`;
       standinLines.push(standin);
       if (ref.meta?.kind === 'audio') notesStoodIn++; else if (isVideo) videosStoodIn++; else imagesStoodIn++;
@@ -402,7 +404,7 @@ export async function materializeAttachments(apiMessages, {
   if (imagesStoodIn > 0) {
     out.push({
       role: 'system',
-      content: '[The [image …] notes in this conversation are images that were shared with me. "What I saw when I looked" is exactly that — I looked at the image and those are my own words about it. I talk about these images naturally, from what I saw. One marked "I haven\'t looked at this one yet" is one I genuinely haven\'t seen.]',
+      content: '[The [image …] notes in this conversation are images that were shared with me. "What I saw when I looked" is exactly that — I looked at the image and those are my own words about it. I talk about these images naturally, from what I saw. An image note that doesn\'t say "what I saw when I looked" is one I haven\'t seen.]',
     });
   }
   if (videosStoodIn > 0) {
@@ -421,7 +423,7 @@ export async function materializeAttachments(apiMessages, {
   if (blindImageStandins > 0) {
     out.push({
       role: 'system',
-      content: '[This is only about images marked "I haven\'t looked at this one yet" or "I have no way to look at images right now" — those specifically I genuinely cannot see and have no description of, so for THOSE I don\'t describe them, guess their contents, or name who or what is in them; I say plainly I can\'t see it (yet) and ask what\'s in it if it matters. It does NOT apply to an image marked "what I saw when I looked: …" — that description IS my sight of it, and I talk about it normally, in full, as something I saw. A text description still counts as having seen the image. Inventing what an unseen image shows would be a serious breach — I never do that.]',
+      content: '[This is only about image notes that don\'t say "what I saw when I looked" — I haven\'t seen those and have no description of them, so for THOSE I don\'t describe them, guess their contents, or name who or what is in them; I say plainly I can\'t see it (yet), or that I\'m still looking when the note says so, and ask what\'s in it if it matters. It does NOT apply to an image marked "what I saw when I looked: …" — that description IS my sight of it, and I talk about it normally, in full, as something I saw. A text description still counts as having seen the image. Inventing what an unseen image shows would be a serious breach — I never do that.]',
     });
   }
   return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, videosLive, videosStoodIn, gifsAsVideo, stoodInUndescribed, blindImageStandins };
@@ -507,8 +509,11 @@ export async function resolveVisionConnection(settings = {}) {
  * consumer (§6). Returns the updated meta, or {ok:false, reason}. Never throws.
  *
  * - Skips if already described (never regenerate).
- * - One LLM call via the resolved vision connection; the image rides as a
- *   data-URL part (callProviderChat takes a messages array).
+ * - Walks describeChain (0.14.123): the vision connection first, the next one
+ *   when it doesn't come through. Each gets the describe copy from
+ *   describe-input.js (a small JPG/PNG), never necessarily the stored bytes.
+ * - Every attempt lands in logs/vision-events.jsonl; a picture no describer
+ *   could look at records why on its meta (setAssetDescribeFailure).
  * - The description is sanitized through injection-guard BEFORE caching — text
  *   inside an image is untrusted external data.
  */
@@ -525,67 +530,160 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
     // image asset (describe predates video), so only an explicit non-image is
     // turned away.
     if (meta.kind && meta.kind !== 'image') return { ok: false, reason: 'not-image' };
-
-    const conn = await resolveVisionConnection(settings);
-    if (!conn) {
-      // Honest null: no eye to look with. Stays null so a later consumer, once
-      // a capable connection exists, still describes it ("cached forever"
-      // applies to successes only).
-      return { ok: false, reason: 'no-vision-connection' };
-    }
-    const got = await getAsset(meta.id);
-    if (got?.ok === false || !got?.buffer) return { ok: false, reason: 'bytes-unreadable' };
-
-    const prompt = substituteMacros(DESCRIBE_PROMPT, settings);
-    let text;
-    let by = { provider: conn.provider, model: conn.model };
-    if (conn.provider === 'zai-coding') {
-      // Coding-plan vision: describe through z.ai's Vision MCP allotment, NOT
-      // the chat endpoint (the coding chat models can't take images). Dynamic
-      // import keeps the MCP spawn out of vision.js's static graph.
-      try {
-        const { describeViaZaiVision } = await import('./zai-vision.js');
-        const r = await describeViaZaiVision({ apiKey: conn.apiKey, buffer: got.buffer, mime: got.meta.mime, prompt });
-        if (r?.ok === false) return { ok: false, reason: r.reason };
-        text = r?.text;
-        if (r?.by) by = r.by;
-      } catch (err) {
-        return { ok: false, reason: `zai-vision-failed: ${err?.message ?? err}` };
-      }
-    } else {
-      const messages = [{
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: `data:${got.meta.mime};base64,${got.buffer.toString('base64')}` } },
-        ],
-      }];
-      try {
-        text = await callProviderChat({
-          provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-          messages, maxTokens: 4000, temperature: 0.4, fetchFn,
-          reasoningEffort: resolveReasoningEffort(conn),
-        });
-      } catch (err) {
-        return { ok: false, reason: `describe-call-failed: ${err?.message ?? err}` };
-      }
-    }
-    const clean = sanitizeExternal(String(text || '').trim(), { source: 'image', context: 'image-description' });
-    if (!clean) return { ok: false, reason: 'empty-description' };
-
-    const updated = await setAssetDescription(meta.id, {
-      text: clean,
-      by,
-      at: new Date().toISOString(),
-    });
-    // A description landing for an already-linked image graduates onto each
-    // linked node (§6.5). Fire-and-forget — never blocks describe, never throws.
-    for (const l of (Array.isArray(updated?.links) ? updated.links : [])) {
-      if (l?.nodeId) graduateImageDescriptionToNode(meta.id, l.nodeId).catch(() => {});
-    }
-    return updated;   // the updated meta (or {ok:false} from the store)
+    // Two turns asking about the same picture share one look.
+    const running = _describing.get(meta.id);
+    if (running) return await running;
+    const look = lookAt(meta, settings, { fetchFn }).finally(() => _describing.delete(meta.id));
+    _describing.set(meta.id, look);
+    return await look;
   } catch (err) {
     return { ok: false, reason: `describe-failed: ${err?.message ?? err}` };
+  }
+}
+
+// asset id → the promise of its running describe (0.14.123). In memory: a
+// restart drops a running describe, and the next turn that needs it starts one.
+const _describing = new Map();
+
+/** Whether this asset is being looked at right now. */
+export function describeInFlight(id) {
+  return _describing.has(id);
+}
+
+/**
+ * Wait for this asset's running describe and return its result, or the meta as
+ * it stands when none is running. null when the asset is gone. Never throws.
+ */
+export async function settledDescribe(idOrSlug) {
+  try {
+    const meta = await getAssetMeta(idOrSlug);
+    if (!meta) return null;
+    const running = _describing.get(meta.id);
+    return running ? await running : meta;
+  } catch { return null; }
+}
+
+/**
+ * Every connection I can describe with, in order (0.14.123): the vision
+ * connection, then my human's fallback order, then any other saved connection
+ * that can describe. One z.ai coding-plan key is one describer however many
+ * connections carry it. Just the first with `visionDescribeFallbacks: false`;
+ * [] when nothing can describe.
+ */
+export async function describeChain(settings = {}) {
+  const first = await resolveVisionConnection(settings);
+  if (!first) return [];
+  if (settings?.visionDescribeFallbacks === false) return [first];
+  const chain = [first];
+  const same = (a, b) => a === b || (a?.id && a.id === b?.id)
+    || (a?.provider === 'zai-coding' && b?.provider === 'zai-coding' && a.apiKey === b.apiKey);
+  const rest = [
+    ...connectionChain(settings, first).slice(1),
+    ...(Array.isArray(settings.connections) ? settings.connections : []),
+  ];
+  for (const c of rest) {
+    if (!c || chain.some(x => same(x, c))) continue;
+    if (await isDescribeCapable(c, settings)) chain.push(c);
+  }
+  return chain;
+}
+
+// What a permanent failure is tied to: a different chain, or the converter
+// arriving, means it's worth another try.
+function describeSetup(chain, converter) {
+  return `${chain.map(c => `${c.provider}:${c.model}:${c.id ?? ''}`).join('|')}#${converter ? 'convert' : 'as-is'}`;
+}
+
+// One look at a picture, down the chain. Never throws.
+async function lookAt(meta, settings, { fetchFn }) {
+  try {
+    const chain = await describeChain(settings);
+    // Honest null: no eye to look with. Stays null so a later consumer, once a
+    // capable connection exists, still describes it.
+    if (!chain.length) return { ok: false, reason: 'no-vision-connection' };
+    const setup = describeSetup(chain, await loadSharp());
+    const prior = meta.describeFailure;
+    if (prior?.permanent && prior.setup === setup) return { ok: false, reason: prior.reason, kind: prior.kind, cached: true };
+
+    const got = await getAsset(meta.id);
+    if (got?.ok === false || !got?.buffer) return { ok: false, reason: 'bytes-unreadable' };
+    const input = await prepareDescribeInput({ buffer: got.buffer, mime: got.meta.mime });
+    const prompt = substituteMacros(DESCRIBE_PROMPT, settings);
+    const asset = meta.slugs?.[0] ?? meta.id;
+    const misses = [];
+    for (const conn of chain) {
+      const t0 = Date.now();
+      let r = await describeWith(conn, input, prompt, { fetchFn });
+      const clean = r.ok ? sanitizeExternal(String(r.text || '').trim(), { source: 'image', context: 'image-description' }) : '';
+      if (r.ok && !clean) r = { ok: false, reason: 'empty-description', kind: 'error' };
+      appendVisionEventLog({
+        event: 'describe', asset, ...connectionLabel(conn), ms: Date.now() - t0, ok: r.ok,
+        ...(r.ok ? {} : { reason: String(r.reason ?? '').slice(0, 200), kind: r.kind }),
+        ...(input.converted ? { converted: input.from } : {}), ...(input.note ? { note: input.note } : {}),
+      });
+      if (!r.ok) {
+        console.warn(`[vision] describe of ${asset} on ${connectionLabel(conn).connection} didn't come through: ${r.reason}`);
+        misses.push(r);
+        continue;
+      }
+      const updated = await setAssetDescription(meta.id, { text: clean, by: r.by, at: new Date().toISOString() });
+      // A description landing for an already-linked image graduates onto each
+      // linked node (§6.5). Fire-and-forget — never blocks describe, never throws.
+      for (const l of (Array.isArray(updated?.links) ? updated.links : [])) {
+        if (l?.nodeId) graduateImageDescriptionToNode(meta.id, l.nodeId).catch(() => {});
+      }
+      return updated;   // the updated meta (or {ok:false} from the store)
+    }
+    // Permanent only when every describer turned the file itself away.
+    const permanent = misses.every(m => m.kind === 'format' || m.kind === 'too-big');
+    const kind = !permanent ? 'error' : misses.every(m => m.kind === 'too-big') ? 'too-big' : 'format';
+    const reason = misses[misses.length - 1]?.reason ?? 'no-describer';
+    await setAssetDescribeFailure(meta.id, { reason, kind, permanent, setup, at: new Date().toISOString(), tried: misses.length });
+    return { ok: false, reason, kind };
+  } catch (err) {
+    return { ok: false, reason: `describe-failed: ${err?.message ?? err}` };
+  }
+}
+
+// One describer's look at the prepared copy: { ok:true, text, by } or
+// { ok:false, reason, kind } where kind is 'format' / 'too-big' (the file
+// itself) or 'error' (anything else). Never throws.
+async function describeWith(conn, input, prompt, { fetchFn }) {
+  const by = { provider: conn.provider, model: conn.model };
+  if (conn.provider === 'zai-coding') {
+    // Coding-plan vision: describe through z.ai's Vision MCP allotment, NOT
+    // the chat endpoint (the coding chat models can't take images). It takes
+    // only JPG/PNG up to 5 MB, so a copy it would refuse never makes the call.
+    const refusal = zaiRefusal(input);
+    if (refusal) {
+      return { ok: false, kind: refusal, reason: refusal === 'format' ? `z.ai's describer takes only JPG and PNG (this is ${input.mime})` : "over the 5 MB z.ai's describer takes" };
+    }
+    try {
+      // Dynamic import keeps the MCP spawn out of vision.js's static graph.
+      const { describeViaZaiVision } = await import('./zai-vision.js');
+      const r = await describeViaZaiVision({ apiKey: conn.apiKey, buffer: input.buffer, mime: input.mime, prompt });
+      if (r?.ok === false) return { ok: false, reason: r.reason, kind: isImageFileRefusal(r.reason) ? 'format' : 'error' };
+      return { ok: true, text: r?.text, by: r?.by ?? by };
+    } catch (err) {
+      return { ok: false, reason: `zai-vision-failed: ${err?.message ?? err}`, kind: 'error' };
+    }
+  }
+  const messages = [{
+    role: 'user',
+    content: [
+      { type: 'text', text: prompt },
+      { type: 'image_url', image_url: { url: `data:${input.mime};base64,${input.buffer.toString('base64')}` } },
+    ],
+  }];
+  try {
+    const text = await callProviderChat({
+      provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+      messages, maxTokens: 4000, temperature: 0.4, fetchFn,
+      reasoningEffort: resolveReasoningEffort(conn),
+    });
+    return { ok: true, text, by };
+  } catch (err) {
+    return { ok: false, reason: `describe-call-failed: ${err?.message ?? err}`, kind: 'error' };
   }
 }
 
@@ -598,7 +696,9 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
  * until a later turn. Cached (describeAsset never regenerates), so repeats are
  * free. Bounded: at most `max` images, newest-first, each with a wall-clock
  * cap — a slow describe (e.g. a first MCP spawn) times out and finishes in the
- * background rather than hanging the turn. Never throws.
+ * background rather than hanging the turn. Never throws. `pending` lists the
+ * assets still being looked at when the wait ran out — the turn answers them
+ * as "still looking", and a surface that can come back to them does (late-look.js).
  */
 export async function ensureDescribed(messages, settings = {}, { fetchFn = fetch, max = 6, perImageTimeoutMs = 25000 } = {}) {
   const ids = [];
@@ -610,6 +710,7 @@ export async function ensureDescribed(messages, settings = {}, { fetchFn = fetch
   }
   const targets = ids.reverse().slice(0, max);   // newest-first, capped
   let described = 0;
+  const pending = [];
   for (const id of targets) {
     let meta;
     try { meta = await getAssetMeta(id); } catch { continue; }
@@ -624,6 +725,7 @@ export async function ensureDescribed(messages, settings = {}, { fetchFn = fetch
     if (res === '__timeout__') {
       console.warn(`[vision] describe of ${String(id).slice(0, 8)} exceeded ${perImageTimeoutMs}ms — finishing in the background`);
       p.catch(() => {});
+      pending.push(meta.id);
     } else if (res && res.ok !== false && res.description) {
       described++;
     } else if (res && res.ok === false) {
@@ -632,7 +734,7 @@ export async function ensureDescribed(messages, settings = {}, { fetchFn = fetch
       console.warn(`[vision] describe of ${String(id).slice(0, 8)} FAILED: ${res.reason ?? 'unknown'}`);
     }
   }
-  return { described };
+  return { described, pending };
 }
 
 // ── Description → node graduation (§6.5) ──────────────────────────

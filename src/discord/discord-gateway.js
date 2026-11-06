@@ -47,6 +47,7 @@ import { logTurn, toolNames, turnLogEnabled } from '../diagnostics/turn-log.js';
 import { catchPromisesAfterTurn } from '../schedule/promise-catch.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
+import { watchLateLook } from '../vision/late-look.js';
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
 import { parseGifEmbeds, labelFromGifPage, mediaFilename, gifEmbedsDisabled } from './discord-gif-embeds.js';
 import { hearVoiceNotes } from '../voice/voice-transcribe.js';
@@ -393,11 +394,12 @@ async function fireRevisit(item) {
   }
 
   const directedAt = carriedExchange(withoutBlockedLines(session.messages, registry));
+  const lateLook   = item.reason === 'late-look';
   const preamble   = presenceBlock({
     kind: 'guild', locationLabel: label, speakerName: null,
     participants: session.participants, settings,
     ambient: true, ambientStrategy: regLoc.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
-    directedAt, revisitNote: true,
+    directedAt, revisitNote: lateLook ? 'late-look' : true,
     waitStreakLine: buildWaitStreakLine({ settings }),
   });
 
@@ -413,7 +415,7 @@ async function fireRevisit(item) {
   // A revisit is a single (no-tool) call, so the anchor is appended directly.
   const convo = [
     ...history,
-    { role: 'user', content: '[— quiet moment, checking back —]' },
+    { role: 'user', content: lateLook ? '[— the picture from a moment ago: I\'ve had a look now —]' : '[— quiet moment, checking back —]' },
     ...(phMsg ? [phMsg] : []),
   ];
   const revisitAnchor = buildTimeAnchorBlock({
@@ -424,10 +426,12 @@ async function fireRevisit(item) {
       ? readWeatherNowLine({ unit: settings?.weatherUnit })
       : readWeatherVagueLine(),
   }) || '';
-  const apiMessages = [
+  // Pictures in the room's history read the same as on a live turn (stand-ins,
+  // or live image parts on a connection that sees).
+  const { messages: apiMessages } = await discordTurnVision([
     ...assembleTurnMessages({ systemContent, convo, dynamic: enriched.dynamic, depth: resolveDynamicDepth(settings) }),
     ...(revisitAnchor ? [{ role: 'system', content: revisitAnchor }] : []),
-  ];
+  ], { conn, settings, audienceTag, audienceVisible });
   recordOutgoingPrompt('discord-revisit', { messages: apiMessages, model: conn?.model, provider: conn?.provider });
 
   const rawReply = await callChat({ conn, messages: apiMessages, settings });
@@ -1003,7 +1007,9 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
   // to decide, not a default-care register, and never a bias toward silence.
   if (ambient) {
     const aimedAt = (directedAt ?? []).filter(Boolean).join(', ');
-    if (revisitNote) {
+    if (revisitNote === 'late-look') {
+      lines.push("I answered here before I'd seen a picture someone posted. I've had a look now — what I saw is in the picture's note. I can say something about it now, or stay quiet with [pass].");
+    } else if (revisitNote) {
       lines.push('I asked to check back here. I can now speak, stay quiet with [pass], or re-defer once more with [later:…].');
     }
     if (ambientStrategy === 'llm') {
@@ -2486,10 +2492,16 @@ async function fetchDiscordVideo(att, { timeoutMs = 12000 } = {}) {
 // SAME audience rule and caps apply to both.
 export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId }) {
   if (discordVisionOff()) return { attachments: [], failed: 0 };
-  // Ward always; registered villager yes; stranger never.
-  if (!decision.isWard && !decision.villager) return { attachments: [], failed: 0 };
-  const settings = readSettingsSync() || {};
   const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+  // Ward always; registered villager yes; stranger never — their pictures are
+  // never fetched or stored, only counted, so I know one was there (0.14.123,
+  // ward-approved; see mediaArrivalNote).
+  if (!decision.isWard && !decision.villager) {
+    const images = atts.filter(isDiscordImageAttachment).length;
+    const videos = atts.filter(a => !isDiscordImageAttachment(a) && isDiscordVideoAttachment(a)).length;
+    return { attachments: [], failed: 0, notKept: { images, videos } };
+  }
+  const settings = readSettingsSync() || {};
   const videoOff = process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1';
   // Images first, then video — a mixed message favours the pictures under the cap.
   const items = [
@@ -2548,6 +2560,26 @@ export async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId
 }
 
 /**
+ * The note a Discord message carries for media that didn't come in: a fetch
+ * that failed, and pictures/videos from someone not in the village, which the
+ * app never keeps. Appended to the message's content, '' when there's nothing.
+ */
+export function mediaArrivalNote({ failed = 0, notKept = null } = {}) {
+  const lines = [];
+  if (failed > 0) lines.push('[image failed to load]');
+  const images = notKept?.images ?? 0;
+  const videos = notKept?.videos ?? 0;
+  const n = images + videos;
+  if (n > 0) {
+    const what = n === 1 ? (images ? 'a picture' : 'a video')
+      : images && videos ? `${n} pictures and videos`
+      : `${n} ${images ? 'pictures' : 'videos'}`;
+    lines.push(`[${what} from someone I don't know — the app doesn't keep those, so I can't see ${n === 1 ? 'it' : 'them'}]`);
+  }
+  return lines.length ? `\n${lines.join('\n')}` : '';
+}
+
+/**
  * A guild channel with no Location entry just had activity. Two jobs, both
  * fire-and-forget so a turn is never blocked:
  *   1. Remember the SERVER it belongs to — names the Locations server list
@@ -2598,8 +2630,9 @@ async function observeMessage(gw, msg, decision) {
   // Ingest image attachments at arrival (§5) — observing counts too, so when
   // someone finally turns to me I can see what the room was looking at. A
   // failed fetch degrades to a visible note, never blocks.
-  const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordMedia(msg, decision, { audienceTag, sessionId: session.sessionId });
-  const failNote = obsFailed > 0 ? '\n[image failed to load]' : '';
+  const obsMedia = await ingestDiscordMedia(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const obsAttachments = obsMedia.attachments;
+  const failNote = mediaArrivalNote(obsMedia);
   const wardName = (readSettingsSync()?.userName || '').trim() || 'my human';
   const userContent = attributeUserContent({
     isWard: decision.isWard, kind: decision.kind, speakerName: decision.speakerName, wardName, content,
@@ -2627,13 +2660,79 @@ async function observeMessage(gw, msg, decision) {
 // The turn's recorder settles however the turn ends: a turn abandoned after its
 // tools ran keeps a cut-off note beside them (turn-record.js).
 async function handleTurn(gw, msg, decision, turn = null) {
-  const recHolder = { rec: null };
+  const recHolder = { rec: null, lateLook: null };
   try { return await answerTurn(gw, msg, decision, turn, recHolder); }
-  finally { await recHolder.rec?.settle(); }
+  finally {
+    await recHolder.rec?.settle();
+    // Started after the turn is done, so the late look can't run beside it.
+    if (recHolder.lateLook) startLateLook(recHolder.lateLook);
+  }
+}
+
+// The vision step of a Discord turn (§3), shared by a live turn and a revisit:
+// the same seam as the web path, applied once to the assembled array so it rides
+// every tool round. Gated turn → the room's visible-audience set (fail-closed);
+// ward → no gate. A blind connection (text-only, or z.ai-coding describe-only)
+// gets the shared images described first, bounded and timed, so their stand-ins
+// say what I saw on THIS turn; `pending` lists the ones still being looked at.
+// Never throws into the reply path.
+async function discordTurnVision(apiMessages, { conn, settings, audienceTag, audienceVisible }) {
+  const out = { messages: apiMessages, visionCapable: false, pending: [] };
+  if (discordVisionOff()) return out;
+  try {
+    out.visionCapable = await resolveVisionCapable(conn, settings);
+    if (!out.visionCapable) {
+      const d = await ensureDescribed(apiMessages, settings);
+      if (d.described) console.log(`[discord] described ${d.described} image(s) before the turn`);
+      out.pending = d.pending ?? [];
+    }
+    const mat = await materializeAttachments(apiMessages, {
+      connection: conn, settings,
+      visibleAudiences: audienceTag === 'ward-private' ? null : audienceVisible,
+    });
+    out.messages = mat.messages;
+    if (mat.imagesLive || mat.imagesStoodIn) console.log(`[discord] vision: ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s) (audience=${audienceTag})`);
+    // Anything still undescribed (over the sync cap) gets a background look.
+    for (const id of (mat.stoodInUndescribed ?? [])) {
+      describeAsset(id, settings).catch(() => {});
+    }
+  } catch (err) {
+    console.error('[discord] vision materialize failed (passing through):', err?.message ?? err);
+  }
+  return out;
+}
+
+// When I last started answering in each room — a late look is only worth it
+// when I haven't answered there since (that turn already saw the picture).
+const _lastAnsweredAt = new Map();
+
+// Wait for the pictures a turn answered while still looking; when they land in
+// time and I haven't answered in that room since, queue the room's late look.
+function startLateLook({ pending, locationKey, turnAt }) {
+  watchLateLook({
+    pending, turnAt, where: locationKey,
+    queue: async (assetIds) => {
+      if ((_lastAnsweredAt.get(locationKey) ?? 0) > turnAt) return;
+      await queueLateLookRevisit(locationKey, assetIds);
+    },
+  }).catch(() => {});
+}
+
+// A late look rides the revisit queue: a real turn in the room supersedes it,
+// and it can't re-defer ([later:] reads as a pass).
+async function queueLateLookRevisit(locationKey, assetIds) {
+  const list = await readRevisits();
+  await writeRevisits([...list, {
+    id: randomUUID(), locationKey, dueAt: Date.now(), deferCount: REVISIT_MAX_DEFER,
+    queuedAt: new Date().toISOString(), reason: 'late-look', assetIds,
+  }]);
+  armRevisitTimer().catch(() => {});
 }
 
 async function answerTurn(gw, msg, decision, turn, recHolder) {
   const turnSignal = turn?.signal;
+  const turnAt = Date.now();
+  _lastAnsweredAt.set(decision.locationKey, turnAt);
   const settings = readSettingsSync();
   const registry = await getRegistry();
   await loadRateLimits();
@@ -2895,8 +2994,9 @@ async function answerTurn(gw, msg, decision, turn, recHolder) {
   // as the web chat (attributeUserContent gates on decision.kind).
   // Ingest this message's image attachments at arrival (§5) — stored beside
   // the content, materialized into provider image parts just before the call.
-  const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordMedia(msg, decision, { audienceTag, sessionId: session.sessionId });
-  const turnFailNote = turnFailed > 0 ? '\n[image failed to load]' : '';
+  const turnMedia = await ingestDiscordMedia(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const turnAttachments = turnMedia.attachments;
+  const turnFailNote = mediaArrivalNote(turnMedia);
   const wardName = (settings?.userName || '').trim() || 'my human';
   const userContent = attributeUserContent({
     isWard: decision.isWard, kind: decision.kind, speakerName: decision.speakerName, wardName, content,
@@ -3013,30 +3113,13 @@ async function answerTurn(gw, msg, decision, turn, recHolder) {
   // `ensureDescribed` missed when vision shipped.
   await hearVoiceNotes(apiMessages, { rootDir: __dirname, label: 'discord' });
 
-  let visionCapableTurn = false;
-  if (!discordVisionOff()) {
-    try {
-      visionCapableTurn = await resolveVisionCapable(conn, settings);
-      // Blind chat connection (text-only, or z.ai-coding describe-only) →
-      // describe the shared images NOW so their stand-ins carry a real
-      // description on THIS turn, not "not yet described". Bounded + timed.
-      if (!visionCapableTurn) {
-        const d = await ensureDescribed(apiMessages, settings);
-        if (d.described) console.log(`[discord] described ${d.described} image(s) before the turn`);
-      }
-      const mat = await materializeAttachments(apiMessages, {
-        connection: conn, settings,
-        visibleAudiences: audienceTag === 'ward-private' ? null : audienceVisible,
-      });
-      apiMessages = mat.messages;
-      if (mat.imagesLive || mat.imagesStoodIn) console.log(`[discord] vision: ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s) (audience=${audienceTag})`);
-      // Anything still undescribed (over the sync cap) gets a background look.
-      for (const id of (mat.stoodInUndescribed ?? [])) {
-        describeAsset(id, settings).catch(() => {});
-      }
-    } catch (err) {
-      console.error('[discord] vision materialize failed (passing through):', err?.message ?? err);
-    }
+  const vision = await discordTurnVision(apiMessages, { conn, settings, audienceTag, audienceVisible });
+  apiMessages = vision.messages;
+  const visionCapableTurn = vision.visionCapable;
+  // Pictures still being looked at when the wait ran out: in a room I can come
+  // back to (a registered location), the room gets one more turn once they land.
+  if (vision.pending.length && decision.kind === 'guild' && regLoc) {
+    recHolder.lateLook = { pending: vision.pending, locationKey: decision.locationKey, turnAt };
   }
 
   // Ground truth for the prompt inspector: what this Discord turn actually sends
