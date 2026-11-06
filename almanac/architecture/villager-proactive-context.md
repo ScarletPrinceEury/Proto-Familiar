@@ -53,6 +53,9 @@ sources:
   - id: village-tools-test
     type: file
     path: tests/village-tools.test.mjs
+  - id: villager-reach-check-js
+    type: file
+    path: src/warmth/villager-reach-check.js
 ---
 
 # Villager proactive context
@@ -137,6 +140,41 @@ that gap:
   ward bookkeeping (see
   [Slice provenance is captured at the read](../decisions/slice-provenance-captured-at-read)) and
   must never ride into a villager-facing turn [@villager-context-js] [@reach-out-log-js].
+
+### A reach-out holds rather than sends when its privacy check can't run (0.14.125)
+
+`deliverVillagerReach` sends a warm reach-out to a villager's DM the same way a relay leaves the
+ward's own room, so it goes through a privacy search first: the draft is checked against what is
+stored as restricted for that person, the same semantic check the Pillar D outgoing gate
+(`src/safety/outgoing-filter.js`, see [Outgoing tripwire](outgoing-tripwire)) runs on a live room
+reply. Before this fix, `deliverVillagerReach` caught any error the check threw and sent the
+reach-out anyway, with only the keep-between-us swap still applied. In practice the check could
+never actually throw: both Phylactery's `search_restricted` and `thalamus.searchMemoryRestricted`
+swallowed their own errors internally and answered `{hit: false}` on failure, so a Phylactery
+outage looked identical to "nothing restricted found" — the reach-out always went out.
+
+The fix adds a `failed: true` flag beside `hit: false` specifically for an error case, so "no
+match" and "the check couldn't run" are no longer the same return value [@villager-reach-check-js].
+This is additive: a live room reply through `filterOutgoingReply` still reads only `hit` and keeps
+failing open exactly as the Pillar D build spec (§7) signed off — a down memory store must not
+silence the Familiar mid-conversation in a room it is already speaking in.
+
+`checkVillagerReach({ villager, draft, loadRegistry, searchRestricted })`
+(`src/warmth/villager-reach-check.js`) is the new gate `deliverVillagerReach` calls before
+sending, and it holds the reach-out — rather than sending it — on any of: a confirmed hit (as
+before); the Village list failing to load; or the restricted search throwing, reporting `failed`,
+or returning something that isn't a well-formed `{hit: boolean}` answer [@villager-reach-check-js].
+A held reach-out returns `{ok: false, error: 'held: ...'}`, is logged as `delivery_failed` in
+`logs/reachout-events.jsonl`, and simply is not sent — the Familiar is never told a reach-out was
+attempted, so there is nothing for it to confabulate about, and the next deliberation cycle starts
+fresh rather than retrying the same held draft [@villager-reach-check-js].
+
+**The asymmetry between this and the live-reply gate is deliberate, not an inconsistency.** A
+background reach-out can simply wait until the next deliberation cycle at no real conversational
+cost, so it fails *closed*. A live reply the ward or a villager is already mid-conversation with
+cannot wait on a down memory store without going silent at the worst possible moment, so it keeps
+failing *open*, per the Pillar D build spec's existing sign-off. Two different failure directions
+for two different costs of being wrong, both deliberate.
 
 ## Stage 2 — gated recent memory ("what we've been talking about")
 
@@ -276,6 +314,13 @@ and simply omits that sub-block rather than failing the turn [@villager-context-
    injected: a non-matching id is downgraded to a ward tell instead of trusted or dropped, keeping
    the [exact-values-are-code's-job](../decisions/exact-values-in-code) discipline on a field the
    model itself fills in, not just on timestamps and UIDs [@pondering-js].
+6. **A function that swallows its own errors erases the distinction a caller needs.** Before
+   0.14.125, Phylactery's `search_restricted` and `thalamus.searchMemoryRestricted` both caught
+   their own errors and returned `{hit: false}`, which made "nothing restricted was found" and
+   "the search couldn't run at all" indistinguishable to every caller — including one, the warm
+   reach-out path, that needed to treat those two outcomes oppositely. Adding a `failed: true`
+   flag for the error case, rather than fixing the one caller that got it wrong, fixed it for every
+   present and future caller at once [@villager-reach-check-js].
 
 ## Related
 
@@ -297,6 +342,9 @@ and simply omits that sub-block rather than failing the turn [@villager-context-
   villager-directed tells.
 - [Exact values are code's job](../decisions/exact-values-in-code) — the rule Stage 3 path #2
   applies to a model-proposed `recipient` id, not just to timestamps and UIDs.
+- [Outgoing tripwire](outgoing-tripwire) — the Pillar D semantic outgoing filter
+  `checkVillagerReach` reuses, and the fail-open live-room-reply behavior this feature's
+  fail-closed background-reach-out behavior deliberately diverges from.
 - [Session Memory Extraction](session-memory-extraction) — the villager legend block injected
   into memorization prompts (0.12.16), a related but distinct fix for the memorization pipeline
   reusing the same `disclosableVillagerFields` policy this feature's neighbor,

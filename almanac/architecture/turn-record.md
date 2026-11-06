@@ -124,9 +124,10 @@ incident:
 - **A voice log's audience tag now comes from its first journaled line.** Before this fix, a voice
   session's `audienceTag` was only ever stamped by its hang-up write, so a call that crashed
   before hanging up left an untagged log that the memory sweep would default to reading as
-  ward-private regardless of who was actually on the call. A web chat log still carries no tag —
-  which circle a shared web chat's facts belong to is a separate, open ward decision, not something
-  this fix addresses.
+  ward-private regardless of who was actually on the call. A web chat log carrying no tag was,
+  at the time of this fix, a separate, open ward decision rather than something this fix
+  addressed; [Shared web chat](shared-web-chat) (0.14.122) closed that gap by having `begin()`
+  stamp `meta.audienceTag` onto the ward's message whenever the room isn't `ward-private`.
 - **Memorization skips app notes.** `isReadableMessage`, which memorization's `filterReadable`
   now *is* rather than merely calls, excludes the `app-note` kind these cut-off and claim-check
   notes carry, so a cut-off note or an unbacked-claim note is never mistaken for something the
@@ -167,3 +168,5 @@ complexity for an unobserved case.
   B (budget exhaustion is never silence), which the cut-off note is one instance of.
 - [Plain facts about limits, never a verdict](../decisions/plain-facts-about-limits) — the voice
   rule the cut-off note and the unbacked-claim note both follow.
+- [Shared web chat](shared-web-chat) — the 0.14.122 feature that gave the web chat the
+  per-message `audienceTag` this page's voice-log note once flagged as a missing piece.

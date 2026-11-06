@@ -11,6 +11,9 @@ sources:
   - id: discord-gateway-js
     type: file
     path: src/discord/discord-gateway.js
+  - id: server-js
+    type: file
+    path: server.js
 ---
 
 # Outgoing tripwire: catching private material on the way out
@@ -84,6 +87,27 @@ so a reply can be privacy-redacted and separately content-gated before it ever r
 channel [@discord-gateway-js]. `relay_message` and warm reach-out both check before composing the
 delivery, so a held relay never partially sends.
 
+## Telling the Familiar up front, not just catching it after (0.14.124)
+
+Everything above catches private material already drafted. `othersPresentLine({ voice })` goes
+the other direction: it is a first-person instruction the Familiar reads *before* it speaks,
+turning the same class of thing this module catches into something it is told to leave out in
+the first place — "Other people can read this, so I leave out codes, ids, links, contact info and
+anyone's full real name." (or "hear this" when `voice: true`) [@outgoing-tripwire-js]. This is not
+a third check layered onto the two above; the pattern and keep-between-us checks still run
+unchanged on whatever the Familiar actually drafts.
+
+The line is injected wherever a room is known to have someone other than the ward in it:
+`presenceBlock()` includes it for Discord `guild` and `villager-dm` rooms but never for
+`ward-dm` [@discord-gateway-js]; the web chat and voice paths in `server.js` append it beside the
+`[Now]` time anchor whenever the resolved `audienceTag` isn't `ward-private` [@server-js]. Before
+this, the web chat in particular told the Familiar nothing about
+who else was present unless a registered villager happened to be in the room or was actively
+typing — see [A room's audience that can't be resolved falls back toward
+strangers](../decisions/audience-resolution-fails-to-strangers) for the companion fix that landed
+in the same pass, closing a related gap where an unreadable Village registry resolved a
+someone-else-present room as the ward's own private one instead.
+
 ## Related
 
 - [Injection guard: wiring history](injection-guard-gap) — the inbound counterpart: pattern
@@ -94,3 +118,11 @@ delivery, so a held relay never partially sends.
 - [Location Privacy](../decisions/location-privacy) — a different, narrower structural privacy
   boundary (coordinates never reach the model at all) for a comparison of "never generated" versus
   "generated but caught on the way out."
+- [A room's audience that can't be resolved falls back toward strangers](../decisions/audience-resolution-fails-to-strangers) —
+  the 0.14.124 decision `othersPresentLine` shipped alongside: a failed Village registry read
+  during room resolution must land on the narrowest gate, never the ward's own.
+- [Shared web chat](shared-web-chat) — the 0.14.122 feature that first gave the web chat a
+  per-message room concept, which is what made a room-resolution failure on this surface possible.
+- [Villager proactive context](villager-proactive-context) — a different privacy check on an
+  outbound message, the Pillar D semantic filter applied to a warm reach-out instead of a live
+  room reply, and the fail-closed-instead-of-open direction that makes sense for it.

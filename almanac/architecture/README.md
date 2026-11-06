@@ -170,6 +170,12 @@ room reply, or a warm reach-out — for the ward's own private material (a kept-
 or something merely shaped like a name-turned-handle, a code, or contact info), holding a relay
 that matches for the ward's own release rather than the Familiar's.
 
+The ward's own web chat gained the same room-awareness Discord's guild rooms already had:
+[Shared web chat](shared-web-chat) stamps a per-message `audienceTag` whenever someone else is
+present (via "Speaking as"), so a fact the ward says about themselves in front of that person is
+filed to memory at the room they were actually in, not at `ward-private`, and a reply to that
+room is never streamed past the outgoing gate.
+
 A separate, narrower naming gate governs who may type in the ward's own *web* chat box rather
 than who the Familiar may be present with elsewhere: `web-speakers.js` lets the ward list other
 people (and, as its first consumer, the Claude Code coding agent) who may speak there without
@@ -240,6 +246,9 @@ If you're asking yourself... go to:
   phrasing before it reaches Phylactery.
 - [Turn record](turn-record) — how one turn is written into its session log incrementally, as
   it happens, on every surface, and why a turn whose tools ran can never be run a second time.
+- [Shared web chat](shared-web-chat) — the per-message `audienceTag` that lets the ward's web
+  chat gate a message, a memorized fact, and a reply to whoever was actually in the room at the
+  time, instead of always defaulting to `ward-private`.
 - [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
   manual close-out mechanism for sessions that never received an `endedAt` timestamp.
 - [Data ingestion](data-ingestion) — importing conversation logs from other platforms and

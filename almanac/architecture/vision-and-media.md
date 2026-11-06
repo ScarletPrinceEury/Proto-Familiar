@@ -44,6 +44,18 @@ sources:
   - id: discord-gif-embeds-js
     type: file
     path: src/discord/discord-gif-embeds.js
+  - id: describe-input-js
+    type: file
+    path: src/vision/describe-input.js
+  - id: late-look-js
+    type: file
+    path: src/vision/late-look.js
+  - id: no-ignored-source-test
+    type: file
+    path: tests/no-ignored-source.test.mjs
+  - id: vision-describe-build-spec
+    type: file
+    path: docs/vision-describe-build-spec.md
 ---
 
 # Vision and Media Input
@@ -276,6 +288,95 @@ The gifs people actually pick on Discord — from the Tenor/Giphy picker, or a p
 
 **Testing**: pure-module tests for `discord-gif-embeds.js` plus a pipeline test that feeds `ingestDiscordMedia()` a real `gifv` embed shape with a stubbed `fetch` and asserts a saved `video` asset comes out — exercising the wiring, not just the pure functions, per CLAUDE.md's pipeline-test discipline [@claude-md] (see also [Voice](voice)).
 
+## Describe-chain fallback, a per-describer image copy, and the late look (0.14.123)
+
+Two gaps meant the Familiar sometimes answered a picture it had never actually seen. The z.ai
+Coding Plan's Vision MCP describer (`file-service.js`, read from its own installed source) takes
+only `.jpg`/`.jpeg`/`.png` up to 5 MB and flatly refuses anything else — a shared WebP screenshot
+was never described at all — and a large PNG render could take 30 seconds to two minutes to
+describe, longer than `ensureDescribed()`'s 25-second per-image wait, so the stand-in the model
+read still said "not yet described" on the very turn the image arrived [@describe-input-js].
+
+**A copy built for the describer, never the stored bytes.** `prepareDescribeInput({ buffer,
+mime })` in the new `src/vision/describe-input.js` module decides what a describer actually
+receives: a JPG or PNG at or under 1 MB (`KEEP_AS_IS_BYTES`) goes through untouched, so a small
+PNG screenshot keeps its crisp, losslessly-rendered text; anything else is converted to a JPEG at
+the same 1568-pixel long edge the store already caps images to (`DESCRIBE_EDGE`), via a
+rotate → resize-inside → flatten-on-white → quality-85 pipeline [@describe-input-js]. A plain
+image the JPEG re-encode didn't actually shrink is sent as-is rather than as a needlessly
+re-encoded copy. The stored asset on disk is never touched — only the bytes a describer sees
+change, and only for that one describe call. The converter, `sharp`, is a new dependency loaded
+lazily (`loadSharp()`); when it fails to install or load, the stored bytes go through exactly as
+before, with a console warning, rather than the describe path throwing [@describe-input-js].
+
+**`describeAsset()` walks a chain of describers instead of stopping at the first.**
+`describeChain(settings)` in `vision.js` returns the ward's vision connection first, then the
+rest of their configured fallback order (`connectionChain`), then any other saved connection that
+can describe at all — deduplicating two connections that are really the same z.ai-coding key
+under different names [@vision-js]. The setting `visionDescribeFallbacks` (default on) can pin
+the chain to just the first connection. Describing an asset only ever runs once at a time per
+asset: `_describing`, an in-memory map keyed by asset id, lets a second turn asking about the
+same still-loading picture await the same in-flight promise (`describeInFlight(id)`,
+`settledDescribe(id)`) instead of starting a redundant second describe [@vision-js].
+
+**A permanent refusal is recorded and not retried blindly.** When every describer in the chain
+turns a picture away for the *file itself* — every miss's `kind` is `'format'` or `'too-big'` —
+`meta.describeFailure` is set to `{reason, kind, permanent, setup, at, tried}`, where `setup` is a
+fingerprint of the chain and whether the converter was available (`describeSetup`)
+[@vision-js]. A later describe attempt skips straight past a cached permanent failure unless
+`setup` changed — a new fallback connection was added, or `sharp` became available — so a
+WebP that could never be described yesterday is retried automatically the day the ward installs
+the converter or adds a capable connection, without any manual "try again" [@vision-js]. A
+successful describe clears the failure outright.
+
+**A stand-in's wording says exactly where a picture stands**, read from `buildStandin()` in
+`media.js`: "what I saw when I looked: …" once described; "I'm still looking at this one" while a
+describe is in flight; "I couldn't get a look at this one — my image reader doesn't take WebP
+files" (or "…it's too big") for a permanent file-shape failure; "I tried to look at this one and
+it didn't come through" for a non-permanent miss; "I haven't looked at this one yet" when nothing
+has been tried [@media-js]. The chat system prompt states the convention plainly: a note without
+"what I saw when I looked" is a picture the Familiar has not actually seen, so it must not guess
+at or invent what is in it.
+
+**Every describe attempt is logged**, win or lose, to `logs/vision-events.jsonl`
+(`appendVisionEventLog`), surfaced at `GET /api/vision-events` and the Loops & logs → Pictures tab
+[@vision-js] [@server-js].
+
+**The late look.** `src/vision/late-look.js`'s `watchLateLook({ pending, turnAt, queue, where })`
+is what lets a Discord room that answered while `ensureDescribed()` was still waiting come back to
+a picture once its description actually lands: if a pending asset's describe settles with a real
+description within `LATE_LOOK_WINDOW_MS` (10 minutes) of the original turn, the surface's `queue`
+callback fires once with the newly-landed asset ids, producing one revisit turn — "oh, now I see
+it" — that the Familiar can still choose to say nothing in [@late-look-js]. A picture is claimed
+for at most one late look ever, tracked by an in-memory `_claimed` set; a describe that never
+lands releases the claim so a later turn waiting on the same picture can watch for it again
+[@late-look-js]. A revisit that lands outside the window is logged (`reason: 'landed too late'`)
+but never queued, and a real new turn in the same room supersedes a still-pending late look rather
+than competing with it. `fireRevisit` (the existing deferred-turn mechanism Discord already uses
+for other delayed context) now also materializes pictures, so a late-look revisit can actually
+show the image, not just mention it [@discord-gateway-js]. Discord DMs and the web chat do not
+have this revisit mechanism yet — a named, deferred gap rather than a silent one
+[@vision-describe-build-spec].
+
+**A stranger's Discord picture is still never fetched** — the ward-always / registered-villager-yes /
+stranger-never rule from Discord image ingest above is unchanged — but the message now tells the
+Familiar one arrived: `mediaArrivalNote({ failed, notKept })` appends
+`[a picture from someone I don't know — the app doesn't keep those, so I can't see it]` (pluralized
+for more than one, and combined with a separate `[image failed to load]` line when a kept fetch
+also failed) [@discord-gateway-js]. Before this, a stranger's unfetched picture left no trace at
+all in the message content.
+
+**A side effect in an unrelated test revealed a self-skipping test.** Installing `sharp` as a
+dependency pushed the project's ignored-file listing (`git status --ignored`, used by
+`tests/no-ignored-source.test.mjs` to check no source file is accidentally gitignored) past
+`execFileSync`'s default 1 MB `maxBuffer`, and Node reports a buffer overflow with the same
+`ENOENT`-shaped failure the test's `catch` block used to detect "no git on this machine" and skip
+itself [@no-ignored-source-test]. The fix raises `maxBuffer` to 256 MB and narrows the catch to
+only skip on an actual `ENOENT`, letting every other error fail the test loudly
+[@no-ignored-source-test]. The lesson generalizes beyond this one test: a test that can skip
+itself on an *unexpected* error, not just the one condition it was written to tolerate, is a test
+that can stop running without anyone noticing.
+
 ## Image descriptions feeding threat scoring
 
 Starting in 0.9.2-alpha (PR #219), image descriptions are also consumed by the safety spine: `scoreImageDescriptionThreat()` scores the description using the same crisis-signals pattern matcher that scores typed text, then feeds any positive delta through `recordThreat()` with `source:'vision'` [@vision-js]. The mechanism is orchestration around existing `crisis-signals.js` and `threat-tracker.js`; neither scorer nor tracker changed [@vision-js]. Three constraints are ward-signed: full weighting (image signals count the same as typed distress, no damping), raise-only (images can only increase threat, never lower it), and ward-images-only (only images marked `audienceTag === 'ward-private'` move threat, so villagers' shared bytes never alter the ward's safety state) [@vision-js].
@@ -316,6 +417,12 @@ The feature is known to false-positive on fictional violence (horror film stills
 - **Tenor/Giphy gif embeds as watchable media** (0.11.116-alpha): a picker gif's `gifv` embed is
   ingested as a video or thumbnail image, closing the gap the 0.11.115 pass left open — see Tenor/
   Giphy gif embeds as watchable media above [@discord-gif-embeds-js, @discord-gateway-js].
+- **Describe-chain fallback, per-describer image copy, and the late look** (0.14.123-alpha): a
+  WebP or oversized image is converted for the describer instead of refused outright, a blind
+  connection falls back across the ward's whole fallback order instead of stopping at one
+  describer, a permanent file-shape failure is cached and auto-retried once the setup changes, and
+  a Discord room gets one revisit turn when a picture's description lands just after the turn that
+  needed it — see Describe-chain fallback above [@describe-input-js, @vision-js, @late-look-js].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.

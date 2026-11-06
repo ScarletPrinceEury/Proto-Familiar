@@ -180,11 +180,22 @@ content) [@audience-js] [@build-spec]. Phylactery's `memory.search` and
 `memory.by_timerange` accept a `topic_grants` parameter and post-filter each row
 after overfetching, so a per-row content drop still fills the caller's limit
 [@build-spec]. On the Node side, `enrich` threads `topicGrants` into
-`memory_search`; `server.js`'s `/api/chat` and `discord-gateway.js`'s
-`resolveLocationGate` derive `audienceTopics` alongside `audienceVisible`; and
-the Discord tool context carries `topicGrants` through
+`memory_search`; the Discord tool context carries `topicGrants` through
 `cerebellum.discordReadTopicGrants(ctx)`, the fail-closed (`{}`) companion to
-`discordReadAudiences` [@discord-gateway-js] [@cerebellum-js] [@build-spec].
+`discordReadAudiences` [@cerebellum-js] [@build-spec].
+
+**One shared derivation, since 0.14.124.** `server.js`'s `/api/chat` and
+`discord-gateway.js`'s `resolveLocationGate` used to derive `audienceTopics` and
+`audienceVisible` independently; they now both call `audience.js`'s single
+`roomGate(sessionAudience, registry)`, which returns `grants`, `tag`, `visible`,
+and `topics` together, so the two call sites cannot drift apart on what a room's
+gate actually is [@audience-js] [@discord-gateway-js]. The web chat path wraps
+this in `roomGateOrStranger`, which falls back to the narrowest possible
+gate — a stranger's — rather than to the ward's own unscoped view, on a Village
+registry read that fails while someone else is marked present; see [A room's
+audience that can't be resolved falls back toward
+strangers](../decisions/audience-resolution-fails-to-strangers) for why that
+fallback direction matters [@audience-js].
 
 Two paths deliberately stay outside the content gate:
 
@@ -256,6 +267,12 @@ not an architectural filter [@build-spec].
 
 - [Phylactery](phylactery) — the canonical store whose audience-native records
   provide the coarse floor this feature layers on top of.
+- [A room's audience that can't be resolved falls back toward strangers](../decisions/audience-resolution-fails-to-strangers) —
+  the shared `roomGate`/`roomGateOrStranger` derivation this page's `audienceTopics`/
+  `audienceVisible` pair now comes from, and the fail-toward-strangers rule for when the
+  registry read behind it fails.
+- [Shared web chat](shared-web-chat) — the 0.14.122 feature that gave the web chat the
+  per-message room concept `roomGateOrStranger` resolves against.
 - [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes) —
   why the underlying category/grant system is read-only gating, and why write
   protection is a separate, behavioral defense; this feature inherits that same
