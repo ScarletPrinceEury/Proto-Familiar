@@ -18,7 +18,7 @@ place instead ([Slice provenance is captured at the read](slice-provenance-captu
 keeps an inline "Update (version):" note rather than a separate superseded page, because the
 original decision still holds and only its scope narrowed.
 
-Thirty-three decisions live here. Grouped by the question each one answers:
+Thirty-five decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -60,6 +60,10 @@ reoccurring.
 - [Single-user before platform](single-user-before-platform) — the founding scoping decision that
   bounds Village and every multi-channel surface to one ward's own support network rather than a
   general multi-user platform.
+- [A room's audience that can't be resolved falls back toward strangers](audience-resolution-fails-to-strangers)
+  — the 0.14.124 fix for a web chat room whose Village registry read fails during audience
+  resolution: the general rule that such a failure must land on the narrowest known gate, never
+  on the ward's own unscoped room.
 - [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code) — settled
   decisions for letting the Familiar click and fill on the web: an in-process SSRF proxy,
   treating page content as a Village Stranger, and gating credentials, dialogs, and handoff in

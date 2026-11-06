@@ -28,7 +28,7 @@ its audience tag is what decides who may later read it. This page is the map of
 the session cluster — start here, then follow the link that matches what you need
 to know.
 
-## The six pages
+## The seven pages
 
 - **[Turn record](turn-record)** — how one turn (the ward's message, any tool rounds,
   the reply) is written into the session log incrementally, as it happens, on every
@@ -48,6 +48,9 @@ to know.
 - **[Session search](session-search)** — reading the *raw transcript* back (what was
   literally said), as distinct from recalling distilled memory; and `isWardReadableLog`
   / `sessionLogKind`, the one rule for whose conversation a log is [@session-search-js].
+- **[Shared web chat](shared-web-chat)** — how the web chat stamps a per-message
+  `audienceTag` when someone other than the ward is present, so memorization, the outgoing
+  gate, and the "Speaking as" handover all agree on whose room a message belongs to.
 
 ## How they relate
 
