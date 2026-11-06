@@ -38,7 +38,8 @@ import { sessionSlugId } from '../../slug-ids.js';
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, listVillagerTells, confirmConsentMemories, dropPendingMemories } from '../../thalamus.js';
 import { buildAvailabilityBlock } from '../schedule/schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from '../village/village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from '../village/audience.js';
+import { roomGate, audienceTagFor } from '../village/audience.js';
+import { othersPresentLine } from '../village/outgoing-tripwire.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from '../village/village-presence.js';
 import { buildVillagerContextBlock } from '../warmth/villager-context.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
@@ -946,7 +947,7 @@ export async function availabilityBlockFor(decision, audienceGrants, { getWindow
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false, waitStreakLine = '' }) {
+export function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false, waitStreakLine = '' }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -990,6 +991,7 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
       'What I remember here is filtered to this room: I only recall what this audience is cleared for, ' +
       'so anything I hold that\'s just for {{user}} and me stays out of view here — that\'s the gate working, not a hole in my memory. ' +
       'What I learn here is kept for this room\'s circle in turn.',
+      othersPresentLine(),
     );
   }
   lines.push(
@@ -1733,24 +1735,10 @@ function audienceInputFor(decision, participants) {
  *  participants } for any other room. Returns the grants enrich() fetches
  *  against and the durable audience tag stamped on the session. Shared by
  *  the live path and the deferred-revisit path so the gate can never differ
- *  between them. */
+ *  between them, and with the web chat (audience.js roomGate). */
 function resolveLocationGate(audienceInput, registry) {
-  const audienceTag = audienceTagFor(audienceInput, registry);
-  const audienceGrants = audienceInput === null ? null : resolveAudience(audienceInput, registry);
-  return {
-    audienceGrants,
-    audienceTag,
-    // The room's allowed audience-tag set for the recall gate (Pillar E) —
-    // circle MEMBERSHIP: the circles everyone present shares. Derived from the
-    // session audience (participants + location), not the room tag alone, so a
-    // ward DM (null audienceInput → sees all) and any shared room both compute
-    // it the same way the write-time tag does.
-    audienceVisible: visibleAudiences(audienceInput, registry),
-    // The room's per-topic content-tag grants (content-gating Phase 4). Derived
-    // together with audienceVisible so the coarse floor and the fine content
-    // gate can never drift between the live and deferred-revisit paths.
-    audienceTopics: topicGrantsForRoom(audienceGrants, audienceTag),
-  };
+  const { grants, tag, visible, topics } = roomGate(audienceInput, registry);
+  return { audienceGrants: grants, audienceTag: tag, audienceVisible: visible, audienceTopics: topics };
 }
 
 /** Deliver a reply I composed into a Discord channel and persist the turn.

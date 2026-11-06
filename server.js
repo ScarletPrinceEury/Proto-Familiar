@@ -194,7 +194,7 @@ import {
 } from './src/village/village.js';
 import { parseRegistryJson } from './src/village/village-registry-json.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/village-presence.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
+import { roomGateOrStranger, audienceTagFor, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
 import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
 import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { clientDisconnectSignal, upstreamSignal, upstreamFailure } from './src/server/upstream-abort.js';
@@ -207,7 +207,7 @@ import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLin
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
 import { gateRoomReply, uncheckedStreamRefusal } from './src/safety/outgoing-filter.js';
 import { searchMemoryRestricted } from './thalamus.js';
-import { redactProtected, normalizePrivateList, variantExamples } from './src/village/outgoing-tripwire.js';
+import { redactProtected, normalizePrivateList, variantExamples, othersPresentLine } from './src/village/outgoing-tripwire.js';
 import { listHeldRelays, releaseHeldRelay, dropHeldRelay, releaseRefusalText } from './src/village/held-relays.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners, setQuarantineRunners, setHeldRelayRunners } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -573,27 +573,20 @@ async function chatTurn(req, res, rec, priorTurn) {
     }
   }
   // V3: resolve session audience to an effective grants object before
-  // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
-  // rather than blocking the chat. Audience only applies on the full path.
-  // audienceTag (Pillar D): durable room label used by the outgoing filter.
+  // enrichment. Audience only applies on the full path. audienceTag (Pillar D):
+  // durable room label used by the outgoing filter. The page sends an audience
+  // only when someone else is marked present, so if the village list can't be
+  // read the room is one with a stranger in it (strangerRoomGate), never my
+  // human's own room: the chat goes on, gated as tightly as there is (0.14.124).
   let audienceGrants  = WARD_PRIVATE;
   let audienceTag     = 'ward-private';
   let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
   let audienceTopics  = null; // the room's per-topic content grants (null = ward sees all)
   let audienceRegistry = null; // the registry those were derived from (tome lore's circle check)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
-    try {
-      const registry = await getVillageRegistry();
-      audienceRegistry = registry;
-      audienceGrants  = resolveAudience(sessionAudience, registry);
-      audienceTag     = audienceTagFor(sessionAudience, registry);
-      // Pillar E recall gate — circle MEMBERSHIP: the set of circles everyone
-      // present shares (needs the session audience, not just the room tag).
-      audienceVisible = visibleAudiences(sessionAudience, registry);
-      audienceTopics  = topicGrantsForRoom(audienceGrants, audienceTag); // Phase 4 content gate (fine)
-    } catch (err) {
-      console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
-    }
+    const gate = await roomGateOrStranger(sessionAudience, getVillageRegistry);
+    if (gate.error) console.error('[server] audience resolution failed (treating the room as one with a stranger in it):', gate.error?.message ?? gate.error);
+    ({ grants: audienceGrants, tag: audienceTag, visible: audienceVisible, topics: audienceTopics, registry: audienceRegistry } = gate);
   }
   // With someone else present a reply is checked for what stays between us
   // before anyone sees it (gateRoomReply), which a stream can't wait for. The
@@ -817,7 +810,9 @@ async function chatTurn(req, res, rec, priorTurn) {
     const lastTurn = priorTurn
       ? lastTurnRecord([{ role: 'user' }, ...priorTurn.messages, { role: 'user' }], { results: audienceTag === 'ward-private' })
       : lastTurnRecord(Array.isArray(messages) ? messages : [], { results: audienceTag === 'ward-private' });
-    timeAnchor = [timeAnchor, speakerAnchorLine(otherSpeaker), lastTurn].filter(Boolean).join('\n\n');
+    // With someone else here, the room says so, and what I leave out (0.14.124).
+    const othersLine = audienceTag !== 'ward-private' ? `[${othersPresentLine({ voice: !!voiceMode })}]` : '';
+    timeAnchor = [timeAnchor, othersLine, speakerAnchorLine(otherSpeaker), lastTurn].filter(Boolean).join('\n\n');
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }

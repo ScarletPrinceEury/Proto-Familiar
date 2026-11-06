@@ -189,3 +189,13 @@ export function describeShapeHits(hits) {
   const [first, ...rest] = hits;
   return `"${first.match}" ${KIND_PHRASE[first.kind] ?? 'looks like something private'}${rest.length ? `, and there's ${rest.length} more like it` : ''}`;
 }
+
+/**
+ * The line I read wherever someone other than my human can see what I say
+ * (0.14.124, my human's wording): the shape check's list as what I leave out
+ * myself, so I don't reach for those in the first place. The checks above still
+ * run either way. `voice` is a call, where they hear it instead.
+ */
+export function othersPresentLine({ voice = false } = {}) {
+  return `Other people can ${voice ? 'hear' : 'read'} this, so I leave out codes, ids, links, contact info and anyone's full real name.`;
+}

@@ -2305,14 +2305,22 @@ tags a room with the most-trusted circle everyone SHARES (permissionScore's only
 surviving role: ranking the shared circles), so a memory written in a room
 round-trips (its tag is in that room's set by construction).
 `server.js`/`discord-gateway.js` compute
-this set and pass it into `enrich({ audiences })`, which forwards it to
+this set (with the grants, tag and topics, all from one `audience.js roomGate`
+call) and pass it into `enrich({ audiences })`, which forwards it to
 `memory_search` / `graph_node_search` / `graph_subgraph`. Phylactery's
 `audience_in_sql(audiences)` turns it into `audience IN (…)` (None → `1=1` for a
 ward room; `[]` → `0=1`); `memory.search`, `graph.search_nodes`, and
 `graph.get_subgraph` (all three fetches, incl. the subgraph endpoint backfill)
 filter through it. Fail-closed: a record tagged with a deleted/unknown category
 is absent from the set → excluded; a registry-read failure leaves
-`audiences=null` only on the ward path.
+`audiences=null` only on the ward path. In the web chat with someone marked
+present, a registry read (or audience) that fails makes the room one with a
+stranger in it (`roomGateOrStranger` → `strangerRoomGate`: nothing granted, tag
+`strangers`, outgoing check on), never my human's own room (0.14.124; it used to
+fall back to ward-private). A Discord turn can't route without the registry, so
+it doesn't reply at all. Every room someone else can read carries
+`othersPresentLine` (outgoing-tripwire.js): the Discord presence block for guild
+rooms and villager DMs, a line beside the `[Now]` anchor in the web chat.
 
 **The leak this closed (0.7.x):** the room tag was never passed, so recall
 defaulted to `ward-private` → `1=1` → ward-private memories/graph surfaced in the

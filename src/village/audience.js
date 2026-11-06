@@ -387,6 +387,43 @@ export function topicGrantsForRoom(effectiveGrants, roomTag) {
   return sanitizeTopicGrants(topics); // fail-closed: unknown/absent topics dropped → not visible
 }
 
+/**
+ * A room's whole gate in one go: the grants enrich() fetches against (`grants`),
+ * the tag stamped on what's said there (`tag`), the circles its recall may see
+ * (`visible`) and its per-topic grants (`topics`). Derived together so no caller
+ * can mix halves from different inputs. A null audience is my human's own room.
+ */
+export function roomGate(sessionAudience, registry) {
+  const grants = resolveAudience(sessionAudience, registry);
+  const tag = audienceTagFor(sessionAudience, registry);
+  return { grants, tag, visible: visibleAudiences(sessionAudience, registry), topics: topicGrantsForRoom(grants, tag) };
+}
+
+/**
+ * The gate for a room someone else is in when the village list can't be read
+ * to tell who (0.14.124, ward decision): a room with a stranger in it, with
+ * nothing granted, since what my human granted strangers is in that list too.
+ * Never my human's own room: someone is there, so nothing private is said.
+ */
+export function strangerRoomGate() {
+  return { grants: {}, tag: CATEGORY_STRANGERS, visible: [CATEGORY_STRANGERS, AUDIENCE_TAG_WARD_OPEN], topics: {} };
+}
+
+/**
+ * The gate for a room someone else is marked present in (the web chat): the
+ * room as the village list has it, or `strangerRoomGate()` when the list can't
+ * be read or the audience can't be resolved. Never throws; `error` is why it
+ * fell back (null when it didn't), and `registry` is what the gate came from.
+ */
+export async function roomGateOrStranger(sessionAudience, loadRegistry) {
+  try {
+    const registry = await loadRegistry();
+    return { ...roomGate(sessionAudience, registry), registry, error: null };
+  } catch (err) {
+    return { ...strangerRoomGate(), registry: null, error: err };
+  }
+}
+
 // ── Write-time audience derivation (Phase 2) ──────────────────────
 //
 // A memory's audience is DERIVED IN CODE from what the extractor already
