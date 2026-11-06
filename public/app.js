@@ -2992,8 +2992,17 @@ function wireCopyButton(btn, getText) {
 
 // "Speaking as" (0.14.87, ward decision): someone else at my human's keyboard
 // picks their name, so the message is theirs, not my human's. Shown only when
-// others are listed. It goes back to my human after every send, so my human's
-// own words are never sent under someone else's name by accident.
+// others are listed.
+//
+// Hand-over (0.14.122, ward decision 2026-11-01): picking someone hands them the
+// chat. It stays theirs until my human taps "Me again", or until 10 minutes pass
+// with nothing sent; a new conversation or a reload is always my human again.
+// A banner says who has it the whole time, because while it's theirs my human's
+// own words wouldn't be read for distress. Handing it over also puts them in
+// "who's here": they're reading the replies, so the room is gated for them.
+const HANDOVER_IDLE_MS = 10 * 60_000;
+let _handover = null;   // { name, lastAt, timer }
+
 function renderSpeakerPicker() {
   const sel = $('speaker-picker');
   if (!sel) return;
@@ -3013,13 +3022,51 @@ function renderSpeakerPicker() {
   sel.hidden = names.length === 0;
   sel.value = names.includes(prev) ? prev : '';
   sel.classList.toggle('is-other', !!sel.value);
+  // Taken off the list mid-hand-over: it's my human's chat again.
+  if (_handover && !names.includes(_handover.name)) endHandover();
 }
 
+// Who this message is from. The chat stays handed over; a send just restarts
+// the quiet-minutes clock.
 function takeTurnSpeaker() {
   const sel = $('speaker-picker');
   const v = sel && !sel.hidden ? String(sel.value || '').trim() : '';
-  if (sel) { sel.value = ''; sel.classList.remove('is-other'); }
+  if (v && _handover?.name === v) _handover.lastAt = Date.now();
   return v || null;
+}
+
+function renderHandoverBanner() {
+  const banner = $('handover-banner');
+  if (!banner) return;
+  banner.hidden = !_handover;
+  if (_handover) $('handover-text').textContent = `${_handover.name} has the chat. What's sent is theirs until you take it back.`;
+}
+
+function startHandover(name) {
+  endHandover({ quiet: true });
+  _handover = { name, lastAt: Date.now(), timer: null };
+  _handover.timer = setInterval(() => {
+    if (_handover && Date.now() - _handover.lastAt >= HANDOVER_IDLE_MS) endHandover();
+  }, 30_000);
+  audienceAddName(name).catch(() => {});
+  renderHandoverBanner();
+}
+
+// Back to my human. They stay in "who's here": they may well still be in the
+// room, and my human takes them out there when they leave.
+function endHandover({ quiet = false } = {}) {
+  if (_handover?.timer) clearInterval(_handover.timer);
+  _handover = null;
+  const sel = $('speaker-picker');
+  if (sel && !quiet) { sel.value = ''; sel.classList.remove('is-other'); }
+  renderHandoverBanner();
+}
+
+function onSpeakerPicked(e) {
+  const name = String(e.target.value || '').trim();
+  e.target.classList.toggle('is-other', !!name);
+  if (name) startHandover(name);
+  else endHandover();
 }
 
 function appendUserMessage(text, timestamp, attachments = null, speaker = null) {
@@ -4257,7 +4304,10 @@ async function runTurn(apiMessages, turn, { prevUserMessageAt = null, moodTag = 
     // from the last one; see speakLatestReply.
     _speakButtonsBeforeTurn = document.querySelectorAll('.msg-speak-btn').length;
     removeContinueRoundsOffer();   // a new turn supersedes any standing offer
-    if (state.streaming) {
+    // With someone else present the reply comes whole: the server checks it
+    // for what stays between us before it's shown, and a stream would be on
+    // screen before any check could run (0.14.122).
+    if (state.streaming && !sessionIsSharedRoom()) {
       await doStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag);
     } else {
       await doNonStreamingRequest(apiMessages, turn, prevUserMessageAt, moodTag);
@@ -5710,6 +5760,7 @@ function startNewSession() {
   state.messages         = [];
   state.topics           = [];
   state.sessionAudience  = { location: null, participants: [] };
+  endHandover();   // a new conversation is always my human's
   lastMessage            = null;
   state.lastMessage      = null;
   elapsedTime            = 0;
@@ -7271,7 +7322,8 @@ function init() {
   $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
   $('quarantine-review-btn')?.addEventListener('click', () => runQuarantineReview());
   $('cleanup-proposals-btn')?.addEventListener('click', () => runCleanupProposalsView());
-  $('speaker-picker')?.addEventListener('change', (e) => e.target.classList.toggle('is-other', !!e.target.value));
+  $('speaker-picker')?.addEventListener('change', onSpeakerPicked);
+  $('handover-back')?.addEventListener('click', () => endHandover());
   $('identity-canaries-btn')?.addEventListener('click', () => runIdentityCanariesView());
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
@@ -16473,21 +16525,46 @@ function audienceAddFromInput() {
   const input = $('audience-search');
   const name  = input?.value.trim();
   if (!name) return;
+  addAudienceParticipant(name);
+  input.value = '';
+}
 
-  // Resolve to a villager id if the name matches; else store the raw name.
+// Put someone in "who's here": resolved to their villager id when the name
+// matches one, else kept as the name (a stranger to the gate). Once each, by id
+// or by name.
+function addAudienceParticipant(name) {
   const villager = (_audienceReg?.villagers ?? []).find(v => v.name.toLowerCase() === name.toLowerCase());
   const id = villager?.id ?? null;
-
   const audience = state.sessionAudience ?? { location: null, participants: [] };
-  const already  = audience.participants.some(p => (typeof p === 'string' ? p : p.id) === (id ?? name));
-  if (already) { input.value = ''; return; }
-
+  const lc = name.toLowerCase();
+  const already = audience.participants.some(p => typeof p === 'string'
+    ? p.toLowerCase() === lc
+    : (id && p.id === id) || String(p.name ?? '').toLowerCase() === lc);
+  if (already) return;
   audience.participants = [...audience.participants, id ? { id, name: villager.name } : { id: null, name }];
   state.sessionAudience = audience;
   saveSettings();
   renderAudienceChips();
   updateAudienceBtn();
-  input.value = '';
+}
+
+// The hand-over's way in. They're in "who's here" at once, by name (a stranger
+// to the gate, the strictest), so the very next message is already gated; once
+// the registry is loaded a villager's entry becomes theirs, with their circles.
+async function audienceAddName(name) {
+  addAudienceParticipant(name);
+  if (_audienceReg) return;
+  try { const r = await fetch('/api/village'); if (r.ok) _audienceReg = await r.json(); } catch { return; }
+  const villager = (_audienceReg?.villagers ?? []).find(v => v.name.toLowerCase() === name.toLowerCase());
+  const audience = state.sessionAudience;
+  if (!villager || !audience) return;
+  const lc = name.toLowerCase();
+  const i = audience.participants.findIndex(p => typeof p !== 'string' && !p.id && String(p.name ?? '').toLowerCase() === lc);
+  if (i < 0 || audience.participants.some(p => p?.id === villager.id)) return;
+  audience.participants = audience.participants.map((p, j) => (j === i ? { id: villager.id, name: villager.name } : p));
+  saveSettings();
+  renderAudienceChips();
+  updateAudienceBtn();
 }
 
 function audienceRemove(identifier) {

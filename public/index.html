@@ -583,6 +583,13 @@
                never the conversation. Hidden until the toggle or onboarding
                shows it; plain send always works without it. -->
           <div id="mood-palette" class="mood-palette hidden" role="group" aria-label="Send with a mood tag"></div>
+          <!-- Hand-over (0.14.122, ward decision): while someone else has the
+               chat, every message is theirs until it's handed back, or until
+               10 quiet minutes pass. -->
+          <div id="handover-banner" class="handover-banner" role="status" hidden>
+            <span id="handover-text"></span>
+            <button id="handover-back" type="button" class="btn-secondary">Me again</button>
+          </div>
           <div class="input-row">
             <button id="mood-btn" class="btn-attach btn-mood hidden" title="Send with a mood" aria-label="Send with a mood tag" aria-pressed="false">
               <span aria-hidden="true">🙂</span>
@@ -1300,7 +1307,7 @@
             <label for="web-speakers">Others who may type in my web chat</label>
             <input type="text" id="web-speakers" placeholder="e.g. Claude Code" maxlength="200" spellcheck="false">
           </div>
-          <p class="field-hint">Names of anyone else who sometimes types here, separated by commas. When someone is listed, a "Speaking as" choice appears next to the message box. Their messages are labelled with their name for your Familiar and filed under their name in memory, and they don't count as you: they aren't read for signs of distress and don't count as you being around. The choice goes back to you after every message.</p>
+          <p class="field-hint">Names of anyone else who sometimes types here, separated by commas. When someone is listed, a "Speaking as" choice appears next to the message box. Their messages are labelled with their name for your Familiar and filed under their name in memory, and they don't count as you: they aren't read for signs of distress and don't count as you being around. Picking someone hands them the chat: they're added to "who's here", a banner shows they have it, and everything sent is theirs until you tap "Me again" (or 10 minutes pass with nothing sent). A new conversation always starts as you.</p>
           <div class="field" style="margin-top:12px">
             <label for="private-identifiers">Keep between us</label>
             <textarea id="private-identifiers" rows="3" autocomplete="off" spellcheck="false" placeholder="One per line, e.g. a full legal name, an address, a code"></textarea>

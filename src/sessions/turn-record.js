@@ -177,8 +177,13 @@ export function ranToolsHere(turnId) { return _ranTools.has(turnId); }
  * (add-or-replace by id, taking out the `remove` ids) and resolves to { ok }.
  * It never throws into the turn, and a failed write is logged, never fatal:
  * the reply still goes out.
+ *
+ * `meta.audienceTag` is the room, set by the caller once it's known. A message
+ * sent with someone else present is stored with it (C2, 0.14.122), so memory
+ * files what was said there for the people who were there, even when the room
+ * changed mid-conversation. My human's own room leaves no stamp.
  */
-export function createTurnRecorder({ envelope, write, now = () => new Date().toISOString(), log = (...a) => console.warn('[turn-record]', ...a) }) {
+export function createTurnRecorder({ envelope, write, meta = {}, now = () => new Date().toISOString(), log = (...a) => console.warn('[turn-record]', ...a) }) {
   const { turnId, userMessage, replyMessageId } = envelope;
   const recorded = [];
   let begun = false, finished = false, rounds = 0, partial = '';
@@ -205,7 +210,8 @@ export function createTurnRecorder({ envelope, write, now = () => new Date().toI
     async begin() {
       if (begun) return;
       begun = true;
-      await persist([userMessage]);
+      const room = meta?.audienceTag;
+      await persist([room && room !== 'ward-private' ? { ...userMessage, audienceTag: room } : userMessage]);
     },
     /** One finished tool round. Returns the stored messages (for the client). */
     async round({ round, toolCalls, results, content, timestamp }) {
@@ -289,9 +295,9 @@ export function createTurnRecorder({ envelope, write, now = () => new Date().toI
  *   is set by the caller once the room is known: a voice call's log has always
  *   carried its room's tag (its hang-up write stamps it), so a log first written
  *   here gets it too, or a call that crashed before hang-up would be swept into
- *   memory as ward-private. A web chat log carries no tag, as before: which
- *   circle a shared web chat's facts belong to is the ward's decision
- *   (docs/known-issues-fix-plans.md, C2).
+ *   memory as ward-private. A web chat log carries no tag of its own; each
+ *   message sent with someone else present carries the room instead (C2,
+ *   ward decision 2026-11-01: those facts stay with the people who were there).
  */
 export async function openTurn(envelope, { logsDir, settleMs = 20_000, log = (...a) => console.log('[chat]', ...a) } = {}) {
   if (!(await awaitTurnSettled(envelope.turnId, settleMs))) {
@@ -314,7 +320,7 @@ export async function openTurn(envelope, { logsDir, settleMs = 20_000, log = (..
   }
   const meta = { audienceTag: null };
   const rec = createTurnRecorder({
-    envelope,
+    envelope, meta,
     write: (msgs, { remove } = {}) => appendSessionMessages(envelope.sessionId, msgs, {
       logsDir, remove,
       defaults: {

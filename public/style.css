@@ -4336,6 +4336,21 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   color: var(--text);
   font-weight: 600;
 }
+/* Hand-over (0.14.122): who has the chat, said plainly above the composer. */
+.handover-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 0.9em;
+}
+.handover-banner[hidden] { display: none; }
+.handover-banner span { flex: 1; }
 
 /* A held relay's Send it / Drop it row (held-relays.js). */
 .held-relay-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }

@@ -84,6 +84,18 @@ export async function filterOutgoingReply({ draftText, audienceTag, callUpstream
  *
  * @returns {Promise<{text: string, blocked: boolean, rewritten: boolean, swapped: number}>}
  */
+
+/**
+ * A streamed reply is on screen before gateRoomReply could look at it, so a
+ * room with someone else in it never streams (0.14.122). The page asks for a
+ * whole reply there; a request that still asks to stream (a page from before)
+ * gets this refusal instead of an unchecked stream. null when it may stream.
+ */
+export function uncheckedStreamRefusal({ stream, audienceTag }) {
+  if (!stream || !audienceTag || audienceTag === 'ward-private') return null;
+  return { error: 'With someone else here, replies come whole so they can be checked first. Reload the page to pick that up.', _streamRefused: true };
+}
+
 export async function gateRoomReply({ draftText, audienceTag, callUpstream, baseMessages, privateList = [], checkRestricted, log = console }) {
   if (audienceTag === 'ward-private' || !draftText) return { text: draftText, blocked: false, rewritten: false, swapped: 0 };
   let filtered;

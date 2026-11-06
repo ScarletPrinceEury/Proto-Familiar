@@ -1534,6 +1534,58 @@ export async function processJob(job, deps = {}) {
   return { factsCreated: created, consentPending: pendingConsent.length, edgesRouted };
 }
 
+/**
+ * A slice split where the room changed (C2, ward decision 2026-11-01). My
+ * human's messages sent with someone else present carry that room
+ * (`audienceTag`, stamped by the turn record); one without a stamp was sent in
+ * the job's own room (`fallbackTag`: ward-private for the web chat, the room's
+ * tag for a Discord or voice log). Everything after a message (my reply, its
+ * tool rounds) belongs to that message's room. Consecutive messages in the same
+ * room stay one run. Pure. Returns [{ audienceTag, messages }].
+ */
+export function roomRuns(messages = [], fallbackTag = 'ward-private') {
+  const base = typeof fallbackTag === 'string' && fallbackTag ? fallbackTag : 'ward-private';
+  const runs = [];
+  let room = base;
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (m?.role === 'user') room = (typeof m.audienceTag === 'string' && m.audienceTag) ? m.audienceTag : base;
+    const last = runs[runs.length - 1];
+    if (last && last.audienceTag === room) last.messages.push(m);
+    else runs.push({ audienceTag: room, messages: [m] });
+  }
+  return runs;
+}
+
+/**
+ * processJob, once per room the slice was said in. A slice said in one room
+ * (nearly all of them) is one call, exactly as before. Each run starts where
+ * the runs before it ended (`priorThrough`), so a day's coverage still adds up
+ * to the whole day. A day slice that fails in any run fails as a whole and is
+ * retried (dedup absorbs the facts a run already kept); for other scopes a run
+ * with nothing to keep is fine as long as another run kept something.
+ */
+export async function processJobByRoom(job, deps = {}, run = processJob) {
+  const runs = roomRuns(job.messages, job.audienceTag);
+  if (runs.length <= 1) return run(runs.length ? { ...job, audienceTag: runs[0].audienceTag } : job, deps);
+  const total = { factsCreated: 0, consentPending: 0, edgesRouted: 0, rooms: runs.map(r => r.audienceTag) };
+  let through = job.priorThrough ?? 0;
+  let lastErr = null;
+  for (const r of runs) {
+    try {
+      const out = await run({ ...job, messages: r.messages, audienceTag: r.audienceTag, priorThrough: through }, deps);
+      total.factsCreated   += out?.factsCreated   ?? 0;
+      total.consentPending += out?.consentPending ?? 0;
+      total.edgesRouted    += out?.edgesRouted    ?? 0;
+    } catch (err) {
+      if (job.scope === 'day') throw err;
+      lastErr = err;
+    }
+    through += r.messages.length;
+  }
+  if (job.scope !== 'day' && !total.factsCreated && lastErr) throw lastErr;
+  return total;
+}
+
 function pickNextJob(now) {
   return _queue.find(j => j.status === 'pending' && (!j.nextAttemptAt || j.nextAttemptAt <= now));
 }
@@ -1569,7 +1621,7 @@ function tick() {
     await persistQueue();
 
     try {
-      const result = await processJob(job);
+      const result = await processJobByRoom(job);
       job.status     = 'done';
       job.result     = result;
       job.finishedAt = new Date().toISOString();
