@@ -1659,7 +1659,9 @@ def search_restricted(
     ward-private (no restriction applies) or no match exceeds threshold.
 
     Always fails open — a vector-search error returns {hit: False} so the
-    outgoing filter never blocks a reply on a search failure.
+    outgoing filter never blocks a reply on a search failure. That result also
+    carries failed: True, so a caller that must not send unchecked (a warm
+    reach-out, 0.14.125) can tell "no match" from "couldn't look".
     """
     if room_audience == WARD_PRIVATE:
         return {"hit": False}
@@ -1687,7 +1689,7 @@ def search_restricted(
                     topic = (r["content"] or "")[:80].split("\n")[0].strip()
                     return {"hit": True, "topic": topic, "score": round(score, 4)}
         except Exception:
-            pass  # vector search unavailable — fail open
+            return {"hit": False, "failed": True}  # vector search unavailable — fail open, but say so
         return {"hit": False}
     finally:
         if own_conn:

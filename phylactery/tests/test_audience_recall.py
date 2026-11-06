@@ -78,3 +78,20 @@ def test_ward_private_never_surfaces_in_a_shared_room():
         # A room cleared for nothing sees nothing.
         none = memory.search("secret", audiences=[], conn=c)
         assert none["results"] == []
+
+
+def test_search_restricted_says_when_it_couldnt_look():
+    """A failed search still reads as no match for a live reply (fail open), but
+    says it failed, so a warm reach-out can wait instead of sending unchecked."""
+    def _broken(_text):
+        raise RuntimeError("embedder down")
+    c = sqlite3.connect(":memory:")
+    with patch("phylactery.embed.embed_text", _broken):
+        assert memory.search_restricted("hello", room_audience="friends", conn=c) == {"hit": False, "failed": True}
+
+
+def test_search_restricted_clean_miss_is_not_a_failure():
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("secret", "daily", standalone=True, audience="ward-private", conn=c)
+        assert memory.search_restricted("nothing like it", room_audience="friends", threshold=0.99, conn=c) == {"hit": False}

@@ -125,6 +125,7 @@ import { startTrackerProjectionLoop, stopTrackerProjectionLoop } from './src/sch
 import { startMediaRetentionLoop, stopMediaRetentionLoop } from './src/vision/media-retention-loop.js';
 import { isNeedWindow } from './src/schedule/needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
+import { checkVillagerReach } from './src/warmth/villager-reach-check.js';
 import { recordReachOut } from './src/warmth/reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './src/pondering/reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
@@ -194,7 +195,7 @@ import {
 } from './src/village/village.js';
 import { parseRegistryJson } from './src/village/village-registry-json.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/village-presence.js';
-import { roomGateOrStranger, audienceTagFor, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
+import { roomGateOrStranger, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
 import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
 import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { clientDisconnectSignal, upstreamSignal, upstreamFailure } from './src/server/upstream-abort.js';
@@ -7656,15 +7657,11 @@ function startReachout() {
     deliverVillagerReach: async ({ villager, message: draft }) => {
       // A warm reach-out leaves my human's room like a relay does, so it gets
       // the same two checks: nothing stored as private for them (the Pillar D
-      // search; a hit means it isn't sent, logged as a failed delivery), and
-      // my human's keep-between-us list swapped for "[private]".
-      let roomTag = 'ward-private';
-      try {
-        const reg = await getVillageRegistry();
-        roomTag = audienceTagFor({ participants: [{ id: villager.id, name: villager.name }] }, reg);
-        const restricted = await searchMemoryRestricted({ query: String(draft).slice(0, 2000), roomAudience: roomTag });
-        if (restricted?.hit) return { ok: false, error: `held: something in it isn't cleared for ${villager.name}` };
-      } catch (err) { console.warn('[reachout] outgoing check failed (sending with the list swap only):', err?.message ?? err); }
+      // search; a hit, or a check that couldn't run, holds it, logged as a
+      // failed delivery: villager-reach-check.js), and my human's
+      // keep-between-us list swapped for "[private]".
+      const checked = await checkVillagerReach({ villager, draft, loadRegistry: getVillageRegistry, searchRestricted: searchMemoryRestricted });
+      if (!checked.ok) return checked;
       const message = redactProtected(draft, readSettingsSync()?.privateIdentifiers).text;
       const res = await relayToDiscord({ recipientUserId: villager.discordId, message });
       if (!res?.ok) return res ?? { ok: false, error: 'relay failed' };
