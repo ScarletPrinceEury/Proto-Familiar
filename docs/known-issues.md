@@ -6,6 +6,17 @@ delete it) rather than leaving it here stale.
 
 ---
 
+### With others present, a failed village read treats the room as my human's own (privacy; needs the ward)
+
+`/api/chat` resolves the room from `sessionAudience` and the village registry.
+If that throws, it logs and falls back to `ward-private`: full context, no
+outgoing check, memory filed as private. The comment calls this fail-closed,
+but for privacy it's the open direction: someone marked present would get
+replies drawn from everything. The strict fallback would be the strangers floor
+(nothing private, replies checked). Found while building the shared-web-chat
+pass (0.14.122). Not changed: when and whether things reach someone in the room
+is the ward's call.
+
 ### Intentions aren't reliable enough yet — revisit, comparing heartbeat designs
 
 The ward finds intentions (Unruh's intention store, which the noticing loop
@@ -108,15 +119,12 @@ reply gets a list match swapped for "[private]" instead of being held.
   present streams its reply, so it gets neither gate.
 
 
-### Web memorization always says "my human's own room"
+### ~~Web memorization always says "my human's own room"~~ — fixed 0.14.122 (ward-signed)
 
-`buildMemorizePayload` in `public/app.js` sends `audienceTag: 'ward-private'`
-for every web session, including one with others present (`sessionAudience`).
-It fails safe for facts about other people (they stay private), but a fact
-about my human from a shared web chat becomes content-gated rather than
-staying within that room's circle, and the extraction prompt treats it as a
-private session. Fix: send the session's real room (the server derives the
-tag from `sessionAudience` with `audienceTagFor`, as `/api/chat` does).
+Each message sent with someone else present now carries its room in the
+session log, and memorization files each stretch for the room it was said in
+(the ward's call: with the people who were there, as on Discord). See C2 in
+`known-issues-fix-plans.md`.
 
 ### Older tome notes count as general:sensitive until they're sorted
 

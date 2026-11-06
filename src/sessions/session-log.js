@@ -38,16 +38,47 @@ async function withSessionLock(sessionId, fn) {
   }
 }
 
+// Fields only the server writes on a stored message: `audienceTag`, the room a
+// message was sent in when someone else was present (C2, 0.14.122). The page
+// saves its own copy of the conversation and never carries them, so a save keeps
+// the stored value instead of wiping it.
+export const SERVER_OWNED_MESSAGE_FIELDS = Object.freeze(['audienceTag']);
+
+/** `incoming`, with any server-owned field it lacks taken from `stored`. Pure. */
+export function keepServerOwned(stored, incoming) {
+  if (!stored || typeof stored !== 'object' || !incoming || typeof incoming !== 'object') return incoming;
+  let out = incoming;
+  for (const f of SERVER_OWNED_MESSAGE_FIELDS) {
+    if (stored[f] !== undefined && incoming[f] === undefined) out = { ...out, [f]: stored[f] };
+  }
+  return out;
+}
+
+/** The page's messages with the room each was sent in, from the stored log.
+ *  The same array back when nothing needed adding. Pure. */
+export function withStoredRooms(messages = [], stored = []) {
+  const byId = new Map((Array.isArray(stored) ? stored : []).filter((m) => m?.id).map((m) => [m.id, m]));
+  if (!byId.size || !Array.isArray(messages)) return messages;
+  let changed = false;
+  const out = messages.map((m) => {
+    const kept = m?.id && byId.has(m.id) ? keepServerOwned(byId.get(m.id), m) : m;
+    if (kept !== m) changed = true;
+    return kept;
+  });
+  return changed ? out : messages;
+}
+
 /**
  * Union two message arrays by `id`, preserving timestamp order. `incoming` is
  * the writer's intended view; any id-carrying message that exists on disk but
  * not in `incoming` (a turn the OTHER surface appended since this writer last
  * read) is spliced back in at its timestamp position. Legacy id-less messages
- * form a stable shared prefix and are never diffed. Pure — unit-tested.
+ * form a stable shared prefix and are never diffed. A server-owned field on a
+ * stored message survives an incoming copy without it. Pure — unit-tested.
  */
 export function mergeMessages(existing = [], incoming = []) {
-  const inc = Array.isArray(incoming) ? incoming : [];
   const ex  = Array.isArray(existing) ? existing : [];
+  const inc = withStoredRooms(Array.isArray(incoming) ? incoming : [], ex);
   const incomingIds = new Set(inc.filter((m) => m?.id).map((m) => m.id));
   const extras = ex.filter((m) => m?.id && !incomingIds.has(m.id));
   if (extras.length === 0) return inc;
@@ -163,7 +194,7 @@ export async function appendSessionMessages(sessionId, messages, { logsDir, defa
       const list = (Array.isArray(log.messages) ? log.messages : []).filter((x) => !(x?.id && drop.has(x.id)));
       for (const m of incoming) {
         const idx = list.findIndex((x) => x?.id === m.id);
-        if (idx >= 0) list[idx] = m;
+        if (idx >= 0) list[idx] = keepServerOwned(list[idx], m);
         else list.splice(timestampSlot(list, m), 0, m);
       }
       const final = { ...log, messages: list, updatedAt: new Date().toISOString() };

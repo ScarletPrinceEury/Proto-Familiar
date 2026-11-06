@@ -142,7 +142,9 @@ export function collapseToolTurns(messages = [], { records = false, recordResult
       // prompt. This is THE provider-history boundary (web /api/chat + Discord),
       // so stripping here guarantees a tagged message's assembled payload is
       // byte-free of it, whatever a client sends (belt to the client's suspenders).
-      const { _carrier, _calls, _results, moodTag, ...rest } = m;
+      // `audienceTag` (the room a message was sent in, C2) is memory bookkeeping
+      // too, never for a provider.
+      const { _carrier, _calls, _results, moodTag, audienceTag, ...rest } = m;
       return rest;
     })
     .filter(m => !(m && m.role === 'assistant' && !String(m.content ?? '').trim()));

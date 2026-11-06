@@ -177,7 +177,7 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './src/memory/memorization.js';
 import { computeCoverage, collectDateSlices } from './src/memory/memory-coverage.js';
-import { writeSessionLog as persistSessionLog, sessionLocationLabel, readSessionMessages } from './src/sessions/session-log.js';
+import { writeSessionLog as persistSessionLog, sessionLocationLabel, readSessionMessages, withStoredRooms } from './src/sessions/session-log.js';
 import { parseTurnEnvelope, openTurn, awaitTurnSettled, turnMessagesOf, isValidTurnId } from './src/sessions/turn-record.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './src/sessions/session-bindings.js';
 import { parseImport, dateFromFilename, applyFallbackDate } from './src/sessions/log-import.js';
@@ -205,7 +205,7 @@ import { identityBudgetTokens } from './src/memory/identity-budget.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, drainPendingImages, MEDIA_KINDS, mediaKindFor } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
-import { gateRoomReply } from './src/safety/outgoing-filter.js';
+import { gateRoomReply, uncheckedStreamRefusal } from './src/safety/outgoing-filter.js';
 import { searchMemoryRestricted } from './thalamus.js';
 import { redactProtected, normalizePrivateList, variantExamples } from './src/village/outgoing-tripwire.js';
 import { listHeldRelays, releaseHeldRelay, dropHeldRelay, releaseRefusalText } from './src/village/held-relays.js';
@@ -594,6 +594,15 @@ async function chatTurn(req, res, rec, priorTurn) {
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
+  }
+  // With someone else present a reply is checked for what stays between us
+  // before anyone sees it (gateRoomReply), which a stream can't wait for. The
+  // page asks for a whole reply then (0.14.122); a page from before that gets
+  // told to reload rather than an unchecked stream.
+  const streamRefused = uncheckedStreamRefusal({ stream, audienceTag });
+  if (streamRefused) {
+    console.warn(`[server] refused a streamed reply with others present (audience=${audienceTag}) — the page predates 0.14.122`);
+    return res.status(409).json(streamRefused);
   }
   // My human's words are saved before anything can go wrong with the turn
   // (RULE B corollary 3, the web/voice/bridge twin of Discord's persist-first),
@@ -4313,9 +4322,12 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!body || typeof body !== 'object') {
     return res.status(400).json({ error: 'Request body required.' });
   }
-  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, baseUrl, model, audienceTag } = body;
+  const { sessionId, scope, topicId, topicLabel, messageRange, provider, apiKey, baseUrl, model, audienceTag } = body;
   if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
+  // The page's copy of the conversation doesn't carry the room each message was
+  // sent in; the stored log does (C2). No log yet → the page's copy as sent.
+  const messages = withStoredRooms(body.messages, await readSessionMessages(sessionId, { logsDir: LOGS_DIR }).catch(() => []));
   try {
     if (scope === 'topic') {
       // Topic-scoped memorization stays whole-range (one summary of a slice).

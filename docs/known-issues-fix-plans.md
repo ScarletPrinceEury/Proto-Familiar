@@ -480,6 +480,29 @@ memory sweep reads the same logs, so it gets the same split.
 shared web chat. It's the same class as content gating (CLAUDE.md), so it
 needs the ward's decision: the room's circle, or keep content-gated.
 
+**Shipped 0.14.122 (ward decision 2026-11-01: the room's circle, as on
+Discord), together with the rest of the shared web chat:**
+- The stamp is written by the turn record (`begin()`, from `rec.meta.audienceTag`)
+  and is server-owned: the page's saves can't wipe it (`keepServerOwned` in
+  `mergeMessages` and `appendSessionMessages`), and `collapseToolTurns` strips it
+  before any provider.
+- Pass 1 had the split at enqueue; that would have broken the per-day coverage
+  ledger (one job per date). The split runs in the worker instead
+  (`processJobByRoom`: one `processJob` per room run, each starting where the
+  last ended, so coverage still adds up to the day).
+- `/api/memorize` gets the page's copy, which has no stamps; `withStoredRooms`
+  puts them back from the log.
+- **C1's streaming gap, closed:** a room with someone else in it never streams;
+  the page asks for a whole reply, and a stream request there gets 409
+  `_streamRefused`.
+- **Hand-over** (ward decision): "Speaking as" stays on the other person until
+  "Me again" or 10 quiet minutes, with a banner, and adds them to "who's here".
+  Found on the way: picking someone used to leave "who's here" alone, so the
+  reply drew on the ward's whole private context while they read it.
+- **Still open:** the presence block's "what stays out" line; a walk-in
+  "discreet mode" (blur or decoy chat; decisions in progress); a failed village
+  read falling back to ward-private (logged in known-issues for the ward).
+
 ---
 
 ## A. The Familiar can check its own work
