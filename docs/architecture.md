@@ -2254,7 +2254,11 @@ paths: the tool loop and the raw path (a shared-room voice turn with tools off,
 which had no filter at all before 0.14.110). The rewrite caller goes through
 `callProviderChat` (RULE A; the raw fetch it replaced had no cap and read
 `.content` raw). Warm reach-outs to villagers get the restricted search (a hit
-isn't sent) and the list swap in `deliverVillagerReach`. A streamed reply
+isn't sent) and the list swap in `deliverVillagerReach`. Unlike a live reply,
+a reach-out doesn't fail open: if the check can't run (village list unreadable,
+or the search reports `failed`, which `search_restricted` and
+`searchMemoryRestricted` now return beside `hit: false`), it's held and logged
+as a failed delivery (`src/warmth/villager-reach-check.js`, 0.14.125). A streamed reply
 would be on screen before the gate could look, so **a room with someone else
 in it never streams (0.14.122)**: the page asks for a whole reply whenever
 `sessionIsSharedRoom()`, and `/api/chat` answers a stream request in such a room

@@ -3225,7 +3225,7 @@ export async function searchMemoryRestricted({ query, roomAudience, threshold = 
     });
   } catch (err) {
     console.warn('[thalamus] searchMemoryRestricted failed (failing open):', err?.message ?? err);
-    return { hit: false };
+    return { hit: false, failed: true };   // live replies read only `hit`; a reach-out waits on `failed`
   }
 }
 
